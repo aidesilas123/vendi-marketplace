@@ -1,0 +1,53 @@
+@import "tailwindcss";
+@custom-variant dark (&:is(.dark *));
+
+/* Hide scrollbar for the horizontal category chips */
+.scrollbar-hide::-webkit-scrollbar {
+    display: none;
+}
+.scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+/* Base Ionic Overrides for Dark Mode sync */
+html.dark ion-content, 
+html.dark ion-toolbar, 
+html.dark ion-tab-bar {
+    --background: #0b1120;
+    --border-color: #1f2937;
+}
+
+html ion-content, 
+html ion-toolbar, 
+html ion-tab-bar {
+    --background: #f9fafb;
+    --border-color: #e5e7eb;
+}
+/* BULLETPROOF APP SCROLL LOCK */
+html, body {
+  overflow: hidden !important; 
+  height: 100% !important;
+  overscroll-behavior-y: none; 
+}
+/* HIDE ALL SCROLLBARS FOR A CLEAN NATIVE APP LOOK */
+::-webkit-scrollbar {
+  display: none;
+  width: 0px;
+  background: transparent;
+}
+
+* {
+  -ms-overflow-style: none;  /* Hides scrollbar in IE and Edge */
+  scrollbar-width: none;  /* Hides scrollbar in Firefox */
+
+}
+@layer base {
+  /* Force Tailwind to take back control of buttons from Ionic/Capacitor */
+  button {
+    height: auto !important;
+    line-height: inherit !important;
+    -webkit-appearance: none !important;
+    appearance: none !important;
+  }
+}

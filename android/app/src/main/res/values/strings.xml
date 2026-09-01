@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Campus Marketplace</string>
+    <string name="title_activity_main">Campus Marketplace</string>
+    <string name="package_name">com.campus.marketplace</string>
+    <string name="custom_url_scheme">com.campus.marketplace</string>
+</resources>

@@ -1,0 +1,1 @@
+set NODE_OPTIONS=--max-old-space-size=1536 && npx next dev --webpack
