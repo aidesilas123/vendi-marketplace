@@ -6,10 +6,10 @@ import { IonIcon } from '@ionic/react';
 import { alertCircleOutline, imageOutline, cloudUploadOutline, checkmarkCircleOutline, refreshOutline } from 'ionicons/icons';
 import { NIGERIAN_UNIVERSITIES } from '@/constants/universities';
 import { Button } from '@/shared/Button';
-import { ProductCard } from '@/shared/Card';
 import { Modal } from '@/shared/Modal';
 import { submitProductAction } from './actions';
 import { supabase } from '@/lib/supabase';
+import { ProductCard } from '@/shared/Card/ProductCard';
 
 const TABS = ['Post Item', 'Draft', 'Pending Review', 'Approved', 'Active', 'Sold', 'Rejected'];
 const CATEGORIES = ['Hostel Stuff', 'Electronics', 'Gadgets', 'Fashion', 'Books', 'Cooking Stuff', 'Other'];

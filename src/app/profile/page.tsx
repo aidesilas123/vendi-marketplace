@@ -59,9 +59,7 @@ export default function ProfilePage() {
         return; // Stop execution, let the redirect happen
       }
 
-      // 2. Fetch everything in parallel instead of sequentially — this is the
-      // biggest win for perceived smoothness on mobile (one round trip wait
-      // instead of three chained ones).
+      // 2. Fetch everything in parallel instead of sequentially
       const [
         { data: userData, error: userError },
         { data: { user: currentUser } },
@@ -323,19 +321,19 @@ export default function ProfilePage() {
             {isOwner ? (
               <>
                 <Button
-        onClick={() => router.push('/profile/edit')}
-        className="!py-2.5 !px-5 !w-auto !bg-foreground !text-background rounded-full flex items-center justify-center gap-2 transition-transform active:scale-[0.98]"
-      >
-        <IonIcon icon={createOutline} className="text-base" /> Edit Profile
-      </Button>
+                  onClick={() => router.push('/profile/edit')}
+                  className="!py-2.5 !px-5 !w-auto !bg-foreground !text-background rounded-full flex items-center justify-center gap-2 transition-transform active:scale-[0.98]"
+                >
+                  <IonIcon icon={createOutline} className="text-base" /> Edit Profile
+                </Button>
 
-      {!profileUser.is_verified && (
-        <Button
-          onClick={() => router.push('/verification')}
-          className="!py-2.5 !px-5 !w-auto !bg-orange-500 !text-white rounded-full flex items-center justify-center gap-2 transition-transform active:scale-[0.98]"
-        >
-          <IonIcon icon={shieldCheckmarkOutline} className="text-base" /> Get Verified
-        </Button>
+                {!profileUser.is_verified && (
+                  <Button
+                    onClick={() => router.push('/verification')}
+                    className="!py-2.5 !px-5 !w-auto !bg-orange-500 !text-white rounded-full flex items-center justify-center gap-2 transition-transform active:scale-[0.98]"
+                  >
+                    <IonIcon icon={shieldCheckmarkOutline} className="text-base" /> Get Verified
+                  </Button>
                 )}
               </>
             ) : (
@@ -400,7 +398,7 @@ export default function ProfilePage() {
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4 pb-10">
             {products.map((product) => (
               isOwner ? (
-                // OWNER VIEW: Give them administrative controls and route to Seller Dashboard Item Details
+                // OWNER VIEW: Give them administrative controls using the restored ProductCard
                 <ProductCard
                   key={product.id}
                   id={product.id}
