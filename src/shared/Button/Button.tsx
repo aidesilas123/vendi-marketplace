@@ -5,8 +5,8 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 export const Button = ({ children, variant = 'primary', className = '', ...props }: ButtonProps) => {
-  // Added '!' to force Tailwind to overpower Ionic's default button styles
-  const baseStyle = "!px-8 !py-4 !text-lg !rounded-full !font-black transition-all flex items-center justify-center";
+  // Shrunk padding, reduced text size to text-sm for a tighter mobile feel
+  const baseStyle = "!px-5 !py-2.5 !text-sm !rounded-full !font-black transition-all flex items-center justify-center";
   
   const variants = {
     primary: "!bg-orange-500 !text-white hover:!bg-orange-600 shadow-lg",

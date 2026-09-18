@@ -3,8 +3,8 @@ import { Inter } from "next/font/google";
 import IonicProvider from "./providers";
 import { NetworkListener } from "@/shared/Modal/NetworkListener";
 import { AppShell } from "@/shared/Navigation/AppShell"; 
-import { StatusBarInitializer } from "@/shared/StatusBarInitializer"; // We'll create this or put it inline
-
+import { StatusBarInitializer } from "@/shared/StatusBarInitializer";
+import { HardwareBackButton } from "@/shared/HardwareBackButton";
 // 1. IONIC CSS MUST BE IMPORTED FIRST
 import '@ionic/react/css/core.css';
 import '@ionic/react/css/normalize.css';
@@ -18,6 +18,15 @@ import '@ionic/react/css/flex-utils.css';
 import '@ionic/react/css/display.css';
 
 import "./globals.css";
+import type { Viewport } from "next";
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
+};
 
 // Initialize the Inter font for ultra-crisp mobile readability
 const inter = Inter({ subsets: ["latin"] });
@@ -32,6 +41,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       {/* antialiased makes the font incredibly smooth on all devices */}
       <body className={`${inter.className} antialiased`}>
+        <HardwareBackButton />
         <StatusBarInitializer />
         <NetworkListener />
         <IonicProvider>

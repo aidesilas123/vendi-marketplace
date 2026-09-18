@@ -7,10 +7,17 @@ export function StatusBarInitializer() {
   useEffect(() => {
     const setupStatusBar = async () => {
       try {
-        await StatusBar.setStyle({ style: Style.Dark });
-        await StatusBar.setBackgroundColor({ color: '#0f172a' });
+        // Detect if the user's device is in Dark Mode
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+        if (prefersDark) {
+          await StatusBar.setStyle({ style: Style.Dark }); // White text
+          await StatusBar.setBackgroundColor({ color: '#0b1120' }); // Exact match to your dark CSS
+        } else {
+          await StatusBar.setStyle({ style: Style.Light }); // Dark text
+          await StatusBar.setBackgroundColor({ color: '#f9fafb' }); // Exact match to your light CSS
+        }
       } catch (e) {
-        // Gracefully handles web preview where native plugins aren't present
         console.log('Status bar plugin not active on web');
       }
     };

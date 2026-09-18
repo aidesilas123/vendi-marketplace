@@ -24,12 +24,14 @@ html ion-tab-bar {
     --background: #f9fafb;
     --border-color: #e5e7eb;
 }
+
 /* BULLETPROOF APP SCROLL LOCK */
 html, body {
   overflow: hidden !important; 
   height: 100% !important;
   overscroll-behavior-y: none; 
 }
+
 /* HIDE ALL SCROLLBARS FOR A CLEAN NATIVE APP LOOK */
 ::-webkit-scrollbar {
   display: none;
@@ -40,10 +42,21 @@ html, body {
 * {
   -ms-overflow-style: none;  /* Hides scrollbar in IE and Edge */
   scrollbar-width: none;  /* Hides scrollbar in Firefox */
-
 }
+
 @layer base {
-  /* Force Tailwind to take back control of buttons from Ionic/Capacitor */
+  /* 1. Kills the orange/blue tap highlight on Android WebViews */
+  html, body {
+    -webkit-tap-highlight-color: transparent; 
+    -webkit-text-size-adjust: 100%;
+  }
+
+  /* 2. Forces buttery-smooth native momentum scrolling for your feed */
+  #main-scroll-container {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* 3. Force Tailwind to take back control of buttons from Ionic/Capacitor */
   button {
     height: auto !important;
     line-height: inherit !important;

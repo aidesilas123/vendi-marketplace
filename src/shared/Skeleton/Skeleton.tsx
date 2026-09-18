@@ -1,13 +1,19 @@
 import React from 'react';
 
 interface SkeletonProps {
-  className?: string; // Allows you to pass specific widths, heights, and border-radius
+  className?: string;
 }
 
 export const Skeleton = ({ className = "" }: SkeletonProps) => {
+  // Check if a specific background color is being passed via className
+  const hasCustomBg = className.includes('bg-');
+  
+  // Use the high-contrast default ONLY if no custom background is provided
+  const defaultBg = hasCustomBg ? '' : 'bg-gray-300 dark:bg-gray-700';
+
   return (
     <div 
-      className={`bg-gray-200 dark:bg-gray-800 animate-pulse ${className}`} 
+      className={`${defaultBg} animate-pulse ${className}`} 
     />
   );
 };
