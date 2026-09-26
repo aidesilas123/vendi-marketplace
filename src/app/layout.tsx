@@ -5,6 +5,7 @@ import { NetworkListener } from "@/shared/Modal/NetworkListener";
 import { AppShell } from "@/shared/Navigation/AppShell"; 
 import { StatusBarInitializer } from "@/shared/StatusBarInitializer";
 import { HardwareBackButton } from "@/shared/HardwareBackButton";
+import { StatusBarSync } from '@/shared/StatusBarSync';
 // 1. IONIC CSS MUST BE IMPORTED FIRST
 import '@ionic/react/css/core.css';
 import '@ionic/react/css/normalize.css';
@@ -32,7 +33,7 @@ export const viewport: Viewport = {
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Campus Marketplace",
+  title: "ABU Vendi",
   description: "Secure multi-campus trading platform",
 };
 
@@ -43,6 +44,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className={`${inter.className} antialiased`}>
         <HardwareBackButton />
         <StatusBarInitializer />
+        <StatusBarSync/>
         <NetworkListener />
         <IonicProvider>
           {/* We wrap the entire application in the AppShell here */}

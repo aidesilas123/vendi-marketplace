@@ -16,20 +16,17 @@ interface HeaderProps {
 
 export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications = 0 }: HeaderProps) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true); // New state to prevent flashing
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
   useEffect(() => {
-    // If we already have the user prop, auth is resolved.
     if (user) {
       setIsCheckingAuth(false);
       return;
     }
-    
-    // Otherwise, quickly check the local session to see if we are actually logged out
     const checkLocalSession = async () => {
       const { data } = await supabase.auth.getSession();
       if (!data.session) {
-        setIsCheckingAuth(false); // Definitely logged out, safe to show Login button
+        setIsCheckingAuth(false);
       }
     };
     checkLocalSession();
@@ -49,16 +46,14 @@ export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications
   };
 
   return (
-    <div className="sticky top-0 z-40 bg-background/80 backdrop-blur-lg border-b border-border px-4 py-3 flex items-center justify-between shadow-sm">
+    <div className="sticky top-0 z-40 bg-background/80 backdrop-blur-lg border-b border-border px-4 h-12 flex items-center justify-between shadow-sm">
 
-      <div className="flex flex-col">
-        <h1 className="text-lg font-black text-foreground leading-tight">Vendi</h1>
-      </div>
+      <h1 className="text-lg font-black text-foreground leading-none">Vendi</h1>
 
       <div className="flex items-center gap-2">
         <button 
           onClick={handleRefresh}
-          className="w-10 h-10 rounded-full bg-transparent flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
+          className="w-9 h-9 flex-shrink-0 rounded-full bg-transparent flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
         >
           <span suppressHydrationWarning className="flex items-center justify-center">
             <IonIcon icon={refreshOutline} className={`text-xl ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -67,26 +62,28 @@ export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications
 
         {user ? (
           <>
-            <button className="relative w-10 h-10 rounded-full bg-transparent flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors">
+            <button className="relative w-9 h-9 flex-shrink-0 rounded-full bg-transparent flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors">
               <span suppressHydrationWarning className="flex items-center justify-center">
                 <IonIcon icon={notificationsOutline} className="text-xl" />
               </span>
               {unreadNotifications > 0 && (
-                <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 border-2 border-background rounded-full"></span>
+                <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-red-500 border-2 border-background rounded-full"></span>
               )}
             </button>
 
-            <div onClick={onOpenSidebar} className="cursor-pointer ml-2">
+            <div 
+              onClick={onOpenSidebar} 
+              className="cursor-pointer w-9 h-9 flex-shrink-0 rounded-full overflow-hidden flex items-center justify-center"
+            >
               <Avatar src={user?.avatarUrl} name={user?.name || "Student"} size="sm" />
             </div>
           </>
         ) : isCheckingAuth ? (
-          // SHOW SKELETON INSTEAD OF FLASHING "LOGIN"
-          <div className="w-10 h-10 ml-2 rounded-full bg-muted animate-pulse" />
+          <div className="w-9 h-9 flex-shrink-0 rounded-full bg-muted animate-pulse" />
         ) : (
           <Link 
             href="/login" 
-            className="bg-orange-500 hover:bg-orange-600 text-white font-black text-[10px] sm:text-xs px-4 py-2 sm:px-5 sm:py-2.5 rounded-full shadow-sm transition-colors uppercase tracking-wider ml-2"
+            className="bg-orange-500 hover:bg-orange-600 text-white font-black text-[10px] sm:text-xs px-4 py-2 sm:px-5 sm:py-2.5 rounded-full shadow-sm transition-colors uppercase tracking-wider"
           >
             Login
           </Link>

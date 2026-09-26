@@ -21,6 +21,7 @@ export default function SellerDashboard() {
   const [step, setStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const totalSteps = 5;
+  
 
   const [products, setProducts] = useState<any[]>([]);
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
@@ -31,6 +32,7 @@ export default function SellerDashboard() {
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
 
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | null; message: string; }>({ type: null, message: '' });
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
   useEffect(() => {
     if (notification.type) {
@@ -366,7 +368,7 @@ export default function SellerDashboard() {
 
       <div className="bg-white dark:bg-[#0f172a] border-b border-gray-200 dark:border-gray-800 py-6 sticky top-0 z-40 -mx-4 px-4 md:-mx-8 md:px-8">
         <h1 className="text-2xl font-black text-[#0f172a] dark:text-white">
-          Seller <span className="text-[#D4AF37]">Hub</span>
+          Seller <span className="text-[#D4AF37]">Dashboard</span>
         </h1>
         <p className="text-sm text-gray-500 mt-1">Manage your listings and sales</p>
       </div>
@@ -596,21 +598,23 @@ export default function SellerDashboard() {
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-6 animate-in fade-in slide-in-from-bottom-4">
                 {products.map((product) => (
-                  <ProductCard 
-                    key={product.id}
-                    id={product.id}
-                    title={product.title}
-                    price={product.buyer_price}
-                    condition={product.condition}
-                    status={product.status}
-                    createdAt={product.created_at} 
-                    imageUrl={product.images?.[0]} 
-                    onEdit={handleEdit}
-                    onDelete={(id) => setItemToDelete(id)}
-                    onDuplicate={handleDuplicate}
-                    onMarkSold={handleMarkSold}
-                  />
-                ))}
+  <ProductCard 
+    key={product.id}
+    id={product.id}
+    title={product.title}
+    price={product.buyer_price}
+    condition={product.condition}
+    status={product.status}
+    createdAt={product.created_at} 
+    imageUrl={product.images?.[0]} 
+    isMenuOpen={openMenuId === product.id}
+    onToggleMenu={setOpenMenuId}
+    onEdit={handleEdit}
+    onDelete={(id) => setItemToDelete(id)}
+    onDuplicate={handleDuplicate}
+    onMarkSold={handleMarkSold}
+  />
+))}
               </div>
             )}
           </div>

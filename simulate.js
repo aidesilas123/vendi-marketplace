@@ -13,7 +13,7 @@ const ACCOUNT_NUMBER = "2210032353"; // The number from your UI
 const payload = JSON.stringify({
   eventType: "SUCCESSFUL_TRANSACTION",
   eventData: {
-    settlementAmount: 100000, // Simulating a ₦15,000 transfer
+    settlementAmount: 10000000, // Simulating a ₦15,000 transfer
     transactionReference: "TEST_TX_" + Date.now(), // Random unique reference
     destinationAccountInformation: {
       accountNumber: ACCOUNT_NUMBER

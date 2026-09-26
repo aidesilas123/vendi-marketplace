@@ -44,18 +44,34 @@ export default function SellerProductDetails() {
 
   useEffect(() => {
     const fetchData = async () => {
-      if (!productId) return; // Swapped here
+      if (!productId) return;
       
-      // 1. Fetch Product
-      const { data: productData, error: productError } = await supabase
-        .from('products')
-        .select('*')
-        .eq('id', productId) // Swapped here
-        .single();
-// ... (make sure you swap it for the Views and Reviews API calls too) ...
+      try {
+        // Fetch all data in parallel for maximum speed
+        const [
+          { data: productData },
+          { data: viewsData },
+          { data: reviewsData }
+        ] = await Promise.all([
+          supabase.from('products').select('*').eq('id', productId).single(),
+          supabase.from('product_views').select('*').eq('product_id', productId),
+          supabase.from('reviews').select('*').eq('product_id', productId).order('created_at', { ascending: true })
+        ]);
+
+        if (productData) setProduct(productData);
+        if (viewsData) setViews(viewsData);
+        if (reviewsData) setReviews(reviewsData);
+
+      } catch (error) {
+        console.error("Error fetching data:", error);
+      } finally {
+        // THIS UNLOCKS THE SCREEN AFTER FETCHING
+        setIsLoading(false);
+      }
     };
+    
     fetchData();
-  }, [productId]); // Swapped here
+  }, [productId]);
 
   // --- Dynamic Chart Calculation ---
   const chartData = useMemo(() => {

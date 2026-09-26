@@ -15,8 +15,6 @@ import { useHideOnScroll } from '@/shared/hooks/useHideOnScroll';
 
 export const BottomNav = () => {
   const pathname = usePathname();
-  
-  // Consume the new bulletproof hook!
   const isVisible = useHideOnScroll('main-scroll-container');
 
   const navItems = [
@@ -36,23 +34,27 @@ export const BottomNav = () => {
   };
 
   return (
-    <div className={`w-full bg-white dark:bg-[#0f172a] border-t border-gray-200 dark:border-gray-800 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pb-safe pt-3 px-6 sm:px-0 rounded-t-3xl sm:rounded-none transition-transform duration-300 ease-in-out ${isVisible ? 'translate-y-0' : 'translate-y-[150%]'}`}>
-      <div className="max-w-[1600px] mx-auto flex justify-between items-center relative h-14 px-4 md:px-8">
+    <div className={`w-full bg-white dark:bg-[#0f172a] border-t border-gray-200 dark:border-gray-800 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pb-safe pt-2 px-2 sm:px-6 rounded-t-3xl sm:rounded-none transition-transform duration-300 ease-in-out ${isVisible ? 'translate-y-0' : 'translate-y-[150%]'}`}>
+      {/* Changed to max-w-lg to keep spacing tight on tablets, and used a single justify-between flex wrapper */}
+      <div className="max-w-lg mx-auto flex justify-between items-center relative h-14">
         
-        <div className="flex gap-8 md:gap-16">
-          {navItems.slice(0, 2).map((item) => {
-            const isActive = pathname === item.route || pathname.startsWith(`${item.route}?`); 
-            return (
-              <Link key={item.name} href={item.route} onClick={(e) => handleHomeClick(e, item.route)} className="flex flex-col items-center justify-center gap-1 min-w-[3rem]">
-                <span suppressHydrationWarning className="flex items-center justify-center">
-                  <IonIcon icon={isActive ? item.solid : item.outline} className={`text-[22px] transition-colors ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`} />
-                </span>
-                <span className={`text-[9px] font-black uppercase tracking-wider ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`}>{item.name}</span>
-              </Link>
-            );
-          })}
-        </div>
+        {/* Left Icons */}
+        {navItems.slice(0, 2).map((item) => {
+          const isActive = pathname === item.route || pathname.startsWith(`${item.route}?`); 
+          return (
+            <Link key={item.name} href={item.route} onClick={(e) => handleHomeClick(e, item.route)} className="flex flex-col items-center justify-center gap-1 w-16">
+              <span suppressHydrationWarning className="flex items-center justify-center">
+                <IonIcon icon={isActive ? item.solid : item.outline} className={`text-[22px] transition-colors ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`} />
+              </span>
+              <span className={`text-[9px] font-black uppercase tracking-wider ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`}>{item.name}</span>
+            </Link>
+          );
+        })}
 
+        {/* Empty Spacer to force equal distribution around the floating Seller Button */}
+        <div className="w-16"></div>
+
+        {/* Floating Seller Button (Remains Absolute Centered) */}
         <div className="absolute left-1/2 -translate-x-1/2 -top-8">
           <Link href="/seller" className="flex flex-col items-center justify-center">
             <div className={`w-14 h-14 rounded-full flex items-center justify-center shadow-xl transition-transform active:scale-95 ${pathname.includes('/seller') ? 'bg-orange-600 border-4 border-orange-200 dark:border-orange-900/30' : 'bg-orange-500 border-4 border-white dark:border-[#0f172a]'}`}>
@@ -64,19 +66,18 @@ export const BottomNav = () => {
           </Link>
         </div>
 
-        <div className="flex gap-8 md:gap-16">
-          {navItems.slice(2, 4).map((item) => {
-            const isActive = pathname === item.route || pathname.startsWith(`${item.route}?`);
-            return (
-              <Link key={item.name} href={item.route} className="flex flex-col items-center justify-center gap-1 min-w-[3rem]">
-                <span suppressHydrationWarning className="flex items-center justify-center">
-                  <IonIcon icon={isActive ? item.solid : item.outline} className={`text-[22px] transition-colors ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`} />
-                </span>
-                <span className={`text-[9px] font-black uppercase tracking-wider ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`}>{item.name}</span>
-              </Link>
-            );
-          })}
-        </div>
+        {/* Right Icons */}
+        {navItems.slice(2, 4).map((item) => {
+          const isActive = pathname === item.route || pathname.startsWith(`${item.route}?`);
+          return (
+            <Link key={item.name} href={item.route} className="flex flex-col items-center justify-center gap-1 w-16">
+              <span suppressHydrationWarning className="flex items-center justify-center">
+                <IonIcon icon={isActive ? item.solid : item.outline} className={`text-[22px] transition-colors ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`} />
+              </span>
+              <span className={`text-[9px] font-black uppercase tracking-wider ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`}>{item.name}</span>
+            </Link>
+          );
+        })}
 
       </div>
     </div>

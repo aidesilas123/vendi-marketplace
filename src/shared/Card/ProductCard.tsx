@@ -1,7 +1,10 @@
-import React, { useState } from 'react';
+"use client";
+
+import React, { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { IonIcon } from '@ionic/react';
-import { imageOutline, timeOutline } from 'ionicons/icons';
+import { imageOutline, timeOutline, ellipsisVertical, createOutline, trashOutline, copyOutline, checkmarkCircleOutline } from 'ionicons/icons';
 
 const timeAgo = (dateString: string) => {
   const date = new Date(dateString);
@@ -24,23 +27,113 @@ interface ProductCardProps {
   status: string;
   createdAt: string;
   imageUrl?: string | null;
+  isMenuOpen: boolean;
+  onToggleMenu: (id: string | null) => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
   onDuplicate: (id: string) => void;
   onMarkSold: (id: string) => void;
 }
 
+const DROPDOWN_WIDTH = 208; // px — matches w-52 below
+const VIEWPORT_MARGIN = 8;  // keep a small gap from the screen edge
+
 export const ProductCard = ({
   id, title, price, condition, status, createdAt, imageUrl,
+  isMenuOpen, onToggleMenu,
   onEdit, onDelete, onDuplicate, onMarkSold
 }: ProductCardProps) => {
+  const router = useRouter();
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [menuAlign, setMenuAlign] = useState<'left' | 'right'>('right');
+  const menuRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  const toggleMenu = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isMenuOpen && buttonRef.current) {
+      // Measure available space BEFORE opening, so it renders in the
+      // correct spot immediately instead of flashing off-screen first.
+      const rect = buttonRef.current.getBoundingClientRect();
+      const wouldOverflowLeft = rect.right - DROPDOWN_WIDTH < VIEWPORT_MARGIN;
+      setMenuAlign(wouldOverflowLeft ? 'left' : 'right');
+    }
+    onToggleMenu(isMenuOpen ? null : id);
+  };
+
+  const handleAction = (e: React.MouseEvent, action: (id: string) => void) => {
+    e.stopPropagation();
+    onToggleMenu(null);
+    action(id);
+  };
+
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        onToggleMenu(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isMenuOpen, onToggleMenu]);
 
   return (
-    <div className="rounded-2xl overflow-hidden border border-gray-200/70 dark:border-gray-800/70 flex flex-col h-full bg-white dark:bg-[#0f172a]">
-      
+    <div
+      onClick={() => router.push(`/seller/product?id=${id}`)}
+      className="rounded-2xl border border-gray-200/70 dark:border-gray-800/70 hover:border-gray-300 dark:hover:border-gray-700 transition-colors duration-200 cursor-pointer flex flex-col h-full bg-white dark:bg-[#0f172a] relative"
+    >
+      {/* 3-Dots Menu */}
+      <div ref={menuRef} className="absolute top-2 right-2 z-30">
+        <button
+          ref={buttonRef}
+          onClick={toggleMenu}
+          className="w-9 h-9 flex items-center justify-center text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.6)] hover:opacity-70 active:scale-90 transition-all duration-150"
+        >
+          <IonIcon icon={ellipsisVertical} className="text-2xl" />
+        </button>
+
+        {/* Dropdown — flips side based on available space */}
+<div
+  className={`absolute top-10 w-52 bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-700 overflow-hidden transition-all duration-150 ease-out z-40
+    ${menuAlign === 'right' ? 'right-0 origin-top-right' : 'left-0 origin-top-left'}
+    ${isMenuOpen ? 'opacity-100 scale-100 pointer-events-auto' : 'opacity-0 scale-95 pointer-events-none'}`}
+>
+  <button
+    onClick={(e) => handleAction(e, onEdit)}
+    className="w-full flex items-center gap-3 !px-5 !py-3 !text-base font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/60 border-b border-gray-100 dark:border-gray-700 transition-colors"
+  >
+    <IonIcon icon={createOutline} className="!text-lg" />
+    Edit
+  </button>
+  <button
+    onClick={(e) => handleAction(e, onDuplicate)}
+    className="w-full flex items-center gap-3 !px-5 !py-3 !text-base font-bold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 border-b border-gray-100 dark:border-gray-700 transition-colors"
+  >
+    <IonIcon icon={copyOutline} className="!text-lg" />
+    Duplicate
+  </button>
+  {status === 'APPROVED' && (
+    <button
+      onClick={(e) => handleAction(e, onMarkSold)}
+      className="w-full flex items-center gap-3 !px-5 !py-3 !text-base font-bold text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 border-b border-gray-100 dark:border-gray-700 transition-colors"
+    >
+      <IonIcon icon={checkmarkCircleOutline} className="!text-lg" />
+      Mark Sold
+    </button>
+  )}
+  <button
+    onClick={(e) => handleAction(e, onDelete)}
+    className="w-full flex items-center gap-3 !px-5 !py-3 !text-base font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+  >
+    <IonIcon icon={trashOutline} className="!text-lg" />
+    Delete
+  </button>
+</div>
+      </div>
+
       {/* Image Section */}
-      <div className="relative w-full aspect-square bg-gray-50 dark:bg-gray-900 flex items-center justify-center overflow-hidden">
+      <div className="relative w-full aspect-square bg-gray-50 dark:bg-gray-900 flex items-center justify-center overflow-hidden rounded-t-2xl">
         {imageUrl ? (
           <>
             {!imageLoaded && <Skeleton className="absolute inset-0 w-full h-full rounded-none" />}
@@ -48,7 +141,7 @@ export const ProductCard = ({
               src={imageUrl}
               alt={title}
               onLoad={() => setImageLoaded(true)}
-              className={`w-full h-full object-cover transition-opacity duration-500 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
+              className={`w-full h-full object-cover transition-all duration-500 hover:scale-105 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
             />
           </>
         ) : (
@@ -65,48 +158,17 @@ export const ProductCard = ({
         )}
       </div>
 
-      {/* Details & Admin Buttons */}
-      <div className="p-2.5 flex flex-col flex-grow">
+      {/* Details */}
+      <div className="p-2.5 flex flex-col flex-grow rounded-b-2xl">
         <h3 className="font-bold text-gray-900 dark:text-white text-xs mb-0.5 truncate">{title}</h3>
-        <p className={`text-base font-black mb-1.5 ${status === 'SOLD' ? 'text-gray-400 line-through' : 'text-orange-500'}`}>
-          ₦{price?.toLocaleString()}
-        </p>
-        <div className="flex items-center gap-1 text-[10px] font-bold text-gray-500 tracking-wider mb-3">
-          <IonIcon icon={timeOutline} className="text-xs" />
-          <span>{timeAgo(createdAt)}</span>
-        </div>
-
-        {/* Action Bar specific to Sellers */}
-        <div className="mt-auto flex flex-col gap-1.5 border-t border-gray-100 dark:border-gray-800 pt-2.5">
-          <div className="flex gap-1.5">
-            <button
-              onClick={() => onEdit(id)}
-              className="flex-1 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"
-            >
-              Edit
-            </button>
-            <button
-              onClick={() => onDuplicate(id)}
-              className="flex-1 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"
-            >
-              Copy
-            </button>
-            <button
-              onClick={() => onDelete(id)}
-              className="flex-[0.7] bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"
-            >
-              Del
-            </button>
+        <div className="flex items-center justify-between mt-auto">
+          <p className={`text-sm font-black ${status === 'SOLD' ? 'text-gray-400 line-through' : 'text-orange-500'}`}>
+            ₦{price?.toLocaleString()}
+          </p>
+          <div className="flex items-center gap-1 text-[10px] font-bold text-gray-500 tracking-wider">
+            <IonIcon icon={timeOutline} className="text-xs" />
+            <span>{timeAgo(createdAt)}</span>
           </div>
-
-          {status === 'APPROVED' && (
-            <button
-              onClick={() => onMarkSold(id)}
-              className="w-full bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider active:scale-95 transition-transform"
-            >
-              Mark as Sold
-            </button>
-          )}
         </div>
       </div>
     </div>

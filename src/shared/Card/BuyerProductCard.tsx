@@ -80,7 +80,7 @@ export const BuyerProductCard = ({ product, initialSaved = false, onUnsave }: Bu
   return (
     <div
       onClick={() => router.push(`/product?id=${product.id}`)}
-      className="rounded-3xl overflow-hidden border border-gray-200/70 dark:border-gray-800/70 hover:border-gray-300 dark:hover:border-gray-700 transition-all cursor-pointer flex flex-col h-full"
+      className="rounded-3xl overflow-hidden border border-gray-200/70 dark:border-gray-800/70 hover:border-gray-300 dark:hover:border-gray-700 transition-all cursor-pointer flex flex-col h-full animate-in fade-in slide-in-from-bottom-4"
     >
 
       <div className="px-3 py-2 flex justify-between items-center">
