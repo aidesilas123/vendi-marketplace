@@ -32,8 +32,6 @@ export default function SellerDashboard() {
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
 
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | null; message: string; }>({ type: null, message: '' });
-  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-
   useEffect(() => {
     if (notification.type) {
       const timer = setTimeout(() => {
@@ -607,8 +605,6 @@ export default function SellerDashboard() {
     status={product.status}
     createdAt={product.created_at} 
     imageUrl={product.images?.[0]} 
-    isMenuOpen={openMenuId === product.id}
-    onToggleMenu={setOpenMenuId}
     onEdit={handleEdit}
     onDelete={(id) => setItemToDelete(id)}
     onDuplicate={handleDuplicate}
