@@ -27,8 +27,6 @@ interface ProductCardProps {
   status: string;
   createdAt: string;
   imageUrl?: string | null;
-  isMenuOpen: boolean;
-  onToggleMenu: (id: string | null) => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
   onDuplicate: (id: string) => void;
@@ -40,11 +38,11 @@ const VIEWPORT_MARGIN = 8;  // keep a small gap from the screen edge
 
 export const ProductCard = ({
   id, title, price, condition, status, createdAt, imageUrl,
-  isMenuOpen, onToggleMenu,
   onEdit, onDelete, onDuplicate, onMarkSold
 }: ProductCardProps) => {
   const router = useRouter();
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [menuAlign, setMenuAlign] = useState<'left' | 'right'>('right');
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -58,12 +56,12 @@ export const ProductCard = ({
       const wouldOverflowLeft = rect.right - DROPDOWN_WIDTH < VIEWPORT_MARGIN;
       setMenuAlign(wouldOverflowLeft ? 'left' : 'right');
     }
-    onToggleMenu(isMenuOpen ? null : id);
+    setIsMenuOpen(!isMenuOpen);
   };
 
   const handleAction = (e: React.MouseEvent, action: (id: string) => void) => {
     e.stopPropagation();
-    onToggleMenu(null);
+    setIsMenuOpen(false);
     action(id);
   };
 
@@ -71,12 +69,12 @@ export const ProductCard = ({
     if (!isMenuOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        onToggleMenu(null);
+        setIsMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isMenuOpen, onToggleMenu]);
+  }, [isMenuOpen]);
 
   return (
     <div
@@ -94,42 +92,42 @@ export const ProductCard = ({
         </button>
 
         {/* Dropdown — flips side based on available space */}
-<div
-  className={`absolute top-10 w-52 bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-700 overflow-hidden transition-all duration-150 ease-out z-40
-    ${menuAlign === 'right' ? 'right-0 origin-top-right' : 'left-0 origin-top-left'}
-    ${isMenuOpen ? 'opacity-100 scale-100 pointer-events-auto' : 'opacity-0 scale-95 pointer-events-none'}`}
->
-  <button
-    onClick={(e) => handleAction(e, onEdit)}
-    className="w-full flex items-center gap-3 !px-5 !py-3 !text-base font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/60 border-b border-gray-100 dark:border-gray-700 transition-colors"
-  >
-    <IonIcon icon={createOutline} className="!text-lg" />
-    Edit
-  </button>
-  <button
-    onClick={(e) => handleAction(e, onDuplicate)}
-    className="w-full flex items-center gap-3 !px-5 !py-3 !text-base font-bold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 border-b border-gray-100 dark:border-gray-700 transition-colors"
-  >
-    <IonIcon icon={copyOutline} className="!text-lg" />
-    Duplicate
-  </button>
-  {status === 'APPROVED' && (
-    <button
-      onClick={(e) => handleAction(e, onMarkSold)}
-      className="w-full flex items-center gap-3 !px-5 !py-3 !text-base font-bold text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 border-b border-gray-100 dark:border-gray-700 transition-colors"
-    >
-      <IonIcon icon={checkmarkCircleOutline} className="!text-lg" />
-      Mark Sold
-    </button>
-  )}
-  <button
-    onClick={(e) => handleAction(e, onDelete)}
-    className="w-full flex items-center gap-3 !px-5 !py-3 !text-base font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-  >
-    <IonIcon icon={trashOutline} className="!text-lg" />
-    Delete
-  </button>
-</div>
+        <div
+          className={`absolute top-10 w-52 bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-700 overflow-hidden transition-all duration-150 ease-out z-40
+            ${menuAlign === 'right' ? 'right-0 origin-top-right' : 'left-0 origin-top-left'}
+            ${isMenuOpen ? 'opacity-100 scale-100 pointer-events-auto' : 'opacity-0 scale-95 pointer-events-none'}`}
+        >
+          <button
+            onClick={(e) => handleAction(e, onEdit)}
+            className="w-full flex items-center gap-3 !px-5 !py-3 !text-base font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/60 border-b border-gray-100 dark:border-gray-700 transition-colors"
+          >
+            <IonIcon icon={createOutline} className="!text-lg" />
+            Edit
+          </button>
+          <button
+            onClick={(e) => handleAction(e, onDuplicate)}
+            className="w-full flex items-center gap-3 !px-5 !py-3 !text-base font-bold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 border-b border-gray-100 dark:border-gray-700 transition-colors"
+          >
+            <IonIcon icon={copyOutline} className="!text-lg" />
+            Duplicate
+          </button>
+          {status === 'APPROVED' && (
+            <button
+              onClick={(e) => handleAction(e, onMarkSold)}
+              className="w-full flex items-center gap-3 !px-5 !py-3 !text-base font-bold text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 border-b border-gray-100 dark:border-gray-700 transition-colors"
+            >
+              <IonIcon icon={checkmarkCircleOutline} className="!text-lg" />
+              Mark Sold
+            </button>
+          )}
+          <button
+            onClick={(e) => handleAction(e, onDelete)}
+            className="w-full flex items-center gap-3 !px-5 !py-3 !text-base font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+          >
+            <IonIcon icon={trashOutline} className="!text-lg" />
+            Delete
+          </button>
+        </div>
       </div>
 
       {/* Image Section */}
