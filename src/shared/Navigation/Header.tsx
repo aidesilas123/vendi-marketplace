@@ -46,9 +46,13 @@ export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications
   };
 
   return (
-    <div className="sticky top-0 z-40 bg-background/80 backdrop-blur-lg border-b border-border px-4 h-12 flex items-center justify-between shadow-sm">
+    <div className="sticky top-0 z-40 bg-background/80 backdrop-blur-lg border-b border-border px-4 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2 flex items-center justify-between shadow-sm">
 
-      <h1 className="text-lg font-black text-foreground leading-none">Vendi</h1>
+      <div className="flex items-center gap-2">
+        {/* Replace '/icon.png' with the actual path to your logo in the public folder */}
+        <img src="/icon.png" alt="Vendi Logo" className="w-6 h-6 rounded-md object-contain shadow-sm" />
+        <h1 className="text-lg font-black text-foreground leading-none mb-0">Vendi</h1>
+      </div>
 
       <div className="flex items-center gap-2">
         <button 
