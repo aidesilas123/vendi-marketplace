@@ -101,16 +101,18 @@ export const BuyerProductCard = ({ product, initialSaved = false, onUnsave }: Bu
               <Skeleton className="absolute inset-0 w-full h-full rounded-none" />
             )}
             <img
-              src={coverImage}
-              alt={product.title}
-              onLoad={() => setImageLoaded(true)}
-              className={`w-full h-full object-cover hover:scale-105 transition-transform duration-500 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
-            />
+  src={coverImage}
+  alt={product.title}
+  loading="lazy"
+  decoding="async"
+  onLoad={() => setImageLoaded(true)}
+  className={`w-full h-full object-cover hover:scale-105 transition-transform duration-500 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
+/>
           </>
         ) : (
           <IonIcon icon={imageOutline} className="text-4xl text-gray-300 dark:text-gray-700" />
         )}
-        <div className="absolute top-2 left-2 bg-black/60 backdrop-blur-md text-white text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider z-10">{product.condition}</div>
+        <div className="absolute top-2 left-2 bg-black/70 text-white text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wider z-10">{product.condition}</div>
 
         {/* THE BOLD SOLD OVERLAY */}
         {product.status === 'SOLD' && (

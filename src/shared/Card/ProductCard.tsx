@@ -136,16 +136,18 @@ export const ProductCard = ({
           <>
             {!imageLoaded && <Skeleton className="absolute inset-0 w-full h-full rounded-none" />}
             <img
-              src={imageUrl}
-              alt={title}
-              onLoad={() => setImageLoaded(true)}
-              className={`w-full h-full object-cover transition-all duration-500 hover:scale-105 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
-            />
+  src={imageUrl}
+  alt={title}
+  loading="lazy"
+  decoding="async"
+  onLoad={() => setImageLoaded(true)}
+  className={`w-full h-full object-cover transition-all duration-500 hover:scale-105 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
+/>
           </>
         ) : (
           <IonIcon icon={imageOutline} className="text-4xl text-gray-300 dark:text-gray-700" />
         )}
-        <div className="absolute top-2 left-2 bg-black/60 backdrop-blur-md text-white text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider z-10">{condition}</div>
+        <div className="absolute top-2 left-2 bg-black/70 text-white text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider z-10">{condition}</div>
 
         {status === 'SOLD' && (
           <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center z-20">

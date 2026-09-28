@@ -44,6 +44,17 @@ html, body {
   scrollbar-width: none;  /* Hides scrollbar in Firefox */
 }
 
+/* SAFE AREA — reads Capacitor's injected --safe-area-inset-* first (correct
+   even on older Android WebView builds where raw env() has a known bug),
+   falling back to native env() on iOS, newer Android, and web. */
+:root {
+  --sat: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --sab: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+}
+
+.pt-safe { padding-top: var(--sat); }
+.pb-safe { padding-bottom: var(--sab); }
+
 @layer base {
   /* 1. Kills the orange/blue tap highlight on Android WebViews */
   html, body {

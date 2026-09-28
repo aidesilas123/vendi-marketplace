@@ -38,10 +38,8 @@ export const AppShell = ({ children }: AppShellProps) => {
   const isDashboard = pathname === '/';
 
   return (
-    // 1. LOCKED CONTAINER: Takes up exactly the screen height, no window scrolling allowed
-    <div className="h-[100dvh] w-full bg-gray-50 dark:bg-[#0a1120] text-gray-900 dark:text-white flex flex-col font-sans antialiased overflow-hidden relative">
+    <div className="h-[100dvh] w-full bg-gray-50 dark:bg-[#0a1120] text-gray-900 dark:text-white flex flex-col font-sans antialiased overflow-hidden relative pt-safe">
       
-      {/* HEADER: Flex item, naturally stays at the top */}
       {isDashboard && (
         <div className="flex-shrink-0 z-40">
           <Header 
@@ -57,16 +55,13 @@ export const AppShell = ({ children }: AppShellProps) => {
 
       <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} user={user} />
 
-      {/* 2. MAIN SCROLLER: This is the ONLY part of the app that scrolls! */}
-      <main id="main-scroll-container" className="flex-1 w-full overflow-y-auto scroll-smooth pb-24 relative">
-        {/* WIDE SCREEN SPREAD: Expanded to max-w-[1600px] to fill laptops beautifully */}
+      <main id="main-scroll-container" className="flex-1 w-full overflow-y-auto overscroll-y-contain scroll-smooth pb-24 relative">
         <div className="max-w-[1600px] mx-auto w-full px-4 md:px-8">
           {children}
         </div>
       </main>
 
-      {/* 3. ABSOLUTE BOTTOM NAV: Locked to the bottom of the AppShell container */}
-      <div className="absolute bottom-0 left-0 right-0 w-full z-50 pointer-events-none">
+      <div className="absolute bottom-0 left-0 right-0 w-full z-50 pointer-events-none pb-safe">
         <div className="pointer-events-auto">
           <BottomNav />
         </div>

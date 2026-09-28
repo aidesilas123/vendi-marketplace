@@ -8,6 +8,9 @@ const config: CapacitorConfig = {
     StatusBar: {
       overlaysWebView: true,
     },
+    SystemBars: {
+      style: 'DEFAULT',
+    },
   },
 };
 

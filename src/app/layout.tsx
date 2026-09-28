@@ -3,9 +3,9 @@ import { Inter } from "next/font/google";
 import IonicProvider from "./providers";
 import { NetworkListener } from "@/shared/Modal/NetworkListener";
 import { AppShell } from "@/shared/Navigation/AppShell"; 
-import { StatusBarInitializer } from "@/shared/StatusBarInitializer";
+import { StatusBarManager } from "@/shared/StatusBarManager";
 import { HardwareBackButton } from "@/shared/HardwareBackButton";
-import { StatusBarSync } from '@/shared/StatusBarSync';
+import { PageTransition } from "@/shared/PageTransition";
 // 1. IONIC CSS MUST BE IMPORTED FIRST
 import '@ionic/react/css/core.css';
 import '@ionic/react/css/normalize.css';
@@ -43,13 +43,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       {/* antialiased makes the font incredibly smooth on all devices */}
       <body className={`${inter.className} antialiased`}>
         <HardwareBackButton />
-        <StatusBarInitializer />
-        <StatusBarSync/>
+        <StatusBarManager />
         <NetworkListener />
         <IonicProvider>
           {/* We wrap the entire application in the AppShell here */}
           <AppShell>
-            {children}
+            <PageTransition>{children}</PageTransition>
           </AppShell>
         </IonicProvider>
       </body>
