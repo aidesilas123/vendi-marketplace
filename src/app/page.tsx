@@ -251,7 +251,7 @@ className="sticky top-0 z-30 bg-gray-50 dark:bg-[#0a1120] shadow-sm border-b bor
                 size="sm"
                 value={searchQuery}
                 onChange={setSearchQuery}
-                placeholder="Search items..."
+                placeholder="Search items...."
               />
             </div>
 
