@@ -11,16 +11,16 @@ export function StatusBarManager() {
   useEffect(() => {
     const applyStatusBarStyle = async () => {
       try {
-        // Use Vendi's actual theme instead of the device's
-        // prefers-color-scheme setting.
         const isDark = document.documentElement.classList.contains("dark");
 
         await SystemBars.setStyle({
           bar: SystemBarType.StatusBar,
+          // SWAPPED THESE TWO:
           style: isDark
-            ? SystemBarsStyle.Light
-            : SystemBarsStyle.Dark,
+            ? SystemBarsStyle.Dark  // Usually yields white/light text
+            : SystemBarsStyle.Light // Usually yields black/dark text
         });
+        
       } catch (e) {
         console.log("SystemBars plugin not active on web");
       }
