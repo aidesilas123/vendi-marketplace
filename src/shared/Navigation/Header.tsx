@@ -46,7 +46,7 @@ export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications
   };
 
   return (
-    <div className="sticky top-0 z-40 bg-background border-b border-border px-4 pt-1 pb-1 flex items-center justify-between shadow-sm">
+    <div className="sticky top-0 z-40 bg-red-300 border-b border-gray-200 dark:border-gray-800 px-4 pt-1 pb-1 flex items-center justify-between shadow-sm">
 
       <div className="flex items-center gap-2">
         {/* Replace '/icon.png' with the actual path to your logo in the public folder */}
