@@ -23,8 +23,7 @@ export const EmptyState = ({ icon, title, description, actionText, onAction }: E
       {actionText && onAction && (
         <button 
           onClick={onAction}
-          className="bg-orange-500 text-white px-6 py-3 rounded-full font-bold shadow-md hover:bg-orange-600 transition-colors"
-        >
+className="bg-orange-500 text-white !px-6 !py-3 !rounded-full font-bold shadow-md hover:bg-orange-600 transition-colors"        >
           {actionText}
         </button>
       )}

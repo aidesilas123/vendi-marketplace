@@ -46,7 +46,7 @@ export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications
   };
 
   return (
-    <div className="sticky top-0 z-40 bg-background/80 backdrop-blur-lg border-b border-border px-4 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2 flex items-center justify-between shadow-sm">
+    <div className="sticky top-0 z-40 bg-background border-b border-border px-4 pt-1 pb-1 flex items-center justify-between shadow-sm">
 
       <div className="flex items-center gap-2">
         {/* Replace '/icon.png' with the actual path to your logo in the public folder */}
@@ -57,7 +57,7 @@ export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications
       <div className="flex items-center gap-2">
         <button 
           onClick={handleRefresh}
-          className="w-9 h-9 flex-shrink-0 rounded-full bg-transparent flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
+          className="w-8 h-8 flex-shrink-0 rounded-full bg-transparent flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
         >
           <span suppressHydrationWarning className="flex items-center justify-center">
             <IonIcon icon={refreshOutline} className={`text-xl ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -66,7 +66,7 @@ export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications
 
         {user ? (
           <>
-            <button className="relative w-9 h-9 flex-shrink-0 rounded-full bg-transparent flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors">
+            <button className="relative w-8 h-8 flex-shrink-0 rounded-full bg-transparent flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors">
               <span suppressHydrationWarning className="flex items-center justify-center">
                 <IonIcon icon={notificationsOutline} className="text-xl" />
               </span>
@@ -77,13 +77,13 @@ export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications
 
             <div 
               onClick={onOpenSidebar} 
-              className="cursor-pointer w-9 h-9 flex-shrink-0 rounded-full overflow-hidden flex items-center justify-center"
+              className="cursor-pointer w-8 h-8 flex-shrink-0 rounded-full overflow-hidden flex items-center justify-center"
             >
               <Avatar src={user?.avatarUrl} name={user?.name || "Student"} size="sm" />
             </div>
           </>
         ) : isCheckingAuth ? (
-          <div className="w-9 h-9 flex-shrink-0 rounded-full bg-muted animate-pulse" />
+          <div className="w-8 h-8 flex-shrink-0 rounded-full bg-muted animate-pulse" />
         ) : (
           <Link 
             href="/login" 

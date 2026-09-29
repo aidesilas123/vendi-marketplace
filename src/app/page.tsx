@@ -8,7 +8,7 @@ import { EmptyState } from '@/shared/EmptyState';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import IonIcon from '@/shared/Icon/Icon';
-import { searchOutline, filterOutline } from 'ionicons/icons';
+import { searchOutline, cameraOutline } from 'ionicons/icons';
 import { useHideOnScroll } from '@/shared/hooks/useHideOnScroll';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
@@ -18,22 +18,32 @@ const PULL_THRESHOLD = 60;   // slid px needed to commit to a refresh
 const PULL_MAX = 110;        // cap so it can't be dragged forever
 const PULL_RESISTANCE = 0.5; // lower = more "rubber"
 const REFRESH_HOLD = 56;     // how far the page stays open while refreshing
+const SEARCH_ROW_HEIGHT = 44; // px: 8px top padding + 36px controls. Update if you resize them.
+const FILTER_DELAY = 350;        // ms the spinner shows before new results appear
+const FILTER_STRIP_HEIGHT = 48;  // px of space the spinner opens below the pills
 
 export default function HomeFeed() {
   const [products, setProducts] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-
-  const [selectedUniversity, setSelectedUniversity] = useState("All Universities");
   const [activeCategory, setActiveCategory] = useState("All");
+
+  // What the grid actually filters by. These trail searchQuery/activeCategory
+  // by FILTER_DELAY so the spinner has a moment to show.
+  const [appliedQuery, setAppliedQuery] = useState("");
+  const [appliedCategory, setAppliedCategory] = useState("All");
+  const [isFiltering, setIsFiltering] = useState(false);
+  const [stripOpen, setStripOpen] = useState(false); // keeps the spinner mounted while it slides away
 
   const [pullDistance, setPullDistance] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const startYRef = useRef<number | null>(null);
   const hapticFiredRef = useRef(false);
 
-  const showSearch = useHideOnScroll('main-scroll-container');
+  // Lock is 0 because the collapse no longer reflows the grid, so there's
+  // no layout-shift scroll noise to ignore. It reacts the moment you reverse direction.
+  const showSearch = useHideOnScroll('main-scroll-container', 12, 0);
 
   const fetchFeed = useCallback(async (isRefresh = false) => {
     if (isRefresh) setIsRefreshing(true);
@@ -95,6 +105,40 @@ export default function HomeFeed() {
     };
   }, [fetchFeed]);
 
+  // Typing or changing category: show the spinner, then apply the new filters.
+  // Every keystroke restarts the timer, so results land shortly after you pause.
+  useEffect(() => {
+    if (searchQuery === appliedQuery && activeCategory === appliedCategory) {
+      setIsFiltering(false);
+      return;
+    }
+    setIsFiltering(true);
+    const timer = setTimeout(() => {
+      setAppliedQuery(searchQuery);
+      setAppliedCategory(activeCategory);
+      setIsFiltering(false);
+    }, FILTER_DELAY);
+    return () => clearTimeout(timer);
+  }, [searchQuery, activeCategory, appliedQuery, appliedCategory]);
+
+  // Keep the spinner mounted until its slide-away finishes
+  useEffect(() => {
+    if (isFiltering) {
+      setStripOpen(true);
+      return;
+    }
+    const timer = setTimeout(() => setStripOpen(false), 300);
+    return () => clearTimeout(timer);
+  }, [isFiltering]);
+
+  const handleImagePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // so picking the same photo twice still fires
+    if (!file) return;
+    // TODO: image search. Send `file` to whatever backend matches it to products.
+    console.log('Image picked for search:', file.name, file.size);
+  };
+
   const handleTouchStart = (e: React.TouchEvent) => {
     if (isRefreshing) return;
     const main = document.getElementById('main-scroll-container');
@@ -140,24 +184,18 @@ export default function HomeFeed() {
     if (shouldRefresh) fetchFeed(true);
   };
 
-  const availableUniversities = useMemo(() => {
-    const universities = new Set(products.map(p => p.university_id).filter(Boolean));
-    return Array.from(universities);
-  }, [products]);
-
   const filteredProducts = useMemo(() => {
-    const searchLower = searchQuery.toLowerCase();
+    const searchLower = appliedQuery.toLowerCase();
     return products.filter(p => {
       const matchesSearch = p.title.toLowerCase().includes(searchLower) ||
                             (p.university_id && p.university_id.toLowerCase().includes(searchLower)) ||
                             (p.campus && p.campus.toLowerCase().includes(searchLower));
 
-      const matchesCategory = activeCategory === 'All' || p.category === activeCategory;
-      const matchesUniversity = selectedUniversity === 'All Universities' || p.university_id === selectedUniversity;
+      const matchesCategory = appliedCategory === 'All' || p.category === appliedCategory;
 
-      return matchesSearch && matchesCategory && matchesUniversity;
+      return matchesSearch && matchesCategory;
     });
-  }, [products, searchQuery, activeCategory, selectedUniversity]);
+  }, [products, appliedQuery, appliedCategory]);
 
   // How far the whole page is slid down right now
   const offset = isDragging ? pullDistance : isRefreshing ? REFRESH_HOLD : 0;
@@ -172,7 +210,7 @@ export default function HomeFeed() {
       onTouchCancel={handleTouchEnd}
     >
 
-      {/* PULL SPINNER — lives in the gap that opens above the page as it
+      {/* PULL SPINNER: lives in the gap that opens above the page as it
           slides down, so nothing can cover it */}
       <div
         className="absolute top-0 left-0 right-0 flex items-center justify-center pointer-events-none overflow-hidden"
@@ -186,7 +224,7 @@ export default function HomeFeed() {
         )}
       </div>
 
-      {/* SLIDING PAGE — header + grid move together */}
+      {/* SLIDING PAGE: header + grid move together */}
       <div
         style={{
           transform: offset > 0 ? `translateY(${offset}px)` : undefined,
@@ -195,62 +233,81 @@ export default function HomeFeed() {
         }}
       >
 
-        {/* STICKY HEADER AREA */}
-        <div className="sticky top-0 z-30 bg-background/95 backdrop-blur-sm pt-2 shadow-sm border-b border-border mb-3 -mx-4 px-4 md:-mx-8 md:px-8 flex flex-col">
+        {/* STICKY HEADER AREA: the search row slides away with a transform,
+            so the grid underneath never reflows */}
+        <div
+className="sticky top-0 z-30 bg-gray-50 dark:bg-[#0a1120] shadow-sm border-b border-gray-200 dark:border-gray-800 mb-3 -mx-4 px-4 md:-mx-8 md:px-8"          style={{
+            transform: showSearch ? 'translateY(0)' : `translateY(-${SEARCH_ROW_HEIGHT}px)`,
+            transition: 'transform 0.22s cubic-bezier(0.22, 1, 0.36, 1)',
+            willChange: 'transform',
+          }}
+        >
 
-          <div
-            className={`overflow-hidden transition-[max-height,opacity] duration-300 ease-in-out ${
-              showSearch ? 'max-h-24 opacity-100 mb-2' : 'max-h-0 opacity-0 mb-0'
-            }`}
-          >
-            <div className="flex gap-2 items-center">
+          {/* Search + camera row: fixed height, compact controls */}
+          <div className="flex gap-2 items-center pt-2" style={{ height: SEARCH_ROW_HEIGHT }}>
 
-              <div className="flex-1">
-                <Searchbar
-                  value={searchQuery}
-                  onChange={setSearchQuery}
-                  placeholder="Search items..."
-                />
-              </div>
-
-              <div className="relative flex-shrink-0">
-                <select
-                  value={selectedUniversity}
-                  onChange={(e) => setSelectedUniversity(e.target.value)}
-                  className="appearance-none bg-card text-foreground border border-border rounded-full pl-4 pr-10 py-3 text-sm font-bold shadow-sm outline-none focus:border-orange-500 transition-all max-w-[120px] md:max-w-[160px] truncate cursor-pointer"
-                >
-                  <option value="All Universities">All Universities</option>
-                  {availableUniversities.map(uni => (
-                    <option key={uni as string} value={uni as string}>{uni as string}</option>
-                  ))}
-                </select>
-                <span suppressHydrationWarning className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none flex items-center justify-center">
-                  <IonIcon icon={filterOutline} className="text-muted-foreground" />
-                </span>
-              </div>
-
+            <div className="flex-1">
+              <Searchbar
+                size="sm"
+                value={searchQuery}
+                onChange={setSearchQuery}
+                placeholder="Search items..."
+              />
             </div>
+
+            {/* A <label>, not a <button>: globals.css forces height:auto on buttons */}
+            <label
+              htmlFor="image-search-input"
+              aria-label="Search with an image"
+className="flex-shrink-0 w-9 h-9 rounded-full bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-center text-orange-500 cursor-pointer active:scale-95 transition-transform"            >
+              <span suppressHydrationWarning className="flex items-center justify-center">
+                <IonIcon icon={cameraOutline} className="text-lg" />
+              </span>
+            </label>
+            <input
+              id="image-search-input"
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleImagePicked}
+            />
+
           </div>
 
-          <div className="flex overflow-x-auto scrollbar-hide gap-2 pb-2">
+          {/* Categories */}
+          <div className="flex overflow-x-auto scrollbar-hide gap-2 pt-2 pb-2">
             {CATEGORIES.map((cat) => (
               <button
                 key={cat}
                 onClick={() => setActiveCategory(cat)}
                 className={`!whitespace-nowrap flex-shrink-0 !px-4 !py-2 !rounded-full !text-xs !font-bold transition-all shadow-sm ${
                   activeCategory === cat
-                    ? '!bg-orange-500 !text-white'
-                    : '!bg-muted !text-muted-foreground border border-transparent hover:!border-border/60'
-                }`}
+                    ? '!bg-orange-500 !text-white border border-orange-500'
+: '!bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30'                }`}
               >
                 {cat}
               </button>
             ))}
           </div>
+
+          {/* FILTER SPINNER: hangs below the pills without affecting layout.
+              It opens while filtering and slides shut when results are in. */}
+          <div
+            className="absolute left-0 right-0 top-full flex items-center justify-center overflow-hidden pointer-events-none"
+            style={{
+              height: isFiltering ? FILTER_STRIP_HEIGHT : 0,
+              transition: 'height 0.25s ease-out',
+            }}
+          >
+            {stripOpen && <PullSpinner spinning />}
+          </div>
         </div>
 
-        {/* FEED GRID */}
-        <div>
+        {/* FEED GRID: fades out while filtering, fades back in with new results */}
+        <div
+          className={isFiltering ? 'pointer-events-none' : ''}
+          style={{ opacity: isFiltering ? 0 : 1, transition: 'opacity 0.2s ease-out' }}
+        >
           {isLoading ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-5 lg:gap-6">
               {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((i) => (
@@ -290,7 +347,6 @@ export default function HomeFeed() {
                 onAction={() => {
                   setSearchQuery("");
                   setActiveCategory("All");
-                  setSelectedUniversity("All Universities");
                 }}
               />
             </div>
