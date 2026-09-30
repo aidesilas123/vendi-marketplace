@@ -22,7 +22,7 @@ const timeAgo = (dateString: string) => {
 interface ProductCardProps {
   id: string;
   title: string;
-  price: number;
+  basePrice: number;
   condition: string;
   status: string;
   createdAt: string;
@@ -37,7 +37,7 @@ const DROPDOWN_WIDTH = 208; // px — matches w-52 below
 const VIEWPORT_MARGIN = 8;  // keep a small gap from the screen edge
 
 export const ProductCard = ({
-  id, title, price, condition, status, createdAt, imageUrl,
+  id, title, basePrice, condition, status, createdAt, imageUrl,
   onEdit, onDelete, onDuplicate, onMarkSold
 }: ProductCardProps) => {
   const router = useRouter();
@@ -107,13 +107,18 @@ export const ProductCard = ({
             <IonIcon icon={createOutline} className="!text-lg" />
             Edit
           </button>
-          <button
-            onClick={(e) => handleAction(e, onDuplicate)}
-            className="w-full flex items-center gap-3 !px-5 !py-3 !text-base font-bold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 border-b border-gray-100 dark:border-gray-700 transition-colors"
-          >
-            <IonIcon icon={copyOutline} className="!text-lg" />
-            Duplicate
-          </button>
+          
+          {/* Hidden if Pending Review */}
+          {status !== 'PENDING_REVIEW' && (
+            <button
+              onClick={(e) => handleAction(e, onDuplicate)}
+              className="w-full flex items-center gap-3 !px-5 !py-3 !text-base font-bold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 border-b border-gray-100 dark:border-gray-700 transition-colors"
+            >
+              <IonIcon icon={copyOutline} className="!text-lg" />
+              Duplicate
+            </button>
+          )}
+
           {canMarkSold && (
             <button
               onClick={(e) => handleAction(e, onMarkSold)}
@@ -163,10 +168,11 @@ export const ProductCard = ({
 
       {/* Details */}
       <div className="p-2.5 flex flex-col flex-grow rounded-b-2xl">
-        <h3 className="font-bold text-gray-900 dark:text-white text-xs mb-0.5 truncate">{title}</h3>
+        <h3 className="font-bold text-gray-900 dark:text-white text-[10px] mb-0.5 truncate">{title}</h3>
         <div className="flex items-center justify-between mt-auto">
+          {/* Swapped to price (which maps to product.base_price from SellerDashboard) */}
           <p className={`text-sm font-black ${status === 'SOLD' ? 'text-gray-400 line-through' : 'text-orange-500'}`}>
-            ₦{price?.toLocaleString()}
+            ₦{basePrice?.toLocaleString()}
           </p>
           <div className="flex items-center gap-1 text-[10px] font-bold text-gray-500 tracking-wider">
             <IonIcon icon={timeOutline} className="text-xs" />

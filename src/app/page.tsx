@@ -45,21 +45,26 @@ export default function HomeFeed() {
   // no layout-shift scroll noise to ignore. It reacts the moment you reverse direction.
   const showSearch = useHideOnScroll('main-scroll-container', 12, 0);
 
-  const fetchFeed = useCallback(async (isRefresh = false) => {
+ const fetchFeed = useCallback(async (isRefresh = false) => {
     if (isRefresh) setIsRefreshing(true);
 
+    // 1. Fetch ONLY ACTIVE and SOLD items from the database
     const { data, error } = await supabase
       .from('products')
       .select('*, seller:users(username, is_verified, average_rating, avatar_url)')
-      .or('status.eq.APPROVED,status.eq.SOLD')
+      .in('status', ['ACTIVE', 'SOLD'])
       .order('created_at', { ascending: false });
 
     if (!error && data) {
       const now = new Date().getTime();
+      
+      // 2. Filter logic: Keep all ACTIVE items, but drop SOLD items if they are > 24 hours old
       const validProducts = data.filter(p => {
-        if (p.status === 'APPROVED') return true;
+        if (p.status === 'ACTIVE') return true;
+        
         if (p.status === 'SOLD') {
-          const soldDate = new Date(p.updated_at).getTime();
+          // Fallback to created_at just in case updated_at is null
+          const soldDate = new Date(p.updated_at || p.created_at).getTime();
           const hoursSinceSold = (now - soldDate) / (1000 * 60 * 60);
           return hoursSinceSold <= 24;
         }
@@ -89,6 +94,7 @@ export default function HomeFeed() {
 
       setProducts(formattedData);
     }
+    
     setIsLoading(false);
     if (isRefresh) setTimeout(() => setIsRefreshing(false), 500);
   }, []);

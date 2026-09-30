@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
 
 // Initialize the SDK with your private server-side key
 const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY || '');
@@ -10,8 +10,20 @@ export async function validateListing(productData: {
   price: number;
 }) {
   try {
-    // Using the fast and cost-effective flash model for instant moderation
-    const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-3.1-flash-lite",
+      // CRITICAL: Disable native API filters so it doesn't automatically block "Gas Cylinders" 
+      safetySettings: [
+        {
+          category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+          threshold: HarmBlockThreshold.BLOCK_NONE,
+        },
+        {
+          category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+          threshold: HarmBlockThreshold.BLOCK_NONE,
+        }
+      ]
+    });
 
     const prompt = `
       You are Nexus AI, the automated gatekeeper for a university campus marketplace.
@@ -22,26 +34,24 @@ export async function validateListing(productData: {
       Description: ${productData.description}
       Price: ₦${productData.price}
 
-      You are a content moderation AI for a university campus marketplace. Your ONLY job is to flag dangerous, illegal, or rule-breaking content. You are NOT a quality control editor. 
+      You are a content moderation AI. Your ONLY job is to flag dangerous, illegal, or rule-breaking content.
+      If a listing is safe, you MUST approve it. Approved listings will automatically be tagged as ACTIVE on the platform.
 
-Do NOT reject listings for being "vague," "brief," or "lacking detail." As long as the item can be reasonably understood as a product being sold, it must be approved.
+      STRICT REJECTION RULES (Only reject if one of these is met):
+      1. Prohibited Items: You MUST reject firearms, harmful equipment, weapons of any kind, hard drugs, explicit adult content, or illegal/stolen materials.
+      2. Escrow Bypass: Reject any external links, phone numbers, social media handles, or WhatsApp links meant to bypass the platform's payment system.
+      3. Spam/Offensive: Reject pure gibberish (e.g., "asdfghjkl"), outright offensive language, or highly misleading specifications.
+      4. Missing Data: Reject if critical fields (title, price) are completely blank.
 
-APPROVE by default, unless the listing violates one of the STRICT REJECTION RULES below.
+      ALLOWED CAMPUS EXCEPTIONS (DO NOT REJECT THESE):
+      - Fans, blenders, and electrical appliances.
+      - Cooking equipment: Cooking gas cylinders (empty or filled), hotplates, kerosene stoves, standard kitchen knives, pots, and pans.
+      - Standard hostel survival gear.
 
-STRICT REJECTION RULES (Only reject if one of these is met):
-1. Prohibited Items: Weapons, drugs, explicit content, or illegal materials.
-2. Escrow Bypass: Any external links, phone numbers, social media handles, or WhatsApp links meant to bypass the platform's payment system.
-3. Spam/Offensive: Pure gibberish (e.g., "asdfghjkl"), outright offensive language, or highly misleading specifications (e.g., claiming a bicycle has a V8 engine).
-4. Missing Data: Critical fields (title, price) are completely blank.
+      THE BREVITY RULE:
+      - Short descriptions like "CLEAN POP 9 AT AFFODABLE PRICE" are 100% acceptable. 
+      - If the item does not explicitly violate the 4 Strict Rejection Rules, you MUST approve it.
 
-ALLOWED CAMPUS EXCEPTIONS (DO NOT REJECT THESE):
-- Cooking equipment: Cooking gas cylinders (empty or filled), hotplates, kerosene stoves, standard kitchen knives, pots, and pans.
-- Standard hostel survival gear.
-
-THE BREVITY RULE (CRITICAL INSTRUCTION):
-- DO NOT REJECT a listing because a field does not contain "enough detail." 
-- Short descriptions like "CLEAN POP 9 AT AFFODABLE PRICE" are 100% acceptable. 
-- If the item does not explicitly violate Rules 1-4, you MUST approve it, regardless of how short or poorly written the description is.
       Return a strict JSON response in this exact format, with no markdown blocks:
       {
         "status": "APPROVED" | "REJECTED",
@@ -52,38 +62,34 @@ THE BREVITY RULE (CRITICAL INSTRUCTION):
     const result = await model.generateContent(prompt);
     const response = await result.response;
     
-    // Clean the response to ensure perfect JSON parsing
     const text = response.text().replace(/```json/g, '').replace(/```/g, '').trim();
-    
     return JSON.parse(text);
     
   } catch (error) {
     console.error("Nexus AI Gatekeeper Error:", error);
-    // If the AI fails (e.g., network error), default to manual admin review for safety
     return { 
       status: "PENDING_REVIEW", 
-      reason: "AI validation timeout. Sent to admin for manual review." 
+      reason: "AI validation timeout or native block. Sent to admin for manual review." 
     };
   }
 }
+
 export async function validateMessage(messageText: string) {
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite" });
 
     const prompt = `
       You are Nexus AI, powered by Scholars Prep. You are the automated communication gatekeeper for a university campus marketplace.
-      Analyze the following user message (which will be posted as a product review or reply) to ensure platform integrity.
+      Analyze the following user message to ensure platform integrity.
       
       Message to analyze: "${messageText}"
-
-      Your ONLY job is to prevent users from bypassing the platform's internal escrow and communication systems. 
 
       STRICT REJECTION RULES (Only reject if one of these is met):
       1. Escrow Bypass: The message contains phone numbers, WhatsApp links, Telegram handles, Instagram usernames, Twitter handles, or any external links.
       2. Off-Platform Meeting: The message attempts to arrange a direct physical meeting location to finalize the transaction outside the platform's oversight.
       3. Prohibited Content: The message contains explicit abuse, threats, or harassment.
 
-      APPROVE by default if none of the above are present. It is entirely acceptable for users to ask questions about the product's condition, negotiate prices internally, or ask for more photos.
+      APPROVE by default if none of the above are present.
 
       Return a strict JSON response in this exact format, with no markdown blocks:
       {
@@ -96,12 +102,10 @@ export async function validateMessage(messageText: string) {
     const response = await result.response;
     
     const text = response.text().replace(/```json/g, '').replace(/```/g, '').trim();
-    
     return JSON.parse(text);
     
   } catch (error) {
     console.error("Nexus AI Message Gatekeeper Error:", error);
-    // Default to strict mode if the AI fails during a message check to prevent accidental bypass
     return { 
       status: "REJECTED", 
       reason: "Message validation timeout. Please try again." 

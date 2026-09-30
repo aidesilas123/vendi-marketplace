@@ -778,15 +778,17 @@ export default function SellerDashboard() {
         </div>
       )}
 
-      {/* HEADER + TABS: Adjusted to top-0 and z-50 to clear the space and overlay the product dots */}
-      <div className="sticky top-0 z-50 -mx-4 md:-mx-8 bg-gray-50 dark:bg-[#0a1120] pt-2">
-        <div className="px-4 md:px-8 pt-1 pb-2 flex flex-col justify-center">
-          <h1 className="text-lg md:text-2xl font-black leading-tight text-[#0f172a] dark:text-white">
+      {/* HEADER + TABS: Matched perfectly to Vendi Header using h-12 */}
+      <div className="sticky top-0 z-[60] -mx-4 md:-mx-8 bg-gray-50 dark:bg-[#0a1120]">
+        
+        {/* Fixed height container matches your main app header */}
+        <div className="h-12 px-4 md:px-8 flex flex-col justify-center">
+          <h1 className="text-lg md:text-2xl font-black leading-none text-[#0f172a] dark:text-white flex items-baseline gap-2">
             Seller <span className="text-[#D4AF37]">Dashboard</span>
           </h1>
-          <p className="text-[11px] md:text-sm text-gray-500 leading-tight mt-0.5">Manage your listings and sales</p>
         </div>
 
+        {/* Tabs Row */}
         <div ref={tabsContainerRef} className="flex overflow-x-auto scrollbar-hide px-4 md:px-8 pb-2 gap-2">
           {TABS.map((tab) => (
             <button
@@ -1153,7 +1155,7 @@ export default function SellerDashboard() {
                     key={product.id}
                     id={product.id}
                     title={product.title}
-                    price={product.buyer_price}
+                    basePrice={product.base_price}
                     condition={product.condition}
                     status={product.status}
                     createdAt={product.created_at}
