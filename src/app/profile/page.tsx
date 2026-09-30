@@ -403,7 +403,7 @@ export default function ProfilePage() {
                   key={product.id}
                   id={product.id}
                   title={product.title}
-                  price={product.buyer_price}
+                  basePrice={product.base_price}
                   condition={product.condition}
                   status={product.status}
                   createdAt={product.created_at}
