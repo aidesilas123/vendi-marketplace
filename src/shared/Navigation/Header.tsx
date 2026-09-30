@@ -46,7 +46,8 @@ export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications
   };
 
   return (
-<div className="sticky top-0 z-40 h-12 bg-gray-50 dark:bg-[#0a1120] px-4 flex items-center justify-between">      <div className="flex items-center">
+    <div className="sticky top-0 z-50 h-12 bg-gray-50 dark:bg-[#0a1120] px-4 flex items-center justify-between">
+      <div className="flex items-center">
         {/* Replace '/icon.png' with the actual path to your logo in the public folder */}
         <img src="/icon.png" alt="Vendi Logo" className="w-6 h-6 rounded-md object-contain shadow-sm" />
         <h1 className="text-lg font-black text-foreground leading-none mb-0">Vendi</h1>

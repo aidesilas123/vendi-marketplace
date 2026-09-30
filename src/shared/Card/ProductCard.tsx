@@ -76,10 +76,13 @@ export const ProductCard = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isMenuOpen]);
 
+  // Listings that are live (ACTIVE = under 7 days old, APPROVED = older) can be marked sold
+  const canMarkSold = status === 'APPROVED' || status === 'ACTIVE';
+
   return (
     <div
       onClick={() => router.push(`/seller/product?id=${id}`)}
-      className="rounded-2xl border border-gray-200/70 dark:border-gray-800/70 hover:border-gray-300 dark:hover:border-gray-700 transition-colors duration-200 cursor-pointer flex flex-col h-full bg-white dark:bg-[#0f172a] relative"
+      className="rounded-2xl cursor-pointer flex flex-col h-full bg-transparent relative"
     >
       {/* 3-Dots Menu */}
       <div ref={menuRef} className="absolute top-2 right-2 z-30">
@@ -111,7 +114,7 @@ export const ProductCard = ({
             <IonIcon icon={copyOutline} className="!text-lg" />
             Duplicate
           </button>
-          {status === 'APPROVED' && (
+          {canMarkSold && (
             <button
               onClick={(e) => handleAction(e, onMarkSold)}
               className="w-full flex items-center gap-3 !px-5 !py-3 !text-base font-bold text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 border-b border-gray-100 dark:border-gray-700 transition-colors"
@@ -136,13 +139,13 @@ export const ProductCard = ({
           <>
             {!imageLoaded && <Skeleton className="absolute inset-0 w-full h-full rounded-none" />}
             <img
-  src={imageUrl}
-  alt={title}
-  loading="lazy"
-  decoding="async"
-  onLoad={() => setImageLoaded(true)}
-  className={`w-full h-full object-cover transition-all duration-500 hover:scale-105 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
-/>
+              src={imageUrl}
+              alt={title}
+              loading="lazy"
+              decoding="async"
+              onLoad={() => setImageLoaded(true)}
+              className={`w-full h-full object-cover transition-all duration-500 hover:scale-105 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
+            />
           </>
         ) : (
           <IonIcon icon={imageOutline} className="text-4xl text-gray-300 dark:text-gray-700" />

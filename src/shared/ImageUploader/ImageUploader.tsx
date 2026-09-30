@@ -165,13 +165,13 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5 }: Imag
   return (
     <div className="space-y-4">
       
-      {/* Upload Dropzone */}
+      {/* Upload Dropzone (no dashed border) */}
       {images.length < maxImages && (
         <div 
           onDragOver={onDragOverFile} onDragLeave={onDragLeaveFile} onDrop={onDropFile}
           onClick={() => fileInputRef.current?.click()}
-          className={`border-2 border-dashed rounded-3xl p-8 flex flex-col items-center justify-center text-center transition-colors cursor-pointer ${
-            isDraggingFile ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/10' : 'border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-[#1e293b]'
+          className={`rounded-3xl p-8 flex flex-col items-center justify-center text-center transition-colors cursor-pointer ${
+            isDraggingFile ? 'bg-orange-500/10' : 'bg-transparent hover:bg-orange-500/5'
           }`}
         >
           <input 

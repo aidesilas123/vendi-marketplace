@@ -1,5 +1,12 @@
+// NOTE: if your current actions.ts has a "use server" directive on its very first line,
+// keep it there above these imports (your paste didn't show the top of the file).
 import { validateListing, validateMessage } from '@/services/gemini/nexusGatekeeper';
 import { supabase } from '@/lib/supabase';
+
+// A listing stays ACTIVE for its first 7 days, then becomes APPROVED.
+const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+type ListingStatus = 'ACTIVE' | 'APPROVED' | 'REJECTED' | 'PENDING_REVIEW';
 
 // Added userId as the 4th parameter
 export async function submitProductAction(formData: any, pricing: any, productId?: string | null, userId?: string) {
@@ -9,6 +16,14 @@ export async function submitProductAction(formData: any, pricing: any, productId
       throw new Error("You must be logged in to submit a listing.");
     }
 
+    // Negotiation: lastPrice is null when the seller left negotiation off
+    const lastPrice =
+      pricing.lastPrice === null || pricing.lastPrice === undefined ? null : Number(pricing.lastPrice);
+
+    if (lastPrice !== null && (!(lastPrice > 0) || lastPrice > pricing.basePrice)) {
+      throw new Error("Last price must be greater than 0 and not higher than your price.");
+    }
+
     const aiDecision = await validateListing({
       title: formData.title,
       description: formData.description,
@@ -16,8 +31,29 @@ export async function submitProductAction(formData: any, pricing: any, productId
       price: pricing.basePrice,
     });
 
-    const status = aiDecision.status === 'APPROVED' ? 'APPROVED' : 
-                   aiDecision.status === 'REJECTED' ? 'REJECTED' : 'PENDING_REVIEW';
+    let status: ListingStatus;
+
+    if (aiDecision.status === 'REJECTED') {
+      status = 'REJECTED';
+    } else if (aiDecision.status === 'APPROVED') {
+      // New approved listings start as ACTIVE.
+      status = 'ACTIVE';
+
+      // When editing an older listing, don't push it back into the 7-day Active window.
+      if (productId) {
+        const { data: existing } = await supabase
+          .from('products')
+          .select('created_at')
+          .eq('id', productId)
+          .single();
+
+        if (existing?.created_at && Date.now() - new Date(existing.created_at).getTime() >= ACTIVE_WINDOW_MS) {
+          status = 'APPROVED';
+        }
+      }
+    } else {
+      status = 'PENDING_REVIEW';
+    }
 
     const productPayload = {
       seller_id: userId, // Instantly links to your account!
@@ -28,12 +64,13 @@ export async function submitProductAction(formData: any, pricing: any, productId
       category: formData.category,
       condition: formData.condition,
       specifications: formData.specifications,
-      quantity: formData.quantity,
+      quantity: formData.quantity, // text column: "1"–"10" or "Bulk"
       description: formData.description,
       images: formData.images,
       base_price: pricing.basePrice,
       buyer_price: pricing.buyerPrice,
       slashed_price: pricing.slashedPrice,
+      last_price: lastPrice, // null = negotiation off
       status: status,
       ai_flag_reason: aiDecision.reason || null,
     };
@@ -50,7 +87,7 @@ export async function submitProductAction(formData: any, pricing: any, productId
 
     if (error) throw new Error(error.message);
 
-    return { success: true, decision: aiDecision };
+    return { success: true, decision: aiDecision, status };
 
   } catch (error: any) {
     console.error("Action Error:", error);

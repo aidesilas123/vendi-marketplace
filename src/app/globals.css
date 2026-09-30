@@ -75,3 +75,18 @@ html, body {
     appearance: none !important;
   }
 }
+
+/* SMALLER TEXT ON MOBILE — only the text-size classes shrink on screens under
+   768px. Spacing and desktop are untouched, and text-xs stays as is so the
+   pills match everywhere. Tweak or delete these to taste. */
+@media (max-width: 767px) {
+  :root {
+    --text-sm: 0.8125rem;   /* 13px (was 14) */
+    --text-base: 0.9375rem; /* 15px (was 16) */
+    --text-lg: 1rem;        /* 16px (was 18) */
+    --text-xl: 1.125rem;    /* 18px (was 20) */
+    --text-2xl: 1.25rem;    /* 20px (was 24) */
+    --text-3xl: 1.5rem;     /* 24px (was 30) */
+    --text-4xl: 1.75rem;    /* 28px (was 36) */
+  }
+}
