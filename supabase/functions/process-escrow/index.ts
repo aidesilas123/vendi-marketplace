@@ -21,6 +21,7 @@ Deno.serve(async (req) => {
 
     const body = await req.json();
     const productId = body.productId;
+    const offerPrice = body.offerPrice ? Number(body.offerPrice) : null;
 
     if (!productId) throw new Error('Product ID is missing');
 
@@ -31,9 +32,19 @@ Deno.serve(async (req) => {
     if (product.status === 'SOLD') throw new Error('This item has already been sold');
     if (product.seller_id === user.id) throw new Error('You cannot purchase your own item');
 
-    const itemPrice = Number(product.buyer_price);
+    // 2. Determine Final Item Price (Base Price vs Negotiated Offer)
+    const basePrice = Number(product.base_price || 0);
+    let itemPrice = basePrice;
 
-    // 2. Fetch Platform Settings & Calculate Math
+    if (offerPrice) {
+        const lastPrice = Number(product.last_price || 0);
+        if (lastPrice === 0) throw new Error('This item is not open to negotiation');
+        if (offerPrice < lastPrice) throw new Error(`Offer is below the seller's minimum price of ₦${lastPrice}`);
+        if (offerPrice > basePrice) throw new Error(`Offer cannot exceed the base price`);
+        itemPrice = offerPrice; // Valid offer accepted!
+    }
+
+    // 3. Fetch Platform Settings & Calculate Math (No Splitting)
     const { data: settings, error: settingsError } = await supabase.from('platform_settings').select('*').eq('id', 1).single();
     if (settingsError || !settings) throw new Error(`Failed to load platform settings: ${settingsError?.message}`);
 
@@ -42,17 +53,17 @@ Deno.serve(async (req) => {
     let platformRevenue = 0;
 
     if (!settings.is_launch_promo_active) {
-        const platformFeePercent = Number(settings.platform_fee_percentage) || 10;
-        const splitPercent = platformFeePercent / 2; // Split 50/50 between buyer and seller
+        const platformFeePercent = Number(settings.platform_fee_percentage) || 0;
         
-        buyerFee = Math.floor(itemPrice * (splitPercent / 100));
-        sellerFee = Math.floor(itemPrice * (splitPercent / 100));
+        // Full percentage applied to BOTH sides separately, exactly as discussed
+        buyerFee = Math.floor(itemPrice * (platformFeePercent / 100));
+        sellerFee = Math.floor(itemPrice * (platformFeePercent / 100));
         platformRevenue = buyerFee + sellerFee;
     }
 
     const totalCharge = itemPrice + buyerFee;
 
-    // 3. Fetch Wallet & Verify Total Balance
+    // 4. Fetch Wallet & Verify Total Balance
     const { data: wallet, error: walletError } = await supabase.from('wallets').select('*').eq('user_id', user.id).single();
     if (walletError) throw new Error(`Database Error (Wallet): ${walletError.message}`);
     if (!wallet) throw new Error('Wallet not found');
@@ -61,14 +72,14 @@ Deno.serve(async (req) => {
         throw new Error(`Insufficient funds. You need ₦${totalCharge.toLocaleString()} to cover the item and escrow fee.`);
     }
 
-    // 4. Lock Funds
+    // 5. Lock Funds
     const newBalance = Number(wallet.balance) - totalCharge;
     const { error: updateWalletError } = await supabase.from('wallets').update({ balance: newBalance }).eq('id', wallet.id);
     if (updateWalletError) throw new Error(`Failed to secure funds: ${updateWalletError.message}`);
 
     const orderRef = `ESC-${Date.now().toString().substring(5)}`;
 
-    // 5. Record Transaction with the exact JSON snapshot
+    // 6. Record Transaction with the exact JSON snapshot
     const { error: txError } = await supabase.from('transactions').insert({
       wallet_id: wallet.id,
       user_id: user.id,             
@@ -84,16 +95,18 @@ Deno.serve(async (req) => {
           buyer_fee_paid: buyerFee,
           seller_fee_owed: sellerFee,
           platform_revenue: platformRevenue,
-          is_promo: settings.is_launch_promo_active
+          is_promo: settings.is_launch_promo_active,
+          was_negotiated: !!offerPrice
       }
     });
     if (txError) throw new Error(`Failed to record transaction: ${txError.message}`);
 
-    // 6. Mark Product as SOLD
+    // 7. Mark Product as SOLD
     const { error: updateProductError } = await supabase.from('products').update({ status: 'SOLD' }).eq('id', product.id);
     if (updateProductError) throw new Error(`Failed to update product status: ${updateProductError.message}`);
 
-    return new Response(JSON.stringify({ success: true, orderRef }), { 
+    // Return reference key exactly as the frontend expects it
+    return new Response(JSON.stringify({ success: true, reference: orderRef }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 
     });
 

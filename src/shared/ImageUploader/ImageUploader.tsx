@@ -2,19 +2,22 @@
 
 import React, { useState, useRef, DragEvent as ReactDragEvent } from 'react';
 import { IonIcon } from '@ionic/react';
-import { cloudUploadOutline, trashOutline, star } from 'ionicons/icons';
+import { cloudUploadOutline, closeCircle, star } from 'ionicons/icons';
+import { Skeleton } from '@/shared/Skeleton/Skeleton';
 
 interface ImageUploaderProps {
   images: string[];
   onChange: (images: string[]) => void;
   onError: (message: string) => void;
   maxImages?: number;
+  onUploadingStateChange?: (isUploading: boolean) => void;
 }
 
-export const ImageUploader = ({ images, onChange, onError, maxImages = 5 }: ImageUploaderProps) => {
+export const ImageUploader = ({ images, onChange, onError, maxImages = 5, onUploadingStateChange }: ImageUploaderProps) => {
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [draggedImageIndex, setDraggedImageIndex] = useState<number | null>(null);
   const [uploadingFiles, setUploadingFiles] = useState<{ id: string, progress: number, preview: string }[]>([]);
+  const [loadedImages, setLoadedImages] = useState<{ [key: string]: boolean }>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 1. Client-Side Compression
@@ -44,7 +47,7 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5 }: Imag
     });
   };
 
-  // 2. Batch Upload Logic (Fixes the vanishing image bug)
+  // 2. Batch Upload Logic
   const handleUpload = async (files: FileList | File[]) => {
     if (images.length + files.length > maxImages) {
       onError(`You can only upload a maximum of ${maxImages} images.`);
@@ -59,6 +62,8 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5 }: Imag
       return;
     }
 
+    onUploadingStateChange?.(true);
+
     const filesArray = Array.from(files);
     const trackingData = filesArray.map(rawFile => ({
       id: Math.random().toString(36).substring(7),
@@ -68,12 +73,11 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5 }: Imag
 
     setUploadingFiles(prev => [...prev, ...trackingData.map(f => ({ id: f.id, progress: 0, preview: f.preview }))]);
 
-    // Process all uploads as an array of promises
     const uploadPromises = trackingData.map(async (fileData) => {
       try {
         const compressedFile = await compressImage(fileData.rawFile);
         
-        return new Promise<string>((resolve, reject) => {
+        return new Promise<string>((resolve) => {
           const xhr = new XMLHttpRequest();
           xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`);
           
@@ -90,20 +94,12 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5 }: Imag
               const response = JSON.parse(xhr.responseText);
               resolve(response.secure_url);
             } else {
-              try {
-                const errResponse = JSON.parse(xhr.responseText);
-                console.error("Cloudinary Error:", errResponse);
-                onError(`Upload failed: ${errResponse.error?.message}`);
-              } catch {
-                onError(`Upload failed with status: ${xhr.status}`);
-              }
-              resolve(''); // Resolve empty string to prevent Promise.all from failing entirely
+              resolve(''); 
             }
           };
 
           xhr.onerror = () => {
             setUploadingFiles(prev => prev.filter(f => f.id !== fileData.id));
-            onError("Network error during upload.");
             resolve('');
           };
 
@@ -118,16 +114,17 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5 }: Imag
       }
     });
 
-    // Wait for all uploads to finish, then update the array exactly ONCE
     const results = await Promise.all(uploadPromises);
     const successfulUrls = results.filter(url => url !== '');
     
     if (successfulUrls.length > 0) {
       onChange([...images, ...successfulUrls]);
     }
+    
+    onUploadingStateChange?.(false);
   };
 
-  // 3. File Dropzone Handlers
+  // 3. Handlers
   const onDragOverFile = (e: ReactDragEvent) => { e.preventDefault(); setIsDraggingFile(true); };
   const onDragLeaveFile = () => setIsDraggingFile(false);
   const onDropFile = (e: ReactDragEvent) => {
@@ -138,22 +135,14 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5 }: Imag
     }
   };
 
-  // 4. Image Rearrangement Handlers (Drag & Drop Sorting)
-  const handleSortDragStart = (index: number) => {
-    setDraggedImageIndex(index);
-  };
-
-  const handleSortDragOver = (e: ReactDragEvent) => {
-    e.preventDefault(); // Necessary to allow dropping
-  };
-
+  const handleSortDragStart = (index: number) => setDraggedImageIndex(index);
+  const handleSortDragOver = (e: ReactDragEvent) => e.preventDefault();
+  
   const handleSortDrop = (targetIndex: number) => {
     if (draggedImageIndex === null || draggedImageIndex === targetIndex) return;
-
     const newImages = [...images];
     const [draggedItem] = newImages.splice(draggedImageIndex, 1);
     newImages.splice(targetIndex, 0, draggedItem);
-    
     onChange(newImages);
     setDraggedImageIndex(null);
   };
@@ -165,7 +154,6 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5 }: Imag
   return (
     <div className="space-y-4">
       
-      {/* Upload Dropzone (no dashed border) */}
       {images.length < maxImages && (
         <div 
           onDragOver={onDragOverFile} onDragLeave={onDragLeaveFile} onDrop={onDropFile}
@@ -186,7 +174,6 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5 }: Imag
         </div>
       )}
 
-      {/* Uploading Progress Previews */}
       {uploadingFiles.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
           {uploadingFiles.map(file => (
@@ -204,7 +191,6 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5 }: Imag
         </div>
       )}
 
-      {/* Uploaded Images Grid (Drag and Drop enabled) */}
       {images.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
           {images.map((url, idx) => (
@@ -214,29 +200,32 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5 }: Imag
               onDragStart={() => handleSortDragStart(idx)}
               onDragOver={handleSortDragOver}
               onDrop={() => handleSortDrop(idx)}
-              className={`relative aspect-square rounded-2xl overflow-hidden group border-2 cursor-grab active:cursor-grabbing transition-transform ${
+              className={`relative aspect-square rounded-2xl overflow-hidden group border-2 cursor-grab active:cursor-grabbing transition-transform bg-gray-100 dark:bg-gray-800 ${
                 idx === 0 ? 'border-[#D4AF37]' : 'border-transparent'
               } ${draggedImageIndex === idx ? 'opacity-50 scale-95' : 'opacity-100'}`}
             >
-              <img src={url} alt="Product" className="w-full h-full object-cover pointer-events-none" />
+              {!loadedImages[url] && <Skeleton className="absolute inset-0 w-full h-full rounded-none" />}
+              <img 
+                src={url} 
+                alt="Product" 
+                onLoad={() => setLoadedImages(prev => ({ ...prev, [url]: true }))}
+                className={`w-full h-full object-cover pointer-events-none transition-opacity duration-300 ${loadedImages[url] ? 'opacity-100' : 'opacity-0'}`} 
+              />
               
-              {/* Cover Photo Badge */}
               {idx === 0 && (
-                <div className="absolute top-2 left-2 bg-[#D4AF37] text-white text-[9px] px-2 py-0.5 rounded-full font-black tracking-wider uppercase shadow-md flex items-center gap-1">
+                <div className="absolute bottom-2 left-2 bg-[#D4AF37] text-white text-[9px] px-2 py-0.5 rounded-full font-black tracking-wider uppercase shadow-md flex items-center gap-1 z-10">
                   <IonIcon icon={star} /> Cover
                 </div>
               )}
 
-              {/* Delete Button Overlay */}
-              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex p-2">
-                <button 
-                  onClick={() => removeImage(idx)} 
-                  className="absolute top-2 right-2 w-8 h-8 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 transition-colors shadow-md"
-                  title="Delete Image"
-                >
-                  <IonIcon icon={trashOutline} className="text-lg" />
-                </button>
-              </div>
+              {/* Permanent floating cross icon (no background box) */}
+              <button 
+                onClick={(e) => { e.stopPropagation(); removeImage(idx); }} 
+                className="absolute top-1 right-1 text-white/90 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)] hover:text-red-500 active:scale-90 transition-all z-20"
+                title="Delete Image"
+              >
+                <IonIcon icon={closeCircle} className="text-[28px]" />
+              </button>
             </div>
           ))}
         </div>

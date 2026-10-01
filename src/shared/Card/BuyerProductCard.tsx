@@ -1,10 +1,13 @@
-import React, { useState } from 'react';
+"use client";
+
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Avatar } from '@/shared/Avatar';
 import { Badge } from '@/shared/Badge';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { IonIcon } from '@ionic/react';
 import { supabase } from '@/lib/supabase';
+import { calcFees, naira } from '@/lib/pricing';
 import { imageOutline, schoolOutline, timeOutline, eyeOutline, bookmarkOutline, bookmark, star } from 'ionicons/icons';
 
 const timeAgo = (dateString: string) => {
@@ -20,11 +23,16 @@ const timeAgo = (dateString: string) => {
   return `${days}d ago`;
 };
 
+// Module-level cache to prevent 50 cards from making 50 identical database queries at the same time
+let cachedSettings: any = null;
+let settingsPromise: Promise<any> | null = null;
+
 interface BuyerProductCardProps {
   product: {
     id: string;
     title: string;
-    buyer_price: number;
+    base_price?: number;
+    buyer_price?: number; // Kept as fallback for older cached data
     condition: string;
     status: string; 
     university_id?: string;
@@ -47,6 +55,24 @@ export const BuyerProductCard = ({ product, initialSaved = false, onUnsave }: Bu
   const router = useRouter();
   const [isSaved, setIsSaved] = useState(initialSaved);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [platformSettings, setPlatformSettings] = useState<any>(cachedSettings);
+
+  useEffect(() => {
+    if (cachedSettings) {
+      setPlatformSettings(cachedSettings);
+      return;
+    }
+    if (!settingsPromise) {
+      // Promise.resolve fixes the TypeScript 'PromiseLike' mismatch error
+      settingsPromise = Promise.resolve(
+        supabase.from('platform_settings').select('*').eq('id', 1).maybeSingle().then(res => res.data)
+      );
+    }
+    settingsPromise.then(data => {
+      cachedSettings = data;
+      setPlatformSettings(data);
+    });
+  }, []);
 
   let coverImage = null;
   if (Array.isArray(product.images) && product.images.length > 0) coverImage = product.images[0];
@@ -72,6 +98,11 @@ export const BuyerProductCard = ({ product, initialSaved = false, onUnsave }: Bu
       await supabase.from('saved_items').insert({ user_id: session.user.id, product_id: product.id });
     }
   };
+
+  // Dynamic Display Price Calculation
+  const basePrice = Number(product.base_price || product.buyer_price || 0);
+  const fees = calcFees(basePrice, platformSettings);
+  const displayPrice = fees.total;
 
   return (
     <div
@@ -124,11 +155,9 @@ export const BuyerProductCard = ({ product, initialSaved = false, onUnsave }: Bu
       </div>
 
       <div className="py-2.5 px-1 flex flex-col flex-grow">
-        {/* Shrunk to valid Tailwind size text-[10px] */}
         <h3 className="font-bold text-gray-900 dark:text-gray-200 text-[10px] mb-1 leading-tight line-clamp-2">{product.title}</h3>
-        {/* Swapped to render buyer_price */}
         <p className={`text-sm font-black mb-2 ${product.status === 'SOLD' ? 'text-gray-400 line-through' : 'text-orange-500'}`}>
-          ₦{product.buyer_price?.toLocaleString()}
+          {naira(displayPrice)}
         </p>
         <div className="flex flex-wrap items-center justify-between gap-y-1 gap-x-2 text-[10px] font-bold text-gray-500 tracking-wider mb-2 border-b border-gray-100 dark:border-gray-800 pb-2">
           <div className="flex items-center gap-1 uppercase min-w-0">

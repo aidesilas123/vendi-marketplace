@@ -15,6 +15,7 @@ import { ProductCard } from '@/shared/Card/ProductCard';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { submitProductAction } from './actions';
 import { supabase } from '@/lib/supabase';
+import Link from 'next/link';
 
 /* -------------------------------------------------------------------------- */
 /*  Constants                                                                 */
@@ -264,11 +265,15 @@ export default function SellerDashboard() {
 
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [formData, setFormData] = useState<FormState>(getEmptyForm());
+  
 
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | null; message: string }>({
+    
     type: null,
     message: ''
+    
   });
+  const [isImagesUploading, setIsImagesUploading] = useState(false);
 
   // Automatically update the URL when the tab changes so back navigation works perfectly
   useEffect(() => {
@@ -970,17 +975,18 @@ export default function SellerDashboard() {
                 )}
 
                 {/* STEP 4: images */}
-                {step === 4 && (
-                  <div>
-                    <label className={LABEL_CLASSES}>Upload Images (Max 5)</label>
-                    <ImageUploader
-                      images={formData.images}
-                      onChange={(newImages) => setFormData({ ...formData, images: newImages })}
-                      onError={(errorMsg) => setNotification({ type: 'error', message: errorMsg })}
-                      maxImages={5}
-                    />
-                  </div>
-                )}
+             {step === 4 && (
+               <div>
+                 <label className={LABEL_CLASSES}>Upload Images (Max 5)</label>
+                 <ImageUploader
+                   images={formData.images}
+                   onChange={(newImages) => setFormData({ ...formData, images: newImages })}
+                   onError={(errorMsg) => setNotification({ type: 'error', message: errorMsg })}
+                   onUploadingStateChange={(status) => setIsImagesUploading(status)}
+                   maxImages={5}
+                 />
+               </div>
+             )}
 
                 {/* STEP 5: price, negotiation, terms */}
                 {step === 5 && (
@@ -1084,14 +1090,12 @@ export default function SellerDashboard() {
                       />
                       <span className="text-xs text-gray-600 dark:text-gray-300 leading-relaxed">
                         I have read and agree to the{' '}
-                        <a
+                        <Link
                           href="/terms"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-bold text-[#D4AF37] underline"
+                          className="font-bold text-[#D4AF37] underline hover:text-orange-500"
                         >
                           Terms &amp; Policies
-                        </a>
+                        </Link>
                         .
                       </span>
                     </label>
@@ -1117,10 +1121,14 @@ export default function SellerDashboard() {
               )}
 
               {step < TOTAL_STEPS ? (
-                <Button size="sm" onClick={() => goToStep(step + 1)} disabled={isStepLoading}>
-                  Next Step
-                </Button>
-              ) : (
+             <Button 
+               size="sm" 
+               onClick={() => goToStep(step + 1)} 
+               disabled={isStepLoading || isImagesUploading}
+             >
+               Next Step
+             </Button>
+           ) : (
                 <Button
                   size="sm"
                   onClick={handleSubmit}
