@@ -1,7 +1,3 @@
-"use server";
-
-import { createClient } from '@supabase/supabase-js';
-import { validateListing, validateMessage } from '@/services/gemini/nexusGatekeeper';
 import { supabase } from '@/lib/supabase';
 
 // A listing stays ACTIVE for its first 7 days, then becomes APPROVED.
@@ -12,44 +8,19 @@ type ListingStatus = 'ACTIVE' | 'APPROVED' | 'REJECTED' | 'PENDING_REVIEW';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-/**
- * Verifies the caller's access token with Supabase and returns the real user id
- * plus a client that acts as that user (so row-level security applies to its queries).
- * The browser only sends the token; it can't claim to be someone else.
- */
-async function getAuthedClient(accessToken?: string) {
-  if (!accessToken) {
-    throw new Error("You must be logged in to submit a listing.");
-  }
-
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anonKey) {
-    throw new Error("Server is missing its Supabase configuration.");
-  }
-
-  const client = createClient(url, anonKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-    global: { headers: { Authorization: `Bearer ${accessToken}` } }
-  });
-
-  const { data, error } = await client.auth.getUser(accessToken);
-  if (error || !data.user) {
-    throw new Error("Your session has expired. Please log in again.");
-  }
-
-  return { client, userId: data.user.id };
-}
-
-// The 4th parameter is now the caller's access token (not a user id)
 export async function submitProductAction(
   formData: any,
   pricing: any,
-  productId?: string | null,
-  accessToken?: string
+  productId?: string | null
 ) {
   try {
-    const { client, userId } = await getAuthedClient(accessToken);
+    // 1. Get the authenticated user and session token directly from the local browser session
+    const { data: { session }, error: authError } = await supabase.auth.getSession();
+    if (authError || !session?.user) {
+      throw new Error("Your session has expired. Please log in again.");
+    }
+    const userId = session.user.id;
+    const accessToken = session.access_token;
 
     /* ------------------------------- validation ------------------------------- */
 
@@ -82,7 +53,7 @@ export async function submitProductAction(
 
     /* ------------------- prices the buyer pays: server decides ------------------ */
 
-    const { data: settings, error: settingsError } = await client
+    const { data: settings, error: settingsError } = await supabase
       .from('platform_settings')
       .select('is_launch_promo_active, platform_fee_percentage')
       .eq('id', 1)
@@ -102,7 +73,7 @@ export async function submitProductAction(
     let existingCreatedAt: string | null = null;
 
     if (productId) {
-      const { data: existing, error: existingError } = await client
+      const { data: existing, error: existingError } = await supabase
         .from('products')
         .select('created_at')
         .eq('id', productId)
@@ -117,19 +88,34 @@ export async function submitProductAction(
 
     /* ------------------------------- moderation -------------------------------- */
 
-    const aiDecision = await validateListing({
-      title,
-      description,
-      category: formData.category,
-      price: basePrice,
+    // Call the secure Edge Function instead of running Gemini in the browser
+    const aiResponse = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/nexus-gatekeeper`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        type: 'listing',
+        payload: {
+          title,
+          description,
+          category: formData.category,
+          price: basePrice,
+        }
+      })
     });
 
+    if (!aiResponse.ok) {
+      throw new Error("Failed to validate listing with Nexus AI.");
+    }
+
+    const aiDecision = await aiResponse.json();
     let status: ListingStatus;
 
     if (aiDecision.status === 'REJECTED') {
       status = 'REJECTED';
     } else if (aiDecision.status === 'APPROVED') {
-      // New approved listings start as ACTIVE.
       status = 'ACTIVE';
 
       // When editing an older listing, don't push it back into the 7-day Active window.
@@ -143,7 +129,7 @@ export async function submitProductAction(
     /* --------------------------------- save ------------------------------------ */
 
     const productPayload = {
-      seller_id: userId, // comes from the verified token, never from the browser
+      seller_id: userId,
       university_id: String(formData.university).toUpperCase(),
       campus: String(formData.campus).toUpperCase(),
       specific_location: location,
@@ -151,20 +137,19 @@ export async function submitProductAction(
       category: formData.category,
       condition: formData.condition,
       specifications: formData.specifications,
-      quantity: formData.quantity, // text column: "1"–"10" or "Bulk"
+      quantity: formData.quantity, 
       description,
       images,
       base_price: basePrice,
       buyer_price: buyerPrice,
       slashed_price: slashedPrice,
-      last_price: lastPrice, // null = negotiation off
+      last_price: lastPrice, 
       status,
       ai_flag_reason: aiDecision.reason || null,
     };
 
     if (productId) {
-      // Scoped to the owner, and checked: zero rows updated means it wasn't theirs
-      const { data: updated, error } = await client
+      const { data: updated, error } = await supabase
         .from('products')
         .update(productPayload)
         .eq('id', productId)
@@ -176,7 +161,7 @@ export async function submitProductAction(
         throw new Error("Listing not found, or you don't have permission to edit it.");
       }
     } else {
-      const { error } = await client.from('products').insert([productPayload]);
+      const { error } = await supabase.from('products').insert([productPayload]);
       if (error) throw new Error(error.message);
     }
 
@@ -188,9 +173,6 @@ export async function submitProductAction(
   }
 }
 
-// NOTE: this one still trusts the userId sent from the browser. It needs the same
-// access-token treatment as above, but its caller (the product page) isn't in what you've
-// shared, so the signature is unchanged to avoid breaking it.
 export async function submitReviewAction(
   productId: string,
   userId: string,
@@ -198,7 +180,25 @@ export async function submitReviewAction(
   parentId: string | null = null
 ) {
   try {
-    const aiDecision = await validateMessage(content);
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error("Authentication required to send messages.");
+
+    // Securely call the Edge Function for message validation
+    const aiResponse = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/nexus-gatekeeper`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        type: 'message',
+        payload: { content }
+      })
+    });
+
+    if (!aiResponse.ok) throw new Error("Failed to validate message.");
+
+    const aiDecision = await aiResponse.json();
 
     if (aiDecision.status === 'REJECTED') {
       return {
