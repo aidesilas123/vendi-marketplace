@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import useSWR from 'swr';
 import { supabase } from '@/lib/supabase';
 import { BuyerProductCard } from '@/shared/Card/BuyerProductCard';
 import { Searchbar } from '@/shared/Searchbar/Searchbar';
@@ -22,9 +23,73 @@ const SEARCH_ROW_HEIGHT = 44; // px: 8px top padding + 36px controls. Update if 
 const FILTER_DELAY = 350;        // ms the spinner shows before new results appear
 const FILTER_STRIP_HEIGHT = 48;  // px of space the spinner opens below the pills
 
+const FEED_KEY = 'home-feed';
+const EMPTY: any[] = [];
+
+/**
+ * SWR fetcher. Throws on failure so SWR keeps showing the last good data
+ * instead of overwriting it with nothing.
+ */
+async function fetchProducts() {
+  // 1. Fetch ONLY ACTIVE and SOLD items from the database
+  const { data, error } = await supabase
+    .from('products')
+    .select('*, seller:users(username, is_verified, average_rating, avatar_url)')
+    .in('status', ['ACTIVE', 'SOLD'])
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+
+  const now = Date.now();
+
+  // 2. Keep all ACTIVE items, but drop SOLD items if they are > 24 hours old
+  const validProducts = (data ?? []).filter((p: any) => {
+    if (p.status === 'ACTIVE') return true;
+
+    if (p.status === 'SOLD') {
+      // Fallback to created_at just in case updated_at is null
+      const soldDate = new Date(p.updated_at || p.created_at).getTime();
+      const hoursSinceSold = (now - soldDate) / (1000 * 60 * 60);
+      return hoursSinceSold <= 24;
+    }
+    return false;
+  });
+
+  const productIds = validProducts.map((p: any) => p.id);
+  const viewCounts: Record<string, number> = {};
+
+  if (productIds.length > 0) {
+    const { data: viewsData } = await supabase
+      .from('product_views')
+      .select('product_id')
+      .in('product_id', productIds);
+
+    if (viewsData) {
+      viewsData.forEach((v: any) => {
+        viewCounts[v.product_id] = (viewCounts[v.product_id] || 0) + 1;
+      });
+    }
+  }
+
+  return validProducts.map((product: any) => ({
+    ...product,
+    views_count: viewCounts[product.id] || 0,
+  }));
+}
+
 export default function HomeFeed() {
-  const [products, setProducts] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  // Stale-while-revalidate: cached feed shows instantly, then updates quietly.
+  // `isLoading` is only true when there is NO cached data yet (first ever load),
+  // so the skeleton won't flash when you come back to the feed.
+  const { data, mutate } = useSWR<any[]>(FEED_KEY, fetchProducts, {
+    keepPreviousData: true,
+    revalidateOnFocus: true,
+    revalidateOnReconnect: true,
+    dedupingInterval: 10000,
+  });
+  const products = data ?? EMPTY;
+  const isLoading = data === undefined; // no cache yet
+
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState("All");
@@ -45,71 +110,27 @@ export default function HomeFeed() {
   // no layout-shift scroll noise to ignore. It reacts the moment you reverse direction.
   const showSearch = useHideOnScroll('main-scroll-container', 12, 0);
 
- const fetchFeed = useCallback(async (isRefresh = false) => {
-    if (isRefresh) setIsRefreshing(true);
-
-    // 1. Fetch ONLY ACTIVE and SOLD items from the database
-    const { data, error } = await supabase
-      .from('products')
-      .select('*, seller:users(username, is_verified, average_rating, avatar_url)')
-      .in('status', ['ACTIVE', 'SOLD'])
-      .order('created_at', { ascending: false });
-
-    if (!error && data) {
-      const now = new Date().getTime();
-      
-      // 2. Filter logic: Keep all ACTIVE items, but drop SOLD items if they are > 24 hours old
-      const validProducts = data.filter(p => {
-        if (p.status === 'ACTIVE') return true;
-        
-        if (p.status === 'SOLD') {
-          // Fallback to created_at just in case updated_at is null
-          const soldDate = new Date(p.updated_at || p.created_at).getTime();
-          const hoursSinceSold = (now - soldDate) / (1000 * 60 * 60);
-          return hoursSinceSold <= 24;
-        }
-        return false;
-      });
-
-      const productIds = validProducts.map(p => p.id);
-      const viewCounts: Record<string, number> = {};
-
-      if (productIds.length > 0) {
-        const { data: viewsData } = await supabase
-          .from('product_views')
-          .select('product_id')
-          .in('product_id', productIds);
-
-        if (viewsData) {
-          viewsData.forEach(v => {
-            viewCounts[v.product_id] = (viewCounts[v.product_id] || 0) + 1;
-          });
-        }
-      }
-
-      const formattedData = validProducts.map(product => ({
-        ...product,
-        views_count: viewCounts[product.id] || 0,
-      }));
-
-      setProducts(formattedData);
+  // Pull-to-refresh / explicit refresh: shows the spinner while SWR revalidates
+  const refreshFeed = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      await mutate();
+    } finally {
+      setTimeout(() => setIsRefreshing(false), 500);
     }
-    
-    setIsLoading(false);
-    if (isRefresh) setTimeout(() => setIsRefreshing(false), 500);
-  }, []);
-
-  useEffect(() => { fetchFeed(); }, [fetchFeed]);
+  }, [mutate]);
 
   useEffect(() => {
-    const handleGlobalRefresh = () => fetchFeed(true);
+    const handleGlobalRefresh = () => { refreshFeed(); };
+    // Coming back via the back button: refresh quietly, the cached feed is already on screen
+    const handlePopState = () => { mutate(); };
     window.addEventListener('refresh-feed', handleGlobalRefresh);
-    window.addEventListener('popstate', handleGlobalRefresh);
+    window.addEventListener('popstate', handlePopState);
     return () => {
       window.removeEventListener('refresh-feed', handleGlobalRefresh);
-      window.removeEventListener('popstate', handleGlobalRefresh);
+      window.removeEventListener('popstate', handlePopState);
     };
-  }, [fetchFeed]);
+  }, [refreshFeed, mutate]);
 
   // Typing or changing category: show the spinner, then apply the new filters.
   // Every keystroke restarts the timer, so results land shortly after you pause.
@@ -187,7 +208,7 @@ export default function HomeFeed() {
     startYRef.current = null;
     setIsDragging(false);
     setPullDistance(0);
-    if (shouldRefresh) fetchFeed(true);
+    if (shouldRefresh) refreshFeed();
   };
 
   const filteredProducts = useMemo(() => {
@@ -242,7 +263,8 @@ export default function HomeFeed() {
         {/* STICKY HEADER AREA: the search row slides away with a transform,
             so the grid underneath never reflows */}
         <div
-className="sticky top-0 z-30 bg-gray-50 dark:bg-[#0a1120] shadow-sm border-b border-gray-200 dark:border-gray-800 mb-3 -mx-4 px-4 md:-mx-8 md:px-8"          style={{
+          className="sticky top-0 z-30 bg-gray-50 dark:bg-[#0a1120] shadow-sm border-b border-gray-200 dark:border-gray-800 mb-3 -mx-4 px-4 md:-mx-8 md:px-8"
+          style={{
             transform: showSearch ? 'translateY(0)' : `translateY(-${SEARCH_ROW_HEIGHT}px)`,
             transition: 'transform 0.22s cubic-bezier(0.22, 1, 0.36, 1)',
             willChange: 'transform',
@@ -265,7 +287,8 @@ className="sticky top-0 z-30 bg-gray-50 dark:bg-[#0a1120] shadow-sm border-b bor
             <label
               htmlFor="image-search-input"
               aria-label="Search with an image"
-className="flex-shrink-0 w-9 h-9 rounded-full bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-center text-orange-500 cursor-pointer active:scale-95 transition-transform"            >
+              className="flex-shrink-0 w-9 h-9 rounded-full bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-center text-orange-500 cursor-pointer active:scale-95 transition-transform"
+            >
               <span suppressHydrationWarning className="flex items-center justify-center">
                 <IonIcon icon={cameraOutline} className="text-lg" />
               </span>
@@ -289,7 +312,8 @@ className="flex-shrink-0 w-9 h-9 rounded-full bg-white dark:bg-[#1e293b] border 
                 className={`!whitespace-nowrap flex-shrink-0 !px-4 !py-2 !rounded-full !text-xs !font-bold transition-all shadow-sm ${
                   activeCategory === cat
                     ? '!bg-orange-500 !text-white border border-orange-500'
-: '!bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30'                }`}
+                    : '!bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30'
+                }`}
               >
                 {cat}
               </button>

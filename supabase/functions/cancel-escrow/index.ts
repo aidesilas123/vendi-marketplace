@@ -44,12 +44,13 @@ Deno.serve(async (req) => {
         throw new Error('You must wait 24 hours before you can auto-cancel this order.');
     }
 
-    // NATIVE COLUMN FIX: Read the product ID directly from the new native column
     const productId = transaction.product_id;
     if (!productId) throw new Error('Transaction record is missing the product ID.');
 
-    const metadata = transaction.metadata || {};
-    const refundAmount = Number(metadata.item_price || 0); 
+    // FULL REFUND LOGIC: 
+    // Taking the absolute value of the original negative transaction amount guarantees
+    // the buyer gets back 100% of what they spent (Item Price + Platform Fee).
+    const refundAmount = Math.abs(Number(transaction.amount)); 
 
     const newBuyerBalance = Number(buyerWallet.balance) + refundAmount;
     const { error: updateWalletError } = await supabase.from('wallets').update({ balance: newBuyerBalance }).eq('id', buyerWallet.id);
@@ -61,12 +62,15 @@ Deno.serve(async (req) => {
         user_id: user.id,
         amount: refundAmount,
         type: 'refund',
-        status: 'completed',
+        status: 'successful', // Changed from completed to successful based on your DB ENUM
         title: `Refund: ${transaction.title.replace('Escrow Hold: ', '')}`,
         reference: refundRef,
+        product_id: productId,
+        seller_id: transaction.seller_id,
         metadata: {
             original_ref: transactionRef,
-            fee_retained: Math.abs(transaction.amount) - refundAmount 
+            fee_retained: 0, // Fee is 0 because you are refunding everything
+            refund_reason: 'Auto-cancelled after 24h'
         }
     });
     if (refundTxError) throw new Error(`Failed to record refund: ${refundTxError.message}`);
@@ -74,7 +78,7 @@ Deno.serve(async (req) => {
     const { error: updateTxError } = await supabase.from('transactions').update({ status: 'cancelled' }).eq('id', transaction.id);
     if (updateTxError) throw new Error(`Failed to finalize cancellation: ${updateTxError.message}`);
 
-    const { error: updateProductError } = await supabase.from('products').update({ status: 'APPROVED' }).eq('id', productId);
+    const { error: updateProductError } = await supabase.from('products').update({ status: 'ACTIVE' }).eq('id', productId);
     if (updateProductError) throw new Error(`Failed to restore product listing: ${updateProductError.message}`);
 
     return new Response(JSON.stringify({ success: true }), { 

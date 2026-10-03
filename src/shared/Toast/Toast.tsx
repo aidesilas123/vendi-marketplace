@@ -12,6 +12,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { IonIcon } from '@ionic/react';
 import { checkmarkCircle, alertCircle, informationCircle } from 'ionicons/icons';
+import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
 export type ToastType = 'success' | 'error' | 'info';
 export type ToastState = { show: boolean; message: string; type: ToastType };
@@ -29,7 +30,16 @@ export function useToast(duration = 4000) {
   const showToast = useCallback(
     (message: string, type: ToastType = 'success') => {
       if (timer.current) clearTimeout(timer.current); // a new toast replaces the old one and restarts the timer
+      
       setToast({ show: true, message, type });
+      
+      // Native Double Haptic Feedback
+      // The .catch(() => {}) ensures it doesn't crash on standard desktop web browsers
+      Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
+      setTimeout(() => {
+        Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
+      }, 120);
+
       timer.current = setTimeout(() => setToast((prev) => ({ ...prev, show: false })), duration);
     },
     [duration]

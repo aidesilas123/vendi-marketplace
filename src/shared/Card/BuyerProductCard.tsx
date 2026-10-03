@@ -1,31 +1,48 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Avatar } from '@/shared/Avatar';
 import { Badge } from '@/shared/Badge';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { IonIcon } from '@ionic/react';
-import { supabase } from '@/lib/supabase';
+import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { calcFees, naira } from '@/lib/pricing';
+import { useSavedIds } from '@/shared/hooks/useSavedIds';
+import { usePlatformSettings } from '@/shared/hooks/usePlatformSettings';
 import { imageOutline, schoolOutline, timeOutline, eyeOutline, bookmarkOutline, bookmark, star } from 'ionicons/icons';
+import { Toast, useToast } from '@/shared/Toast/Toast';
 
 const timeAgo = (dateString: string) => {
-  const date = new Date(dateString);
-  const now = new Date();
-  const seconds = Math.round((now.getTime() - date.getTime()) / 1000);
-  const minutes = Math.round(seconds / 60);
-  const hours = Math.round(minutes / 60);
-  const days = Math.round(hours / 24);
+  const then = new Date(dateString).getTime();
+  if (Number.isNaN(then)) return '';
+  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
   if (seconds < 60) return 'Just now';
   if (minutes < 60) return `${minutes}m ago`;
   if (hours < 24) return `${hours}h ago`;
   return `${days}d ago`;
 };
 
-// Module-level cache to prevent 50 cards from making 50 identical database queries at the same time
-let cachedSettings: any = null;
-let settingsPromise: Promise<any> | null = null;
+const formatViews = (n: number) => {
+  const label = n === 1 ? 'view' : 'views';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}m ${label}`;
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, '')}k ${label}`;
+  return `${n} ${label}`;
+};
+
+/**
+ * Ask Supabase for a smaller image. If image transformations aren't enabled on your
+ * plan (or the URL isn't a Supabase one), the card falls back to the original on error.
+ */
+const optimizeImage = (url: string, width = 480) => {
+  const marker = '/storage/v1/object/public/';
+  if (!url.includes(marker) || url.includes('?')) return url;
+  return url.replace(marker, '/storage/v1/render/image/public/') + `?width=${width}&quality=70`;
+};
 
 interface BuyerProductCardProps {
   product: {
@@ -34,7 +51,7 @@ interface BuyerProductCardProps {
     base_price?: number;
     buyer_price?: number; // Kept as fallback for older cached data
     condition: string;
-    status: string; 
+    status: string;
     university_id?: string;
     campus: string;
     created_at: string;
@@ -44,71 +61,91 @@ interface BuyerProductCardProps {
       username: string;
       avatar_url?: string | null;
       is_verified: boolean;
-      average_rating?: number;
-    }
+      average_rating?: number | string | null;
+    };
   };
-  initialSaved?: boolean;
+  /** Called after the user removes the item from saved (e.g. to refresh the Saved tab) */
   onUnsave?: (productId: string) => void;
 }
 
-export const BuyerProductCard = ({ product, initialSaved = false, onUnsave }: BuyerProductCardProps) => {
+const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
   const router = useRouter();
-  const [isSaved, setIsSaved] = useState(initialSaved);
-  const [imageLoaded, setImageLoaded] = useState(false);
-  const [platformSettings, setPlatformSettings] = useState<any>(cachedSettings);
+  const { savedIds, toggle } = useSavedIds();
+  const { settings, isLoading: settingsLoading } = usePlatformSettings();
+  const { toast, showToast, hideToast } = useToast();
 
-  useEffect(() => {
-    if (cachedSettings) {
-      setPlatformSettings(cachedSettings);
-      return;
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
+  const [useOriginalImage, setUseOriginalImage] = useState(false);
+  const savePending = useRef(false);
+
+  const isSaved = savedIds.has(product.id);
+
+  const coverImage = useMemo<string | null>(() => {
+    if (Array.isArray(product.images) && product.images.length > 0) return product.images[0];
+    if (typeof product.images === 'string') {
+      try { return JSON.parse(product.images)[0] ?? null; }
+      catch { return product.images; }
     }
-    if (!settingsPromise) {
-      // Promise.resolve fixes the TypeScript 'PromiseLike' mismatch error
-      settingsPromise = Promise.resolve(
-        supabase.from('platform_settings').select('*').eq('id', 1).maybeSingle().then(res => res.data)
-      );
-    }
-    settingsPromise.then(data => {
-      cachedSettings = data;
-      setPlatformSettings(data);
-    });
+    return null;
+  }, [product.images]);
+
+  const imageSrc = coverImage ? (useOriginalImage ? coverImage : optimizeImage(coverImage)) : null;
+
+  // Cached images can finish loading before React attaches onLoad, so check on mount too
+  const imgRef = useCallback((img: HTMLImageElement | null) => {
+    if (img && img.complete && img.naturalWidth > 0) setImageLoaded(true);
   }, []);
 
-  let coverImage = null;
-  if (Array.isArray(product.images) && product.images.length > 0) coverImage = product.images[0];
-  else if (typeof product.images === 'string') {
-    try { coverImage = JSON.parse(product.images)[0]; }
-    catch { coverImage = product.images; }
-  }
-
-  const handleSaveClick = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const { data: { session } } = await supabase.auth.getSession();
-
-    if (!session) {
-      alert("Please log in to save items.");
-      return;
-    }
-    if (isSaved) {
-      setIsSaved(false);
-      onUnsave?.(product.id);
-      await supabase.from('saved_items').delete().match({ user_id: session.user.id, product_id: product.id });
+  const handleImageError = () => {
+    if (!useOriginalImage && coverImage && imageSrc !== coverImage) {
+      setImageLoaded(false);
+      setUseOriginalImage(true); // transformed URL failed, retry once with the original
     } else {
-      setIsSaved(true);
-      await supabase.from('saved_items').insert({ user_id: session.user.id, product_id: product.id });
+      setImageFailed(true);
     }
   };
 
-  // Dynamic Display Price Calculation
+  const handleSaveClick = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (savePending.current) return;
+    savePending.current = true;
+
+    // Just ONE light tap here to acknowledge the physical button press
+    Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
+    
+    const result = await toggle(product.id);
+    savePending.current = false;
+
+    if (result === 'unauthenticated') {
+      // The double tap is now handled automatically by showToast!
+      showToast('Please log in to save items', 'error');
+    } else if (result === 'removed') {
+      onUnsave?.(product.id);
+    }
+  };
+
+  // Price is held (skeleton) until platform settings arrive so it never jumps
   const basePrice = Number(product.base_price || product.buyer_price || 0);
-  const fees = calcFees(basePrice, platformSettings);
-  const displayPrice = fees.total;
+  const displayPrice = useMemo(() => calcFees(basePrice, settings).total, [basePrice, settings]);
+
+  const rating = Number(product.seller?.average_rating);
+  const views = product.views_count || 0;
 
   return (
     <div
-      onClick={() => router.push(`/product?id=${product.id}`)}
-      className="cursor-pointer flex flex-col h-full bg-transparent animate-in fade-in slide-in-from-bottom-4 relative"
+      className="relative flex flex-col h-full bg-transparent transition-transform active:scale-[0.98]"
+      style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 300px' }}
     >
+      <Toast {...toast} onClose={hideToast} />
+      
+      {/* Whole-card link (real <a>: prefetching, long-press, correct semantics) */}
+      <Link
+        href={`/product?id=${product.id}`}
+        aria-label={product.title}
+        className="absolute inset-0 z-[5]"
+      />
 
       <div className="px-1 py-2 flex items-center gap-1.5 overflow-hidden w-full">
         <Avatar src={product.seller?.avatar_url} name={product.seller?.username || 'User'} size="sm" />
@@ -117,36 +154,45 @@ export const BuyerProductCard = ({ product, initialSaved = false, onUnsave }: Bu
       </div>
 
       <div className="relative w-full aspect-square bg-gray-50 dark:bg-gray-900 flex items-center justify-center overflow-hidden rounded-2xl">
-        
-        {/* Floating Save Button - Set to z-10 so it does not bleed through the feed header */}
-        <button 
-          onClick={handleSaveClick} 
-          className="absolute top-2 right-2 w-8 h-8 flex flex-shrink-0 items-center justify-center bg-transparent transition-transform hover:scale-110 z-10 drop-shadow-md"
+
+        {/* Save button: 44px touch target, sits above the card link */}
+        <button
+          type="button"
+          onClick={handleSaveClick}
+          aria-label={isSaved ? 'Remove from saved' : 'Save item'}
+          aria-pressed={isSaved}
+          className="absolute top-0 right-0 w-11 h-11 flex items-center justify-center bg-transparent transition-transform active:scale-90 z-10"
         >
           <IonIcon icon={isSaved ? bookmark : bookmarkOutline} className="text-2xl text-orange-500" />
         </button>
 
-        {coverImage ? (
+        {imageSrc && !imageFailed ? (
           <>
             {!imageLoaded && (
               <Skeleton className="absolute inset-0 w-full h-full rounded-none" />
             )}
             <img
-              src={coverImage}
+              ref={imgRef}
+              key={imageSrc}
+              src={imageSrc}
               alt={product.title}
               loading="lazy"
               decoding="async"
               onLoad={() => setImageLoaded(true)}
-              className={`w-full h-full object-cover hover:scale-105 transition-transform duration-500 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
+              onError={handleImageError}
+              className={`w-full h-full object-cover transition-opacity duration-300 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
             />
           </>
         ) : (
           <IonIcon icon={imageOutline} className="text-4xl text-gray-300 dark:text-gray-700" />
         )}
-        <div className="absolute top-2 left-2 bg-black/70 text-white text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider z-10">{product.condition}</div>
+
+        <div className="absolute top-2 left-2 bg-black/70 text-white text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider z-10 pointer-events-none">
+          {product.condition}
+        </div>
 
         {product.status === 'SOLD' && (
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center z-20">
+          <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-20 pointer-events-none">
             <span className="bg-red-500 text-white font-black text-lg px-5 py-1.5 rounded-xl border-2 border-white transform -rotate-12 shadow-2xl tracking-widest uppercase">
               Sold
             </span>
@@ -156,9 +202,15 @@ export const BuyerProductCard = ({ product, initialSaved = false, onUnsave }: Bu
 
       <div className="py-2.5 px-1 flex flex-col flex-grow">
         <h3 className="font-bold text-gray-900 dark:text-gray-200 text-[10px] mb-1 leading-tight line-clamp-2">{product.title}</h3>
-        <p className={`text-sm font-black mb-2 ${product.status === 'SOLD' ? 'text-gray-400 line-through' : 'text-orange-500'}`}>
-          {naira(displayPrice)}
-        </p>
+
+        {settingsLoading ? (
+          <Skeleton className="w-16 h-5 rounded-full mb-2" />
+        ) : (
+          <p className={`text-sm font-black mb-2 ${product.status === 'SOLD' ? 'text-gray-400 line-through' : 'text-orange-500'}`}>
+            {naira(displayPrice)}
+          </p>
+        )}
+
         <div className="flex flex-wrap items-center justify-between gap-y-1 gap-x-2 text-[10px] font-bold text-gray-500 tracking-wider mb-2 border-b border-gray-100 dark:border-gray-800 pb-2">
           <div className="flex items-center gap-1 uppercase min-w-0">
             <IonIcon icon={schoolOutline} className="text-xs flex-shrink-0" />
@@ -172,14 +224,17 @@ export const BuyerProductCard = ({ product, initialSaved = false, onUnsave }: Bu
         <div className="mt-auto flex items-center justify-between">
           <div className="flex items-center gap-1 text-[10px] font-black text-gray-700 dark:text-gray-300">
             <IonIcon icon={star} className="text-[#D4AF37] text-xs" />
-            <span>{product.seller?.average_rating ? product.seller.average_rating.toFixed(1) : 'New'}</span>
+            <span>{rating > 0 ? rating.toFixed(1) : 'New'}</span>
           </div>
           <div className="flex items-center gap-1 text-[10px] font-bold text-gray-400">
             <IonIcon icon={eyeOutline} className="text-xs" />
-            <span>{product.views_count || 0} views</span>
+            <span>{formatViews(views)}</span>
           </div>
         </div>
       </div>
     </div>
   );
 };
+
+// Memoised so typing in the search box doesn't re-render every card
+export const BuyerProductCard = React.memo(BuyerProductCardBase);

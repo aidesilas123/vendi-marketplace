@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import useSWR, { useSWRConfig } from 'swr';
 import { IonIcon } from '@ionic/react';
 import { alertCircleOutline, imageOutline, checkmarkCircleOutline } from 'ionicons/icons';
 import { NIGERIAN_UNIVERSITIES } from '@/constants/universities';
@@ -32,6 +32,17 @@ const STEP_LOADER_MS = 350;     // how long the spinner shows between steps
 const SLIDE_MS = 180;           // swipe slide animation length
 const SWIPE_THRESHOLD = 60;     // px the finger must travel to change tab
 const TAB_STORAGE_KEY = 'seller_active_tab'; // remembers the tab when you come back from a details page
+
+const PAGE_SIZE = 30; // listings fetched per tab; "Load more" adds another page
+
+// The listing grid only needs these columns. Full rows are fetched on demand for edit/duplicate.
+const LISTING_COLUMNS = 'id, title, base_price, condition, status, created_at, images';
+
+// SWR cache keys
+const LISTINGS_KEY = 'seller-products';
+const SETTINGS_KEY = 'platform-settings';
+const USER_KEY = 'seller-user-id';
+const EMPTY: any[] = []; // stable reference so `products` doesn't change identity every render
 
 // Transparent, faded orange border when idle, bright orange on focus
 const INPUT_CLASSES =
@@ -64,6 +75,62 @@ const CONFIRM_COPY: Record<ConfirmType, { title: string; message: string; confir
     destructive: true
   }
 };
+
+// Memoised so a re-render of the dashboard doesn't re-render every card
+const MemoProductCard = React.memo(ProductCard);
+
+/* -------------------------------------------------------------------------- */
+/*  SWR fetchers                                                              */
+/*  All of these throw on failure so SWR keeps showing the last good data.    */
+/* -------------------------------------------------------------------------- */
+
+// Reads the session from local storage (no network round trip).
+// Row-level security on the server is what actually protects the data.
+async function fetchCurrentUserId(): Promise<string | null> {
+  const { data } = await supabase.auth.getSession();
+  return data.session?.user?.id ?? null;
+}
+
+async function fetchPlatformSettings() {
+  const { data, error } = await supabase
+    .from('platform_settings')
+    .select('is_launch_promo_active, platform_fee_percentage')
+    .eq('id', 1)
+    .single();
+
+  const pct = parseFloat(String(data?.platform_fee_percentage));
+  if (error || !data || Number.isNaN(pct)) {
+    throw error ?? new Error('Invalid platform settings');
+  }
+
+  return { promoActive: !!data.is_launch_promo_active, feePct: pct };
+}
+
+async function fetchSellerListings(userId: string, tab: string, limit: number) {
+  let query = supabase.from('products').select(LISTING_COLUMNS).eq('seller_id', userId);
+
+  if (tab === 'Active') {
+    // Live listings posted within the last 7 days
+    const cutoff = new Date(Date.now() - ACTIVE_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    query = query.in('status', ['ACTIVE', 'APPROVED']).gte('created_at', cutoff);
+  } else if (tab === 'Approved') {
+    // Everything the seller has posted that got approved, of any age
+    query = query.in('status', ['ACTIVE', 'APPROVED', 'SOLD']);
+  } else {
+    const statusByTab: Record<string, string> = {
+      'Pending Review': 'PENDING_REVIEW',
+      Rejected: 'REJECTED',
+      Sold: 'SOLD',
+      Draft: 'DRAFT'
+    };
+    const statusFilter = statusByTab[tab];
+    if (statusFilter) query = query.eq('status', statusFilter);
+  }
+
+  const { data, error } = await query.order('created_at', { ascending: false }).limit(limit);
+  if (error) throw error;
+  return (data ?? []) as any[];
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Form helpers                                                              */
@@ -243,13 +310,9 @@ const AmountInput = ({
 /* -------------------------------------------------------------------------- */
 
 export default function SellerDashboard() {
-  const searchParams = useSearchParams();
-  const initialTab = searchParams.get('tab');
-  
-  const [settings, setSettings] = useState<{ promoActive: boolean; feePct: number } | null>(null);
-  const [activeTab, setActiveTab] = useState(
-    initialTab && TABS.includes(initialTab) ? initialTab : 'Post Item'
-  );
+  // Always starts on 'Post Item' so server and client render the same thing.
+  // The real tab (URL param or last saved) is applied in the mount effect below.
+  const [activeTab, setActiveTab] = useState('Post Item');
   const [tabHydrated, setTabHydrated] = useState(false); // true once the saved tab has been restored
   const [step, setStep] = useState(1);
   const [stepDirection, setStepDirection] = useState<'forward' | 'back'>('forward');
@@ -257,32 +320,121 @@ export default function SellerDashboard() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
 
-  const [products, setProducts] = useState<any[]>([]);
-  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
-
   const [pendingAction, setPendingAction] = useState<{ type: ConfirmType; id: string } | null>(null);
   const [isActionLoading, setIsActionLoading] = useState(false);
 
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [formData, setFormData] = useState<FormState>(getEmptyForm());
-  
 
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | null; message: string }>({
-    
     type: null,
     message: ''
-    
   });
   const [isImagesUploading, setIsImagesUploading] = useState(false);
 
-  // Automatically update the URL when the tab changes so back navigation works perfectly
+  /* ------------------------------ SWR data layer ------------------------------ */
+
+  const { mutate: globalMutate } = useSWRConfig();
+
+  // Platform settings: cached across visits, refreshed quietly in the background
+  const { data: settingsData, error: settingsError } = useSWR(SETTINGS_KEY, fetchPlatformSettings, {
+    revalidateOnFocus: true,
+    revalidateOnReconnect: true,
+    dedupingInterval: 10000
+  });
+  const settings = settingsData ?? null; // keeps every `settings !== null` check working
+
+  // Who is logged in. Part of the listings key so one account never sees another's cache.
+  // undefined = still resolving, null = not logged in.
+  const { data: userId } = useSWR(USER_KEY, fetchCurrentUserId, {
+    revalidateOnFocus: false
+  });
   useEffect(() => {
+  const { data: sub } = supabase.auth.onAuthStateChange(() => {
+    globalMutate(USER_KEY);
+  });
+  return () => sub.subscription.unsubscribe();
+}, [globalMutate]);
+
+  // How many listings each tab loads. The ref is what the fetcher reads (always current);
+  // the state is what re-renders the "Load more" button.
+  const [pageSizes, setPageSizes] = useState<Record<string, number>>({});
+  const pageSizesRef = useRef<Record<string, number>>({});
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const pageSize = pageSizes[activeTab] ?? PAGE_SIZE;
+
+  // One cache entry per tab. A `null` key means "don't fetch"
+  // (Post Item tab, or the user hasn't resolved yet / isn't logged in).
+  const listingsKey =
+    userId && activeTab !== 'Post Item' ? ([LISTINGS_KEY, userId, activeTab] as const) : null;
+
+  const {
+    data: listings,
+    error: listingsError,
+    mutate: mutateListings
+  } = useSWR(
+    listingsKey,
+    ([, uid, tab]) => fetchSellerListings(uid, tab, pageSizesRef.current[tab] ?? PAGE_SIZE),
+    {
+      revalidateOnFocus: true,
+      revalidateOnReconnect: true,
+      dedupingInterval: 10000
+    }
+  );
+
+  const products = listings ?? EMPTY;
+
+  // Spinner only when this tab has nothing cached yet
+  const isLoadingProducts =
+    activeTab !== 'Post Item' && userId !== null && listings === undefined && !listingsError;
+
+  // After any write: quietly refetch every listings tab that has been opened
+  const refreshListings = () =>
+    globalMutate((key) => Array.isArray(key) && key[0] === LISTINGS_KEY);
+
+  const loadMore = async () => {
+    if (isLoadingMore) return;
+    const next = (pageSizesRef.current[activeTab] ?? PAGE_SIZE) + PAGE_SIZE;
+    pageSizesRef.current = { ...pageSizesRef.current, [activeTab]: next };
+    setPageSizes(pageSizesRef.current);
+    setIsLoadingMore(true);
+    try {
+      await mutateListings();
+    } catch {
+      // the inline error / cached data handling covers this
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+
+  // Settings failure: show the notice once, and only if there is nothing cached to fall back on
+  const settingsErrorNotified = useRef(false);
+  useEffect(() => {
+    if (settingsData) {
+      settingsErrorNotified.current = false;
+      return;
+    }
+    if (settingsError && !settingsErrorNotified.current) {
+      settingsErrorNotified.current = true;
+      setNotification({
+        type: 'error',
+        message: 'Could not load the platform fee settings. Please refresh the page and try again.'
+      });
+    }
+  }, [settingsError, settingsData]);
+
+  /* ------------------------------ URL + notices ------------------------------- */
+
+  // Keep the URL in sync with the tab so back navigation works.
+  // Waits for the mount effect below so it can't wipe a ?tab= param before it's read.
+  useEffect(() => {
+    if (!tabHydrated) return;
     const url = new URL(window.location.href);
     if (url.searchParams.get('tab') !== activeTab) {
       url.searchParams.set('tab', activeTab);
       window.history.replaceState({}, '', url.toString());
     }
-  }, [activeTab]);
+  }, [activeTab, tabHydrated]);
 
   useEffect(() => {
     if (notification.type) {
@@ -293,13 +445,19 @@ export default function SellerDashboard() {
 
   /* ------------------- remember the tab (back from details) ------------------- */
 
-  // Restore the last tab on mount. An ?edit=ID link still wins and opens the form.
+  // Restore the tab on mount: a valid ?tab= in the URL wins, then the last saved tab.
+  // An ?edit=ID link skips this and opens the form instead.
   useEffect(() => {
     try {
-      const hasEditParam = new URLSearchParams(window.location.search).get('edit');
-      const saved = sessionStorage.getItem(TAB_STORAGE_KEY);
-      if (!hasEditParam && saved && TABS.includes(saved)) {
-        setActiveTab(saved);
+      const params = new URLSearchParams(window.location.search);
+      if (!params.get('edit')) {
+        const fromUrl = params.get('tab');
+        const saved = sessionStorage.getItem(TAB_STORAGE_KEY);
+        if (fromUrl && TABS.includes(fromUrl)) {
+          setActiveTab(fromUrl);
+        } else if (saved && TABS.includes(saved)) {
+          setActiveTab(saved);
+        }
       }
     } catch {
       // storage unavailable, fall back to the default tab
@@ -317,30 +475,6 @@ export default function SellerDashboard() {
     }
   }, [activeTab, tabHydrated]);
 
-  /* ----------------------------- platform settings ----------------------------- */
-
-  useEffect(() => {
-    const fetchSettings = async () => {
-      const { data, error } = await supabase
-        .from('platform_settings')
-        .select('is_launch_promo_active, platform_fee_percentage')
-        .eq('id', 1)
-        .single();
-
-      const pct = parseFloat(String(data?.platform_fee_percentage));
-
-      if (error || !data || Number.isNaN(pct)) {
-        setNotification({
-          type: 'error',
-          message: 'Could not load the platform fee settings. Please refresh the page and try again.'
-        });
-        return;
-      }
-      setSettings({ promoActive: !!data.is_launch_promo_active, feePct: pct });
-    };
-    fetchSettings();
-  }, []);
-
   /* --------------------------------- pricing ---------------------------------- */
 
   const numericPrice = parseFloat(formData.basePrice) || 0;
@@ -349,10 +483,8 @@ export default function SellerDashboard() {
   const feePct = settings?.feePct ?? 0;                        // normal fee from platform_settings
   const appliedPct = settings?.promoActive ? 0 : feePct;       // 0 during the launch promo
 
-  // The same percentage is deducted from the seller and added for the buyer
+  // What the seller sees. The buyer price and slashed price are calculated on the server when the listing is saved.
   const sellerWithdraw = round2(numericPrice * (1 - appliedPct / 100));
-  const buyerPrice = round2(numericPrice * (1 + appliedPct / 100));
-  const slashedPrice = round2(numericPrice * 1.1);             // kept at +10% like before
   const strikeFee = round2(numericPrice * ((feePct * 2) / 100)); // struck-through fee = 2x the real percent
   const currentFee = round2(numericPrice * (appliedPct / 100));
 
@@ -371,67 +503,6 @@ export default function SellerDashboard() {
     (formData.category !== 'Gadgets' || formData.specifications.trim() !== '') &&
     lastPriceValid &&
     acceptedTerms;
-
-  /* ------------------------------- fetch listings ------------------------------ */
-
-  useEffect(() => {
-    if (activeTab === 'Post Item') return;
-    let cancelled = false;
-
-    const fetchProducts = async () => {
-      setIsLoadingProducts(true);
-
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-          if (!cancelled) {
-            setProducts([]);
-            setIsLoadingProducts(false);
-          }
-          return;
-        }
-
-        let query = supabase.from('products').select('*').eq('seller_id', user.id);
-
-        if (activeTab === 'Active') {
-          // Live listings posted within the last 7 days
-          const cutoff = new Date(Date.now() - ACTIVE_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
-          query = query.in('status', ['ACTIVE', 'APPROVED']).gte('created_at', cutoff);
-        } else if (activeTab === 'Approved') {
-          // Everything the seller has posted that got approved, of any age
-          query = query.in('status', ['ACTIVE', 'APPROVED', 'SOLD']);
-        } else {
-          const statusByTab: Record<string, string> = {
-            'Pending Review': 'PENDING_REVIEW',
-            Rejected: 'REJECTED',
-            Sold: 'SOLD',
-            Draft: 'DRAFT'
-          };
-          const statusFilter = statusByTab[activeTab];
-          if (statusFilter) query = query.eq('status', statusFilter);
-        }
-
-        const { data, error } = await query.order('created_at', { ascending: false });
-        if (cancelled) return;
-
-        if (error) {
-          console.error('Supabase Fetch Error:', error.message);
-          setNotification({ type: 'error', message: 'Failed to fetch items: ' + error.message });
-        } else {
-          setProducts(data || []);
-        }
-      } catch (err) {
-        console.error('Unexpected Fetch Error:', err);
-      }
-
-      if (!cancelled) setIsLoadingProducts(false);
-    };
-
-    fetchProducts();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeTab]);
 
   /* ------------------------------ step navigation ------------------------------ */
 
@@ -469,9 +540,12 @@ export default function SellerDashboard() {
     setNotification({ type: null, message: '' });
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      // The server verifies this token itself, so it never has to trust an id sent from the browser.
+      // getSession reads local storage (and refreshes an expired token), so there is no extra network call.
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
 
-      if (!user) {
+      if (!accessToken) {
         setNotification({ type: 'error', message: 'You must be logged in to post an item.' });
         return;
       }
@@ -480,12 +554,10 @@ export default function SellerDashboard() {
         formData,
         {
           basePrice: numericPrice,
-          buyerPrice,
-          slashedPrice,
           lastPrice: formData.allowNegotiation ? numericLastPrice : null
         },
         editingProductId,
-        user.id
+        accessToken
       );
 
       if (!response.success) {
@@ -512,6 +584,8 @@ export default function SellerDashboard() {
         setActiveTab('Approved');
       }
 
+      // Make sure the tab we just jumped to isn't showing an old cached list
+      refreshListings();
       resetForm();
     } catch (err: any) {
       setNotification({ type: 'error', message: 'Error saving product: ' + (err?.message || 'Something went wrong.') });
@@ -526,7 +600,8 @@ export default function SellerDashboard() {
     const { error } = await supabase.from('products').delete().eq('id', id);
 
     if (!error) {
-      setProducts(prev => prev.filter(p => p.id !== id));
+      mutateListings(prev => prev?.filter(p => p.id !== id), { revalidate: false });
+      refreshListings();
       setNotification({ type: 'success', message: 'Item deleted successfully.' });
     } else {
       setNotification({ type: 'error', message: 'Error deleting item: ' + error.message });
@@ -538,11 +613,14 @@ export default function SellerDashboard() {
 
     if (!error) {
       // The Approved tab also lists sold items; any other tab drops it
-      setProducts(prev =>
-        activeTab === 'Approved'
-          ? prev.map(p => (p.id === id ? { ...p, status: 'SOLD' } : p))
-          : prev.filter(p => p.id !== id)
+      mutateListings(
+        prev =>
+          activeTab === 'Approved'
+            ? prev?.map(p => (p.id === id ? { ...p, status: 'SOLD' } : p))
+            : prev?.filter(p => p.id !== id),
+        { revalidate: false }
       );
+      refreshListings();
       setNotification({ type: 'success', message: 'Item marked as sold successfully!' });
     } else {
       setNotification({ type: 'error', message: 'Error marking item as sold.' });
@@ -550,16 +628,31 @@ export default function SellerDashboard() {
   };
 
   const handleDuplicate = async (id: string) => {
-    const productToCopy = products.find(p => p.id === id);
-    if (!productToCopy) return;
+    // The grid only holds a few columns, so fetch the whole row to copy
+    const { data: full, error: fetchError } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', id)
+      .single();
 
-    const { data: { user } } = await supabase.auth.getUser();
+    if (fetchError || !full) {
+      setNotification({ type: 'error', message: 'Error duplicating listing.' });
+      return;
+    }
 
-    const { id: _id, created_at, updated_at, ai_flag_reason, ...rest } = productToCopy;
+    // Duplicates are published immediately, so only content that already passed review can be copied
+    if (!['ACTIVE', 'APPROVED', 'SOLD'].includes(full.status)) {
+      setNotification({ type: 'error', message: 'Only approved listings can be duplicated.' });
+      return;
+    }
+
+    const uid = userId ?? (await fetchCurrentUserId());
+
+    const { id: _id, created_at, updated_at, ai_flag_reason, ...rest } = full;
     const copyData = {
       ...rest,
-      seller_id: user?.id || productToCopy.seller_id,
-      title: stripCopySuffix(productToCopy.title), // no "(Copy)" on duplicates
+      seller_id: uid || full.seller_id,
+      title: stripCopySuffix(full.title), // no "(Copy)" on duplicates
       status: 'ACTIVE'
     };
 
@@ -567,26 +660,33 @@ export default function SellerDashboard() {
 
     if (data && !error) {
       if (activeTab === 'Active' || activeTab === 'Approved') {
-        setProducts(prev => [data, ...prev]);
+        mutateListings(prev => [data, ...(prev ?? [])], { revalidate: false });
       }
+      refreshListings();
       setNotification({ type: 'success', message: 'Listing duplicated successfully!' });
     } else {
       setNotification({ type: 'error', message: 'Error duplicating listing.' });
     }
   };
 
-  const handleEdit = (id: string) => {
-    const productToEdit = products.find(p => p.id === id);
-    if (!productToEdit) return;
+  const handleEdit = async (id: string) => {
+    // The grid only holds a few columns, so fetch the whole row for the form
+    const { data, error } = await supabase.from('products').select('*').eq('id', id).single();
+
+    if (error || !data) {
+      setNotification({ type: 'error', message: 'Could not load this listing for editing. Please try again.' });
+      return;
+    }
 
     setEditingProductId(id);
-    setFormData(productToForm(productToEdit));
+    setFormData(productToForm(data));
     setAcceptedTerms(false); // terms must be accepted again when editing
     setActiveTab('Post Item');
     setStep(1);
   };
 
   // --- URL listener for the 'Edit Listing' route (?edit=ID) ---
+  // One-shot lookup, so it stays a plain effect rather than an SWR hook.
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const editId = urlParams.get('edit');
@@ -612,19 +712,25 @@ export default function SellerDashboard() {
     if (!pendingAction) return;
     const { type, id } = pendingAction;
 
-    if (type === 'edit') {
-      setPendingAction(null);
-      handleEdit(id);
-      return;
-    }
-
     setIsActionLoading(true);
-    if (type === 'duplicate') await handleDuplicate(id);
-    if (type === 'sold') await handleMarkSold(id);
-    if (type === 'delete') await executeDelete(id);
-    setIsActionLoading(false);
-    setPendingAction(null);
+    try {
+      if (type === 'edit') await handleEdit(id);
+      if (type === 'duplicate') await handleDuplicate(id);
+      if (type === 'sold') await handleMarkSold(id);
+      if (type === 'delete') await executeDelete(id);
+    } catch (err: any) {
+      setNotification({ type: 'error', message: err?.message || 'Something went wrong. Please try again.' });
+    } finally {
+      setIsActionLoading(false);
+      setPendingAction(null);
+    }
   };
+
+  // Stable handlers so the memoised cards don't re-render when the dashboard does
+  const requestEdit = useCallback((id: string) => setPendingAction({ type: 'edit', id }), []);
+  const requestDelete = useCallback((id: string) => setPendingAction({ type: 'delete', id }), []);
+  const requestDuplicate = useCallback((id: string) => setPendingAction({ type: 'duplicate', id }), []);
+  const requestMarkSold = useCallback((id: string) => setPendingAction({ type: 'sold', id }), []);
 
   /* ---------------------------------- tabs ------------------------------------ */
 
@@ -650,39 +756,70 @@ export default function SellerDashboard() {
 
   /* ------------------------------ swipe between tabs --------------------------- */
 
+  // The drag is written straight to the element's style instead of React state,
+  // so dragging doesn't re-render the whole dashboard on every touch event.
   const contentRef = useRef<HTMLDivElement>(null);
   const touchRef = useRef<{ x: number; y: number; dx: number; axis: 'x' | 'y' | null; active: boolean }>({
     x: 0, y: 0, dx: 0, axis: null, active: false
   });
   const slideBusy = useRef(false);
-  const [slide, setSlide] = useState({ x: 0, animate: false, opacity: 1 });
+  const slideTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const slideRaf = useRef<number | null>(null);
+
+  // Clear any pending slide work if the page unmounts mid-swipe
+  useEffect(() => {
+    return () => {
+      slideTimers.current.forEach(clearTimeout);
+      slideTimers.current = [];
+      if (slideRaf.current !== null) cancelAnimationFrame(slideRaf.current);
+    };
+  }, []);
+
+  const queueSlideTimer = (fn: () => void, ms: number) => {
+    slideTimers.current.push(setTimeout(fn, ms));
+  };
+
+  const setSlideStyle = (x: number, opacity: number, animate: boolean) => {
+    const el = contentRef.current;
+    if (!el) return;
+    el.style.transition = animate
+      ? `transform ${SLIDE_MS}ms ease-out, opacity ${SLIDE_MS}ms ease-out`
+      : 'none';
+    // Empty string = no transform, which matters because a transform would
+    // otherwise create a containing block for any fixed-position children.
+    el.style.transform = x === 0 ? '' : `translate3d(${x}px, 0, 0)`;
+    el.style.opacity = opacity === 1 ? '' : String(opacity);
+  };
 
   const commitSlide = (target: string, dir: 1 | -1) => {
     const width = contentRef.current?.offsetWidth ?? window.innerWidth;
     slideBusy.current = true;
 
     // 1) current page slides out
-    setSlide({ x: -dir * width, animate: true, opacity: 0 });
+    setSlideStyle(-dir * width, 0, true);
 
-    setTimeout(() => {
+    queueSlideTimer(() => {
       // 2) switch tab while invisible, parked just off the opposite side
       changeTab(target);
-      setSlide({ x: dir * width * 0.35, animate: false, opacity: 0 });
+      setSlideStyle(dir * width * 0.35, 0, false);
 
       // 3) new page slides in
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
-          setSlide({ x: 0, animate: true, opacity: 1 });
-          setTimeout(() => {
+      slideRaf.current = requestAnimationFrame(() => {
+        slideRaf.current = requestAnimationFrame(() => {
+          setSlideStyle(0, 1, true);
+          queueSlideTimer(() => {
             slideBusy.current = false;
           }, SLIDE_MS);
-        })
-      );
+        });
+      });
     }, SLIDE_MS);
   };
 
   const onTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
     if (slideBusy.current || isSubmitting) return;
+    // The listing form is full of inputs, dropdowns and an uploader; swiping there
+    // would throw people off the form mid-edit. Use the tab pills to leave it.
+    if (activeTab === 'Post Item') return;
     // Don't hijack typing, text selection or open dropdowns
     if ((e.target as HTMLElement).closest('input, textarea, select, [data-no-swipe]')) return;
     const t = e.touches[0];
@@ -707,7 +844,7 @@ export default function SellerDashboard() {
     const index = TABS.indexOf(activeTab);
     const atEdge = (dx > 0 && index === 0) || (dx < 0 && index === TABS.length - 1);
     // the page follows the finger, with resistance at the first/last tab
-    setSlide({ x: atEdge ? dx * 0.25 : dx, animate: false, opacity: 1 });
+    setSlideStyle(atEdge ? dx * 0.25 : dx, 1, false);
   };
 
   const onTouchEnd = () => {
@@ -723,7 +860,7 @@ export default function SellerDashboard() {
     if (Math.abs(s.dx) >= SWIPE_THRESHOLD && target) {
       commitSlide(target, dir);
     } else {
-      setSlide({ x: 0, animate: true, opacity: 1 }); // snap back
+      setSlideStyle(0, 1, true); // snap back
     }
   };
 
@@ -785,7 +922,7 @@ export default function SellerDashboard() {
 
       {/* HEADER + TABS: Matched perfectly to Vendi Header using h-12 */}
       <div className="sticky top-0 z-[60] -mx-4 md:-mx-8 bg-gray-50 dark:bg-[#0a1120]">
-        
+
         {/* Fixed height container matches your main app header */}
         <div className="h-12 px-4 md:px-8 flex flex-col justify-center">
           <h1 className="text-lg md:text-2xl font-black leading-none text-[#0f172a] dark:text-white flex items-baseline gap-2">
@@ -793,26 +930,48 @@ export default function SellerDashboard() {
           </h1>
         </div>
 
-        {/* Tabs Row */}
-        <div ref={tabsContainerRef} className="flex overflow-x-auto scrollbar-hide px-4 md:px-8 pb-2 gap-2">
-          {TABS.map((tab) => (
-            <button
-              key={tab}
-              ref={(el) => { tabRefs.current[tab] = el; }}
-              onClick={() => changeTab(tab)}
-              className={`!whitespace-nowrap flex-shrink-0 !px-4 !py-2 !rounded-full !text-xs !font-bold transition-all ${
-                activeTab === tab
-                  ? '!bg-orange-500 !text-white border border-orange-500'
-                  : '!bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30'
-              }`}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
+        {/* Tabs Row: "Post Item" is pinned on the left, the other tabs scroll beside it */}
+<div className="flex items-center gap-2 px-4 md:px-8 pb-2">
+
+  {/* Pinned, bigger pill. It sits outside the scroller, so scrolling never moves it. */}
+  <button
+    onClick={() => changeTab('Post Item')}
+    className={`!whitespace-nowrap flex-shrink-0 !px-5 !py-2.5 !rounded-full !text-sm !font-black transition-all shadow-sm ${
+      activeTab === 'Post Item'
+        ? '!bg-orange-500 !text-white border border-orange-500'
+        : '!bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30'
+    }`}
+  >
+    Post Item
+  </button>
+
+  {/* min-w-0 lets this flex child shrink and scroll instead of pushing the pill off-screen.
+      `relative` makes offsetLeft measure from this container, which the centering effect needs. */}
+  <div
+    ref={tabsContainerRef}
+    className="relative flex flex-1 min-w-0 overflow-x-auto scrollbar-hide gap-2"
+  >
+    {TABS.filter((tab) => tab !== 'Post Item').map((tab) => (
+      <button
+        key={tab}
+        ref={(el) => { tabRefs.current[tab] = el; }}
+        onClick={() => changeTab(tab)}
+        className={`!whitespace-nowrap flex-shrink-0 !px-4 !py-2 !rounded-full !text-xs !font-bold transition-all ${
+          activeTab === tab
+            ? '!bg-orange-500 !text-white border border-orange-500'
+            : '!bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30'
+        }`}
+      >
+        {tab}
+      </button>
+    ))}
+  </div>
+</div>
       </div>
 
-      {/* PAGE CONTENT: swipe left/right to move between the tabs above */}
+      {/* PAGE CONTENT: swipe left/right to move between the listing tabs.
+          transform / opacity / transition are set directly on this element during
+          a swipe, so they are intentionally not part of the React style prop. */}
       <div
         ref={contentRef}
         onTouchStart={onTouchStart}
@@ -820,14 +979,9 @@ export default function SellerDashboard() {
         onTouchEnd={onTouchEnd}
         onTouchCancel={() => {
           touchRef.current.active = false;
-          setSlide({ x: 0, animate: true, opacity: 1 });
+          setSlideStyle(0, 1, true);
         }}
-        style={{
-          touchAction: 'pan-y pinch-zoom',
-          transform: slide.x === 0 ? 'none' : `translate3d(${slide.x}px, 0, 0)`,
-          opacity: slide.opacity,
-          transition: slide.animate ? `transform ${SLIDE_MS}ms ease-out, opacity ${SLIDE_MS}ms ease-out` : 'none'
-        }}
+        style={{ touchAction: 'pan-y pinch-zoom' }}
         className="w-full pt-2 pb-40 overflow-x-clip"
       >
 
@@ -975,18 +1129,18 @@ export default function SellerDashboard() {
                 )}
 
                 {/* STEP 4: images */}
-             {step === 4 && (
-               <div>
-                 <label className={LABEL_CLASSES}>Upload Images (Max 5)</label>
-                 <ImageUploader
-                   images={formData.images}
-                   onChange={(newImages) => setFormData({ ...formData, images: newImages })}
-                   onError={(errorMsg) => setNotification({ type: 'error', message: errorMsg })}
-                   onUploadingStateChange={(status) => setIsImagesUploading(status)}
-                   maxImages={5}
-                 />
-               </div>
-             )}
+                {step === 4 && (
+                  <div>
+                    <label className={LABEL_CLASSES}>Upload Images (Max 5)</label>
+                    <ImageUploader
+                      images={formData.images}
+                      onChange={(newImages) => setFormData({ ...formData, images: newImages })}
+                      onError={(errorMsg) => setNotification({ type: 'error', message: errorMsg })}
+                      onUploadingStateChange={(status) => setIsImagesUploading(status)}
+                      maxImages={5}
+                    />
+                  </div>
+                )}
 
                 {/* STEP 5: price, negotiation, terms */}
                 {step === 5 && (
@@ -1121,14 +1275,14 @@ export default function SellerDashboard() {
               )}
 
               {step < TOTAL_STEPS ? (
-             <Button 
-               size="sm" 
-               onClick={() => goToStep(step + 1)} 
-               disabled={isStepLoading || isImagesUploading}
-             >
-               Next Step
-             </Button>
-           ) : (
+                <Button
+                  size="sm"
+                  onClick={() => goToStep(step + 1)}
+                  disabled={isStepLoading || isImagesUploading}
+                >
+                  Next Step
+                </Button>
+              ) : (
                 <Button
                   size="sm"
                   onClick={handleSubmit}
@@ -1148,6 +1302,13 @@ export default function SellerDashboard() {
               <div className="flex items-center justify-center py-20 animate-in fade-in">
                 <PullSpinner spinning size={32} />
               </div>
+            ) : listingsError && listings === undefined ? (
+              <div className="flex flex-col items-center justify-center py-20 text-center gap-4 animate-in fade-in">
+                <p className="text-gray-500">We couldn&apos;t load your listings.</p>
+                <Button size="sm" onClick={() => mutateListings()}>
+                  Try again
+                </Button>
+              </div>
             ) : products.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-center animate-in fade-in zoom-in-95">
                 <div className="w-20 h-20 bg-gray-100 dark:bg-[#1e293b] rounded-full flex items-center justify-center mb-4">
@@ -1157,24 +1318,40 @@ export default function SellerDashboard() {
                 <p className="text-gray-500">Your {activeTab.toLowerCase()} products will appear here.</p>
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-6 animate-in fade-in slide-in-from-bottom-4">
-                {products.map((product) => (
-                  <ProductCard
-                    key={product.id}
-                    id={product.id}
-                    title={product.title}
-                    basePrice={product.base_price}
-                    condition={product.condition}
-                    status={product.status}
-                    createdAt={product.created_at}
-                    imageUrl={product.images?.[0]}
-                    onEdit={(id) => setPendingAction({ type: 'edit', id })}
-                    onDelete={(id) => setPendingAction({ type: 'delete', id })}
-                    onDuplicate={(id) => setPendingAction({ type: 'duplicate', id })}
-                    onMarkSold={(id) => setPendingAction({ type: 'sold', id })}
-                  />
-                ))}
-              </div>
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-6 animate-in fade-in slide-in-from-bottom-4">
+                  {products.map((product) => (
+                    <MemoProductCard
+                      key={product.id}
+                      id={product.id}
+                      title={product.title}
+                      basePrice={product.base_price}
+                      condition={product.condition}
+                      status={product.status}
+                      createdAt={product.created_at}
+                      imageUrl={product.images?.[0]}
+                      onEdit={requestEdit}
+                      onDelete={requestDelete}
+                      onDuplicate={requestDuplicate}
+                      onMarkSold={requestMarkSold}
+                    />
+                  ))}
+                </div>
+
+                {/* A full page means there may be more */}
+                {products.length >= pageSize && (
+                  <div className="flex justify-center pt-6">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={loadMore}
+                      disabled={isLoadingMore}
+                    >
+                      {isLoadingMore ? 'Loading...' : 'Load more'}
+                    </Button>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

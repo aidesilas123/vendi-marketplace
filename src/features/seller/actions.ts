@@ -1,34 +1,127 @@
-// NOTE: if your current actions.ts has a "use server" directive on its very first line,
-// keep it there above these imports (your paste didn't show the top of the file).
+"use server";
+
+import { createClient } from '@supabase/supabase-js';
 import { validateListing, validateMessage } from '@/services/gemini/nexusGatekeeper';
 import { supabase } from '@/lib/supabase';
 
 // A listing stays ACTIVE for its first 7 days, then becomes APPROVED.
 const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_IMAGES = 5;
 
 type ListingStatus = 'ACTIVE' | 'APPROVED' | 'REJECTED' | 'PENDING_REVIEW';
 
-// Added userId as the 4th parameter
-export async function submitProductAction(formData: any, pricing: any, productId?: string | null, userId?: string) {
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Verifies the caller's access token with Supabase and returns the real user id
+ * plus a client that acts as that user (so row-level security applies to its queries).
+ * The browser only sends the token; it can't claim to be someone else.
+ */
+async function getAuthedClient(accessToken?: string) {
+  if (!accessToken) {
+    throw new Error("You must be logged in to submit a listing.");
+  }
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anonKey) {
+    throw new Error("Server is missing its Supabase configuration.");
+  }
+
+  const client = createClient(url, anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { headers: { Authorization: `Bearer ${accessToken}` } }
+  });
+
+  const { data, error } = await client.auth.getUser(accessToken);
+  if (error || !data.user) {
+    throw new Error("Your session has expired. Please log in again.");
+  }
+
+  return { client, userId: data.user.id };
+}
+
+// The 4th parameter is now the caller's access token (not a user id)
+export async function submitProductAction(
+  formData: any,
+  pricing: any,
+  productId?: string | null,
+  accessToken?: string
+) {
   try {
-    // Check for the ID passed from the client
-    if (!userId) {
-      throw new Error("You must be logged in to submit a listing.");
+    const { client, userId } = await getAuthedClient(accessToken);
+
+    /* ------------------------------- validation ------------------------------- */
+
+    const basePrice = Number(pricing?.basePrice);
+    if (!Number.isFinite(basePrice) || basePrice <= 0) {
+      throw new Error("Please enter a valid price.");
     }
 
     // Negotiation: lastPrice is null when the seller left negotiation off
     const lastPrice =
-      pricing.lastPrice === null || pricing.lastPrice === undefined ? null : Number(pricing.lastPrice);
+      pricing?.lastPrice === null || pricing?.lastPrice === undefined ? null : Number(pricing.lastPrice);
 
-    if (lastPrice !== null && (!(lastPrice > 0) || lastPrice > pricing.basePrice)) {
+    if (lastPrice !== null && (!(lastPrice > 0) || lastPrice > basePrice)) {
       throw new Error("Last price must be greater than 0 and not higher than your price.");
     }
 
+    const title = String(formData?.title ?? '').trim();
+    const description = String(formData?.description ?? '').trim();
+    const location = String(formData?.location ?? '').trim();
+    if (!title || !description || !location) {
+      throw new Error("Title, description and location are required.");
+    }
+
+    const images: string[] = Array.isArray(formData?.images)
+      ? formData.images.filter((i: unknown) => typeof i === 'string' && i.length > 0)
+      : [];
+    if (images.length === 0 || images.length > MAX_IMAGES) {
+      throw new Error(`Please add between 1 and ${MAX_IMAGES} images.`);
+    }
+
+    /* ------------------- prices the buyer pays: server decides ------------------ */
+
+    const { data: settings, error: settingsError } = await client
+      .from('platform_settings')
+      .select('is_launch_promo_active, platform_fee_percentage')
+      .eq('id', 1)
+      .single();
+
+    const feePct = parseFloat(String(settings?.platform_fee_percentage));
+    if (settingsError || !settings || Number.isNaN(feePct)) {
+      throw new Error("Could not load the platform fee settings. Please try again.");
+    }
+
+    const appliedPct = settings.is_launch_promo_active ? 0 : feePct;
+    const buyerPrice = round2(basePrice * (1 + appliedPct / 100));
+    const slashedPrice = round2(basePrice * 1.1);
+
+    /* ------------------------- ownership check when editing ---------------------- */
+
+    let existingCreatedAt: string | null = null;
+
+    if (productId) {
+      const { data: existing, error: existingError } = await client
+        .from('products')
+        .select('created_at')
+        .eq('id', productId)
+        .eq('seller_id', userId)
+        .maybeSingle();
+
+      if (existingError || !existing) {
+        throw new Error("Listing not found, or you don't have permission to edit it.");
+      }
+      existingCreatedAt = existing.created_at;
+    }
+
+    /* ------------------------------- moderation -------------------------------- */
+
     const aiDecision = await validateListing({
-      title: formData.title,
-      description: formData.description,
+      title,
+      description,
       category: formData.category,
-      price: pricing.basePrice,
+      price: basePrice,
     });
 
     let status: ListingStatus;
@@ -40,52 +133,52 @@ export async function submitProductAction(formData: any, pricing: any, productId
       status = 'ACTIVE';
 
       // When editing an older listing, don't push it back into the 7-day Active window.
-      if (productId) {
-        const { data: existing } = await supabase
-          .from('products')
-          .select('created_at')
-          .eq('id', productId)
-          .single();
-
-        if (existing?.created_at && Date.now() - new Date(existing.created_at).getTime() >= ACTIVE_WINDOW_MS) {
-          status = 'APPROVED';
-        }
+      if (existingCreatedAt && Date.now() - new Date(existingCreatedAt).getTime() >= ACTIVE_WINDOW_MS) {
+        status = 'APPROVED';
       }
     } else {
       status = 'PENDING_REVIEW';
     }
 
+    /* --------------------------------- save ------------------------------------ */
+
     const productPayload = {
-      seller_id: userId, // Instantly links to your account!
-      university_id: formData.university.toUpperCase(),
-      campus: formData.campus.toUpperCase(),
-      specific_location: formData.location,
-      title: formData.title,
+      seller_id: userId, // comes from the verified token, never from the browser
+      university_id: String(formData.university).toUpperCase(),
+      campus: String(formData.campus).toUpperCase(),
+      specific_location: location,
+      title,
       category: formData.category,
       condition: formData.condition,
       specifications: formData.specifications,
       quantity: formData.quantity, // text column: "1"–"10" or "Bulk"
-      description: formData.description,
-      images: formData.images,
-      base_price: pricing.basePrice,
-      buyer_price: pricing.buyerPrice,
-      slashed_price: pricing.slashedPrice,
+      description,
+      images,
+      base_price: basePrice,
+      buyer_price: buyerPrice,
+      slashed_price: slashedPrice,
       last_price: lastPrice, // null = negotiation off
-      status: status,
+      status,
       ai_flag_reason: aiDecision.reason || null,
     };
 
-    let result;
-    
     if (productId) {
-      result = await supabase.from('products').update(productPayload).eq('id', productId);
+      // Scoped to the owner, and checked: zero rows updated means it wasn't theirs
+      const { data: updated, error } = await client
+        .from('products')
+        .update(productPayload)
+        .eq('id', productId)
+        .eq('seller_id', userId)
+        .select('id');
+
+      if (error) throw new Error(error.message);
+      if (!updated || updated.length === 0) {
+        throw new Error("Listing not found, or you don't have permission to edit it.");
+      }
     } else {
-      result = await supabase.from('products').insert([productPayload]);
+      const { error } = await client.from('products').insert([productPayload]);
+      if (error) throw new Error(error.message);
     }
-
-    const { error } = result;
-
-    if (error) throw new Error(error.message);
 
     return { success: true, decision: aiDecision, status };
 
@@ -95,19 +188,22 @@ export async function submitProductAction(formData: any, pricing: any, productId
   }
 }
 
+// NOTE: this one still trusts the userId sent from the browser. It needs the same
+// access-token treatment as above, but its caller (the product page) isn't in what you've
+// shared, so the signature is unchanged to avoid breaking it.
 export async function submitReviewAction(
-  productId: string, 
-  userId: string, 
-  content: string, 
+  productId: string,
+  userId: string,
+  content: string,
   parentId: string | null = null
 ) {
   try {
     const aiDecision = await validateMessage(content);
 
     if (aiDecision.status === 'REJECTED') {
-      return { 
-        success: false, 
-        message: aiDecision.reason || "Message contains restricted contact information." 
+      return {
+        success: false,
+        message: aiDecision.reason || "Message contains restricted contact information."
       };
     }
 
