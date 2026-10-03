@@ -13,6 +13,8 @@ import { ToggleSwitch } from '@/shared/ToggleSwitch';
 import { ImageUploader } from '@/shared/ImageUploader/ImageUploader';
 import { ProductCard } from '@/shared/Card/ProductCard';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
+import { showGlobalToast } from '@/shared/Toast/Toast';
+import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { submitProductAction } from './actions';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
@@ -40,7 +42,11 @@ const LISTING_COLUMNS = 'id, title, base_price, condition, status, created_at, i
 
 // SWR cache keys
 const LISTINGS_KEY = 'seller-products';
-const SETTINGS_KEY = 'platform-settings';
+// IMPORTANT: this must NOT be 'platform-settings'. usePlatformSettings (buyer side) already
+// uses that key to cache the raw database row, and SWR shares one cache per key. With the same
+// key, whichever page loaded first filled the cache and the other page read the wrong shape:
+// here that made feePct undefined -> 0, so the escrow breakdown showed ₦0 and "0% fee".
+const SETTINGS_KEY = 'seller-platform-settings';
 const USER_KEY = 'seller-user-id';
 const EMPTY: any[] = []; // stable reference so `products` doesn't change identity every render
 
@@ -74,6 +80,15 @@ const CONFIRM_COPY: Record<ConfirmType, { title: string; message: string; confir
     confirmLabel: 'Delete',
     destructive: true
   }
+};
+
+// Which actions ask "Are you sure?" first. The RESULT of every action is always shown as a
+// toast (never a modal). Set an action to false to make it run instantly on tap.
+const CONFIRM_FIRST: Record<ConfirmType, boolean> = {
+  edit: true,
+  duplicate: true,
+  sold: true,
+  delete: true
 };
 
 // Memoised so a re-render of the dashboard doesn't re-render every card
@@ -326,11 +341,18 @@ export default function SellerDashboard() {
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [formData, setFormData] = useState<FormState>(getEmptyForm());
 
+  // The notification modal is now only for the listing SUBMIT result, settings errors and
+  // image-upload errors. Duplicate / Delete / Mark Sold report through toasts instead.
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | null; message: string }>({
     type: null,
     message: ''
   });
   const [isImagesUploading, setIsImagesUploading] = useState(false);
+
+  // Rubber-band bounce for the whole page (header + content). Modals, spinners and toasts
+  // are rendered outside this wrapper so their `fixed` positioning isn't affected.
+  const bounceRef = useRef<HTMLDivElement>(null);
+  useRubberBand(bounceRef);
 
   /* ------------------------------ SWR data layer ------------------------------ */
 
@@ -350,11 +372,11 @@ export default function SellerDashboard() {
     revalidateOnFocus: false
   });
   useEffect(() => {
-  const { data: sub } = supabase.auth.onAuthStateChange(() => {
-    globalMutate(USER_KEY);
-  });
-  return () => sub.subscription.unsubscribe();
-}, [globalMutate]);
+    const { data: sub } = supabase.auth.onAuthStateChange(() => {
+      globalMutate(USER_KEY);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, [globalMutate]);
 
   // How many listings each tab loads. The ref is what the fetcher reads (always current);
   // the state is what re-renders the "Load more" button.
@@ -584,6 +606,7 @@ export default function SellerDashboard() {
   };
 
   /* --------------------------------- actions ---------------------------------- */
+  // Results are reported with toasts (bottom of the screen), not the notification modal.
 
   const executeDelete = async (id: string) => {
     const { error } = await supabase.from('products').delete().eq('id', id);
@@ -591,9 +614,9 @@ export default function SellerDashboard() {
     if (!error) {
       mutateListings(prev => prev?.filter(p => p.id !== id), { revalidate: false });
       refreshListings();
-      setNotification({ type: 'success', message: 'Item deleted successfully.' });
+      showGlobalToast('Item deleted successfully.');
     } else {
-      setNotification({ type: 'error', message: 'Error deleting item: ' + error.message });
+      showGlobalToast('Error deleting item: ' + error.message, 'error');
     }
   };
 
@@ -610,9 +633,9 @@ export default function SellerDashboard() {
         { revalidate: false }
       );
       refreshListings();
-      setNotification({ type: 'success', message: 'Item marked as sold successfully!' });
+      showGlobalToast('Item marked as sold successfully!');
     } else {
-      setNotification({ type: 'error', message: 'Error marking item as sold.' });
+      showGlobalToast('Error marking item as sold.', 'error');
     }
   };
 
@@ -625,13 +648,13 @@ export default function SellerDashboard() {
       .single();
 
     if (fetchError || !full) {
-      setNotification({ type: 'error', message: 'Error duplicating listing.' });
+      showGlobalToast('Error duplicating listing.', 'error');
       return;
     }
 
     // Duplicates are published immediately, so only content that already passed review can be copied
     if (!['ACTIVE', 'APPROVED', 'SOLD'].includes(full.status)) {
-      setNotification({ type: 'error', message: 'Only approved listings can be duplicated.' });
+      showGlobalToast('Only approved listings can be duplicated.', 'error');
       return;
     }
 
@@ -652,9 +675,9 @@ export default function SellerDashboard() {
         mutateListings(prev => [data, ...(prev ?? [])], { revalidate: false });
       }
       refreshListings();
-      setNotification({ type: 'success', message: 'Listing duplicated successfully!' });
+      showGlobalToast('Listing duplicated successfully!');
     } else {
-      setNotification({ type: 'error', message: 'Error duplicating listing.' });
+      showGlobalToast('Error duplicating listing.', 'error');
     }
   };
 
@@ -663,7 +686,7 @@ export default function SellerDashboard() {
     const { data, error } = await supabase.from('products').select('*').eq('id', id).single();
 
     if (error || !data) {
-      setNotification({ type: 'error', message: 'Could not load this listing for editing. Please try again.' });
+      showGlobalToast('Could not load this listing for editing. Please try again.', 'error');
       return;
     }
 
@@ -696,30 +719,53 @@ export default function SellerDashboard() {
     }
   }, []);
 
-  // Every card action goes through the same confirmation modal
-  const runPendingAction = async () => {
-    if (!pendingAction) return;
-    const { type, id } = pendingAction;
-
-    setIsActionLoading(true);
+  // Runs one card action and reports any unexpected failure as a toast.
+  // The in-flight guard stops a double tap from running the same action twice.
+  const inFlight = useRef(new Set<string>());
+  const runAction = async (type: ConfirmType, id: string) => {
+    const key = `${type}:${id}`;
+    if (inFlight.current.has(key)) return;
+    inFlight.current.add(key);
     try {
       if (type === 'edit') await handleEdit(id);
       if (type === 'duplicate') await handleDuplicate(id);
       if (type === 'sold') await handleMarkSold(id);
       if (type === 'delete') await executeDelete(id);
     } catch (err: any) {
-      setNotification({ type: 'error', message: err?.message || 'Something went wrong. Please try again.' });
+      showGlobalToast(err?.message || 'Something went wrong. Please try again.', 'error');
+    } finally {
+      inFlight.current.delete(key);
+    }
+  };
+
+  // Confirm button in the modal
+  const runPendingAction = async () => {
+    if (!pendingAction) return;
+    const { type, id } = pendingAction;
+
+    setIsActionLoading(true);
+    try {
+      await runAction(type, id);
     } finally {
       setIsActionLoading(false);
       setPendingAction(null);
     }
   };
 
-  // Stable handlers so the memoised cards don't re-render when the dashboard does
-  const requestEdit = useCallback((id: string) => setPendingAction({ type: 'edit', id }), []);
-  const requestDelete = useCallback((id: string) => setPendingAction({ type: 'delete', id }), []);
-  const requestDuplicate = useCallback((id: string) => setPendingAction({ type: 'duplicate', id }), []);
-  const requestMarkSold = useCallback((id: string) => setPendingAction({ type: 'sold', id }), []);
+  // Stable handlers so the memoised cards don't re-render when the dashboard does.
+  // The ref always points at the latest runAction, so instant actions never use stale state.
+  const runActionRef = useRef(runAction);
+  runActionRef.current = runAction;
+
+  const requestAction = useCallback((type: ConfirmType, id: string) => {
+    if (CONFIRM_FIRST[type]) setPendingAction({ type, id });
+    else void runActionRef.current(type, id);
+  }, []);
+
+  const requestEdit = useCallback((id: string) => requestAction('edit', id), [requestAction]);
+  const requestDelete = useCallback((id: string) => requestAction('delete', id), [requestAction]);
+  const requestDuplicate = useCallback((id: string) => requestAction('duplicate', id), [requestAction]);
+  const requestMarkSold = useCallback((id: string) => requestAction('sold', id), [requestAction]);
 
   /* ---------------------------------- tabs ------------------------------------ */
 
@@ -861,7 +907,7 @@ export default function SellerDashboard() {
   return (
     <div className="w-full pb-10">
 
-      {/* Universal Notification Modal */}
+      {/* Notification modal: listing submit result, fee-settings error, image-upload errors */}
       {notification.type && (
         <Modal
           isOpen={!!notification.type}
@@ -886,7 +932,8 @@ export default function SellerDashboard() {
         </Modal>
       )}
 
-      {/* One confirmation modal for Edit, Duplicate, Mark Sold and Delete */}
+      {/* "Are you sure?" confirmation for Edit, Duplicate, Mark Sold and Delete.
+          See CONFIRM_FIRST at the top to turn any of them into an instant action. */}
       <ConfirmModal
         isOpen={!!pendingAction}
         title={pendingCopy?.title ?? ''}
@@ -909,6 +956,9 @@ export default function SellerDashboard() {
         </div>
       )}
 
+      {/* Rubber-band wrapper: header + page content bounce together at the top and bottom */}
+      <div ref={bounceRef}>
+
       {/* HEADER + TABS: Matched perfectly to Vendi Header using h-12 */}
       <div className="sticky top-0 z-[60] -mx-4 md:-mx-8 bg-gray-50 dark:bg-[#0a1120]">
 
@@ -920,42 +970,42 @@ export default function SellerDashboard() {
         </div>
 
         {/* Tabs Row: "Post Item" is pinned on the left, the other tabs scroll beside it */}
-<div className="flex items-center gap-2 px-4 md:px-8 pb-2">
+        <div className="flex items-center gap-2 px-4 md:px-8 pb-2">
 
-  {/* Pinned, bigger pill. It sits outside the scroller, so scrolling never moves it. */}
-  <button
-    onClick={() => changeTab('Post Item')}
-    className={`!whitespace-nowrap flex-shrink-0 !px-5 !py-2.5 !rounded-full !text-sm !font-black transition-all shadow-sm ${
-      activeTab === 'Post Item'
-        ? '!bg-orange-500 !text-white border border-orange-500'
-        : '!bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30'
-    }`}
-  >
-    Post Item
-  </button>
+          {/* Pinned, bigger pill. It sits outside the scroller, so scrolling never moves it. */}
+          <button
+            onClick={() => changeTab('Post Item')}
+            className={`!whitespace-nowrap flex-shrink-0 !px-5 !py-2.5 !rounded-full !text-sm !font-black transition-all shadow-sm ${
+              activeTab === 'Post Item'
+                ? '!bg-orange-500 !text-white border border-orange-500'
+                : '!bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30'
+            }`}
+          >
+            Post Item
+          </button>
 
-  {/* min-w-0 lets this flex child shrink and scroll instead of pushing the pill off-screen.
-      `relative` makes offsetLeft measure from this container, which the centering effect needs. */}
-  <div
-    ref={tabsContainerRef}
-    className="relative flex flex-1 min-w-0 overflow-x-auto scrollbar-hide gap-2"
-  >
-    {TABS.filter((tab) => tab !== 'Post Item').map((tab) => (
-      <button
-        key={tab}
-        ref={(el) => { tabRefs.current[tab] = el; }}
-        onClick={() => changeTab(tab)}
-        className={`!whitespace-nowrap flex-shrink-0 !px-4 !py-2 !rounded-full !text-xs !font-bold transition-all ${
-          activeTab === tab
-            ? '!bg-orange-500 !text-white border border-orange-500'
-            : '!bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30'
-        }`}
-      >
-        {tab}
-      </button>
-    ))}
-  </div>
-</div>
+          {/* min-w-0 lets this flex child shrink and scroll instead of pushing the pill off-screen.
+              `relative` makes offsetLeft measure from this container, which the centering effect needs. */}
+          <div
+            ref={tabsContainerRef}
+            className="relative flex flex-1 min-w-0 overflow-x-auto scrollbar-hide gap-2"
+          >
+            {TABS.filter((tab) => tab !== 'Post Item').map((tab) => (
+              <button
+                key={tab}
+                ref={(el) => { tabRefs.current[tab] = el; }}
+                onClick={() => changeTab(tab)}
+                className={`!whitespace-nowrap flex-shrink-0 !px-4 !py-2 !rounded-full !text-xs !font-bold transition-all ${
+                  activeTab === tab
+                    ? '!bg-orange-500 !text-white border border-orange-500'
+                    : '!bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30'
+                }`}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* PAGE CONTENT: swipe left/right to move between the listing tabs.
@@ -1344,6 +1394,8 @@ export default function SellerDashboard() {
             )}
           </div>
         )}
+      </div>
+
       </div>
     </div>
   );

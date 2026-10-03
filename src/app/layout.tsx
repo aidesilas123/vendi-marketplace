@@ -6,6 +6,7 @@ import { AppShell } from "@/shared/Navigation/AppShell";
 import { StatusBarManager } from "@/shared/StatusBarManager";
 import { HardwareBackButton } from "@/shared/HardwareBackButton";
 import { PageTransition } from "@/shared/PageTransition";
+import { GlobalToastHost } from "@/shared/Toast/Toast";
 // 1. IONIC CSS MUST BE IMPORTED FIRST
 import '@ionic/react/css/core.css';
 import '@ionic/react/css/normalize.css';
@@ -51,6 +52,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <PageTransition>{children}</PageTransition>
           </AppShell>
         </IonicProvider>
+        {/* One toast host for the whole app. It portals to <body>, so it stays pinned to the
+            bottom of the screen and survives route changes (e.g. toast, then navigate). */}
+        <GlobalToastHost />
       </body>
     </html>
   );

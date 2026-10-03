@@ -1,15 +1,16 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { Avatar } from '@/shared/Avatar';
 import { Badge } from '@/shared/Badge';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { Button } from '@/shared/Button';
-import { Modal } from '@/shared/Modal/Modal';
 import { ImageViewer } from '@/shared/ImageViewer/ImageViewer';
 import { Toast, useToast } from '@/shared/Toast/Toast';
+import { useRubberBand } from '@/shared/hooks/useRubberBand';
+import { effectiveTxStatus } from '@/lib/txStatus';
 import { IonIcon } from '@ionic/react';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import {
@@ -21,7 +22,6 @@ import {
   timeOutline,
   logoWhatsapp,
   chatbubbleEllipsesOutline,
-  warningOutline,
   expandOutline,
   imageOutline,
   receiptOutline
@@ -37,13 +37,16 @@ export default function OrderDetails() {
   const [product, setProduct] = useState<any>(null);
   const [seller, setSeller] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isProcessingTx, setIsProcessingTx] = useState(false);
   const { toast, showToast, hideToast } = useToast();
 
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
-  const [modalConfig, setModalConfig] = useState({ isOpen: false, title: '', message: '', type: 'info', action: () => {} });
+
+  // Rubber-band bounce. The wrapper only exists once the order has loaded, so `ready`
+  // delays attaching the listeners until then. Fixed bars stay outside the wrapper.
+  const bounceRef = useRef<HTMLDivElement>(null);
+  useRubberBand(bounceRef, { ready: !isLoading && !!transaction });
 
   useEffect(() => {
     const fetchOrderData = async () => {
@@ -95,15 +98,14 @@ export default function OrderDetails() {
     fetchOrderData();
   }, [txRef, router]);
 
-  const hoursPassed = transaction ? (new Date().getTime() - new Date(transaction.created_at).getTime()) / (1000 * 60 * 60) : 0;
-  const canCancel = hoursPassed >= 24 && transaction?.status === 'pending';
-  const isCompleted = transaction?.status === 'successful' || transaction?.status === 'completed';
+  // The status this order should DISPLAY (refund rows from a cancelled order count as cancelled)
+  const status = transaction ? effectiveTxStatus(transaction) : '';
+  const isCancelled = status === 'cancelled';
+  const isCompleted = status === 'successful' || status === 'completed';
+  const contactLocked = isCompleted || isCancelled;
 
-  let itemPrice = 0;
-  try {
-    const meta = typeof transaction?.metadata === 'string' ? JSON.parse(transaction.metadata) : transaction?.metadata;
-    itemPrice = meta?.item_price || 0;
-  } catch (e) { }
+  const hoursPassed = transaction ? (new Date().getTime() - new Date(transaction.created_at).getTime()) / (1000 * 60 * 60) : 0;
+  const canCancel = hoursPassed >= 24 && status === 'pending';
 
   const images: string[] = product?.images?.length > 0 ? product.images : [];
 
@@ -142,7 +144,7 @@ export default function OrderDetails() {
   };
 
   const copyPhoneNumber = async () => {
-    if (isCompleted || !seller?.whatsapp) return;
+    if (contactLocked || !seller?.whatsapp) return;
     const ok = await writeToClipboard(seller.whatsapp);
     if (ok) {
       // Light tap confirms the copy; harmlessly ignored where haptics aren't supported (web)
@@ -153,43 +155,22 @@ export default function OrderDetails() {
   };
 
   const openWhatsApp = () => {
-    if (isCompleted || !seller?.whatsapp) return;
+    if (contactLocked || !seller?.whatsapp) return;
     const text = encodeURIComponent(`Hi ${seller.full_name}, I just purchased your ${product?.title} on Vendi. I'd like to arrange a meetup to inspect and pick it up!`);
     const formattedPhone = seller.whatsapp.startsWith('0') ? '234' + seller.whatsapp.slice(1) : seller.whatsapp;
     window.open(`https://wa.me/${formattedPhone}?text=${text}`, '_blank');
   };
 
-  const handleCancelOrder = () => {
-    setModalConfig({
-      isOpen: true,
-      title: 'Cancel Order?',
-      message: `Because 24 hours have passed, you can cancel this order. ₦${itemPrice.toLocaleString()} will be refunded to your wallet. (Platform protection fees are non-refundable).`,
-      type: 'warning',
-      action: async () => {
-        setModalConfig(prev => ({ ...prev, isOpen: false }));
-        setIsProcessingTx(true);
-        try {
-          const { data: { session } } = await supabase.auth.getSession();
-          const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/cancel-escrow`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ transactionRef: transaction.reference })
-          });
-          if (!res.ok) throw new Error('Failed to cancel order');
-          router.push('/transactions');
-        } catch (error: any) {
-          setModalConfig({ isOpen: true, title: 'Error', message: error.message, type: 'error', action: () => setModalConfig(prev => ({ ...prev, isOpen: false })) });
-        } finally {
-          setIsProcessingTx(false);
-        }
-      }
-    });
+  // Cancelling now happens on its own page, where the buyer says why and gets the refund
+  const goToCancelPage = () => {
+    router.push(`/order/cancel?ref=${encodeURIComponent(transaction.reference)}`);
   };
 
   if (isLoading) {
     return (
       <div className="w-full min-h-screen bg-gray-50 dark:bg-[#0a1120] pb-32 animate-pulse">
-        <div className="w-full bg-gray-50 dark:bg-[#0a1120] pt-safe">
+        {/* No pt-safe: the app shell already pads the status bar */}
+        <div className="w-full bg-gray-50 dark:bg-[#0a1120]">
           <div className="flex items-center justify-between px-3 py-1.5">
             <div className="flex items-center gap-2">
               <Skeleton className="w-7 h-7 !rounded-full" />
@@ -231,7 +212,7 @@ export default function OrderDetails() {
     : transaction.seller_id;
 
   const statusColor =
-    transaction.status === 'pending' ? 'text-orange-500'
+    status === 'pending' ? 'text-orange-500'
     : isCompleted ? 'text-green-500'
     : 'text-red-500';
 
@@ -239,27 +220,6 @@ export default function OrderDetails() {
 
   return (
     <div className="w-full min-h-screen bg-gray-50 dark:bg-[#0a1120] text-gray-900 dark:text-white pb-40 selection:bg-orange-500/30">
-
-      {isProcessingTx && (
-        <div className="fixed inset-0 z-[200] flex flex-col items-center justify-center p-4 bg-black/60 backdrop-blur-sm transition-all duration-300">
-          <div className="w-14 h-14 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-          <p className="text-white font-bold text-base animate-pulse tracking-wide">Processing...</p>
-        </div>
-      )}
-
-      {modalConfig.isOpen && (
-        <Modal isOpen={modalConfig.isOpen} onClose={() => setModalConfig(prev => ({ ...prev, isOpen: false }))}>
-          <div className="p-6 text-center">
-            <IonIcon icon={warningOutline} className="text-5xl mb-3 text-orange-500" />
-            <h2 className="text-lg font-bold mb-2 text-gray-900 dark:text-white tracking-tight">{modalConfig.title}</h2>
-            <p className="text-sm text-gray-600 dark:text-gray-300 mb-6 font-medium leading-relaxed">{modalConfig.message}</p>
-            <div className="flex gap-3">
-              <Button onClick={() => setModalConfig(prev => ({ ...prev, isOpen: false }))} className="flex-1 !bg-gray-200 dark:!bg-gray-800 !text-gray-900 dark:!text-white !py-3 !rounded-2xl">Abort</Button>
-              <Button onClick={modalConfig.action} className="flex-1 !bg-orange-500 !py-3 !rounded-2xl">Confirm</Button>
-            </div>
-          </div>
-        </Modal>
-      )}
 
       <Toast {...toast} onClose={hideToast} />
 
@@ -271,8 +231,11 @@ export default function OrderDetails() {
         onClose={() => setViewerOpen(false)}
       />
 
-      {/* HEADER — full-bleed, solid theme colour, pushed to the top */}
-      <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-[#0a1120] pt-safe">
+      {/* Everything that scrolls bounces together. Fixed elements (the bottom bar) stay outside. */}
+      <div ref={bounceRef}>
+
+      {/* HEADER: solid theme colour, flush to the top (no pt-safe, the app shell pads the status bar) */}
+      <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-[#0a1120]">
         <div className="flex w-full items-center justify-between px-3 py-1.5">
           <div className="flex items-center gap-1 min-w-0">
             <button onClick={() => router.back()} aria-label="Back" className="p-1.5 -ml-1.5 text-gray-900 dark:text-white active:scale-95 transition-transform">
@@ -285,9 +248,9 @@ export default function OrderDetails() {
           </div>
 
           <div className="flex items-center gap-1.5 pl-3 shrink-0">
-            {transaction.status === 'pending' && <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse"></span>}
+            {status === 'pending' && <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse"></span>}
             <span className={`text-[10px] font-bold uppercase tracking-wider ${statusColor}`}>
-              {transaction.status === 'pending' ? 'Awaiting Delivery' : transaction.status}
+              {status === 'pending' ? 'Awaiting Delivery' : status}
             </span>
           </div>
         </div>
@@ -390,43 +353,52 @@ export default function OrderDetails() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                disabled={isCompleted}
-                onClick={() => router.push(`/chats?seller=${chatPartnerId}&ref=${transaction.reference}`)}
-                className={`!flex items-center justify-center gap-2 !bg-gray-100 dark:!bg-gray-800 text-gray-900 dark:text-white font-bold !py-3 !rounded-2xl text-sm transition-all active:scale-[0.98] ${isCompleted ? disabledBtn : ''}`}
-              >
-                <IonIcon icon={chatbubbleEllipsesOutline} className="text-xl" /> Vendi Chat
-              </button>
-              <button
-                disabled={isCompleted}
-                onClick={openWhatsApp}
-                className={`!flex items-center justify-center gap-2 !bg-[#25D366]/10 text-[#25D366] font-bold !py-3 !rounded-2xl text-sm transition-all active:scale-[0.98] ${isCompleted ? disabledBtn : ''}`}
-              >
-                <IonIcon icon={logoWhatsapp} className="text-xl" /> WhatsApp
-              </button>
-            </div>
+            {/* CANCELLED: no contact options at all (no Vendi Chat, WhatsApp or phone number) */}
+            {isCancelled ? (
+              <p className="text-[11px] text-gray-400 text-center mt-3">This order was cancelled, so contact options are turned off.</p>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    disabled={isCompleted}
+                    onClick={() => router.push(`/chats?seller=${chatPartnerId}&ref=${transaction.reference}`)}
+                    className={`!flex items-center justify-center gap-2 !bg-gray-100 dark:!bg-gray-800 text-gray-900 dark:text-white font-bold !py-3 !rounded-2xl text-sm transition-all active:scale-[0.98] ${isCompleted ? disabledBtn : ''}`}
+                  >
+                    <IonIcon icon={chatbubbleEllipsesOutline} className="text-xl" /> Vendi Chat
+                  </button>
+                  <button
+                    disabled={isCompleted}
+                    onClick={openWhatsApp}
+                    className={`!flex items-center justify-center gap-2 !bg-[#25D366]/10 text-[#25D366] font-bold !py-3 !rounded-2xl text-sm transition-all active:scale-[0.98] ${isCompleted ? disabledBtn : ''}`}
+                  >
+                    <IonIcon icon={logoWhatsapp} className="text-xl" /> WhatsApp
+                  </button>
+                </div>
 
-            {/* Phone number: only available while the order is still pending */}
-            {!isCompleted && (
-              <button
-                onClick={copyPhoneNumber}
-                className="!w-full !flex items-center justify-center gap-2 mt-3 text-gray-600 dark:text-gray-300 font-bold !py-3 !rounded-2xl text-sm transition-all active:scale-[0.98]"
-              >
-                <IonIcon icon={callOutline} className="text-xl" />
-                {seller.whatsapp || 'Number unavailable'}
-              </button>
-            )}
+                {/* Phone number: only available while the order is still pending */}
+                {!isCompleted && (
+                  <button
+                    onClick={copyPhoneNumber}
+                    className="!w-full !flex items-center justify-center gap-2 mt-3 text-gray-600 dark:text-gray-300 font-bold !py-3 !rounded-2xl text-sm transition-all active:scale-[0.98]"
+                  >
+                    <IonIcon icon={callOutline} className="text-xl" />
+                    {seller.whatsapp || 'Number unavailable'}
+                  </button>
+                )}
 
-            {isCompleted && (
-              <p className="text-[11px] text-gray-400 text-center mt-3">This transaction is complete, so contact options are turned off.</p>
+                {isCompleted && (
+                  <p className="text-[11px] text-gray-400 text-center mt-3">This transaction is complete, so contact options are turned off.</p>
+                )}
+              </>
             )}
           </div>
         )}
       </div>
 
+      </div>
+
       {/* BOTTOM ACTION NAV */}
-      {transaction?.status === 'pending' && (
+      {status === 'pending' && (
         <div className="fixed bottom-0 left-0 right-0 z-[90] bg-gray-50 dark:bg-[#0a1120] p-4 pt-3 pb-safe">
           <div className="max-w-2xl mx-auto space-y-3">
             <Button
@@ -442,7 +414,7 @@ export default function OrderDetails() {
               </button>
 
               {canCancel && (
-                <button onClick={handleCancelOrder} className="flex-1 !bg-red-50 dark:!bg-red-900/20 text-red-600 dark:text-red-500 font-bold !py-3 !rounded-full text-sm transition-all active:scale-[0.98]">
+                <button onClick={goToCancelPage} className="flex-1 !bg-red-50 dark:!bg-red-900/20 text-red-600 dark:text-red-500 font-bold !py-3 !rounded-full text-sm transition-all active:scale-[0.98]">
                   Cancel Order
                 </button>
               )}

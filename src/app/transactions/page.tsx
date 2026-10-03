@@ -13,6 +13,8 @@ import { TransactionCard } from '@/shared/Card/TransactionCard';
 import { EmptyState } from '@/shared/EmptyState/EmptyState';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
+import { useRubberBand } from '@/shared/hooks/useRubberBand';
+import { effectiveTxStatus } from '@/lib/txStatus';
 
 type TabType = 'all' | 'pending' | 'completed' | 'cancelled' | 'saved';
 const TABS: TabType[] = ['all', 'pending', 'completed', 'cancelled', 'saved'];
@@ -47,17 +49,21 @@ async function fetchActivity(): Promise<{ transactions: any[]; savedItems: any[]
     if (txError) throw txError;
 
     // STRICT FILTER: Block 'credit' and 'Payment Received' from showing up here
-    transactions = (txs ?? []).filter((tx: any) => {
-      if (tx.type === 'credit') return false;
-      if (tx.title?.includes('Payment Received') || tx.title?.includes('Wallet Funding')) return false;
+    transactions = (txs ?? [])
+      .filter((tx: any) => {
+        if (tx.type === 'credit') return false;
+        if (tx.title?.includes('Payment Received') || tx.title?.includes('Wallet Funding')) return false;
 
-      return (
-        tx.type === 'escrow_hold' ||
-        tx.type === 'refund' ||
-        tx.metadata?.original_ref ||
-        tx.metadata?.product_id
-      );
-    });
+        return (
+          tx.type === 'escrow_hold' ||
+          tx.type === 'refund' ||
+          tx.metadata?.original_ref ||
+          tx.metadata?.product_id
+        );
+      })
+      // Refund rows created by a cancelled order display as CANCELLED, not COMPLETED.
+      // Doing it here also makes the "Cancelled" tab pick them up.
+      .map((tx: any) => ({ ...tx, status: effectiveTxStatus(tx) }));
   }
 
   const { data: savedData, error: savedError } = await supabase
@@ -121,6 +127,11 @@ export default function TransactionsPage() {
   const swipeDeltaX = useRef<number>(0);
   const hapticFiredRef = useRef(false);
   const startedInPillStrip = useRef(false);
+
+  // Rubber-band bounce at the BOTTOM of the list. The top edge belongs to pull-to-refresh,
+  // so top is off here. This page scrolls inside #tx-scroll-container, not the app shell.
+  const bounceRef = useRef<HTMLDivElement>(null);
+  useRubberBand(bounceRef, { scrollerId: 'tx-scroll-container', top: false, ready: mounted });
 
   // Pull-to-refresh: show the spinner while SWR revalidates
   const refreshData = useCallback(async () => {
@@ -294,8 +305,11 @@ export default function TransactionsPage() {
         }}
       >
         
-        {/* COMPACT HEADER & STRICT PILLS */}
-        <div className="sticky top-0 z-40 bg-white/95 dark:bg-[#0a1120]/95 backdrop-blur-md pt-safe border-b border-gray-100 dark:border-gray-800">
+        {/* COMPACT HEADER & STRICT PILLS.
+            No pt-safe here: the app shell already pads the status bar, so adding it again
+            pushed this header down. Solid page colour (no white, no blur, no border) so it
+            matches the background. */}
+        <div className="sticky top-0 z-40 bg-gray-50 dark:bg-[#0a1120]">
           <div className="flex items-center h-12 px-4">
             <button onClick={() => router.back()} className="-ml-2 w-10 h-10 flex items-center justify-center rounded-full bg-transparent text-gray-900 dark:text-white transition-colors active:scale-95">
               <IonIcon icon={chevronBackOutline} className="text-2xl" />
@@ -337,6 +351,10 @@ export default function TransactionsPage() {
           </div>
         </div>
 
+        {/* Bounce wrapper: its own element so the bounce transform never fights the
+            fade transition on the content area below. */}
+        <div ref={bounceRef}>
+
         {/* CONTENT AREA WITH FADE & HORIZONTAL SLIDE EFFECT */}
         <div 
           className={`max-w-2xl mx-auto w-full transition-opacity duration-200 ease-out ${isSwitchingTab ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
@@ -372,9 +390,9 @@ export default function TransactionsPage() {
                 )
               )}
 
-              {/* TRANSACTIONS LIST (Edge-to-Edge) */}
+              {/* TRANSACTIONS LIST: transparent, so the rows sit directly on the page colour */}
               {activeTab !== 'saved' && (
-                <div className="flex flex-col bg-white dark:bg-transparent divide-y divide-gray-100 dark:divide-gray-800/60 pt-2">
+                <div className="flex flex-col bg-transparent divide-y divide-gray-100 dark:divide-gray-800/60 pt-2">
                   {getFilteredTransactions().length > 0 ? (
                     getFilteredTransactions().map((tx) => (
                       <TransactionCard 
@@ -401,6 +419,8 @@ export default function TransactionsPage() {
               )}
             </div>
           )}
+        </div>
+
         </div>
       </div>
     </div>

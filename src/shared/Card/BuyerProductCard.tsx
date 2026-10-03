@@ -12,7 +12,7 @@ import { calcFees, naira } from '@/lib/pricing';
 import { useSavedIds } from '@/shared/hooks/useSavedIds';
 import { usePlatformSettings } from '@/shared/hooks/usePlatformSettings';
 import { imageOutline, schoolOutline, timeOutline, eyeOutline, bookmarkOutline, bookmark, star } from 'ionicons/icons';
-import { Toast, useToast } from '@/shared/Toast/Toast';
+import { showGlobalToast } from '@/shared/Toast/Toast';
 
 const timeAgo = (dateString: string) => {
   const then = new Date(dateString).getTime();
@@ -72,7 +72,6 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
   const router = useRouter();
   const { savedIds, toggle } = useSavedIds();
   const { settings, isLoading: settingsLoading } = usePlatformSettings();
-  const { toast, showToast, hideToast } = useToast();
 
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
@@ -114,13 +113,14 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
 
     // Just ONE light tap here to acknowledge the physical button press
     Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
-    
+
     const result = await toggle(product.id);
     savePending.current = false;
 
     if (result === 'unauthenticated') {
-      // The double tap is now handled automatically by showToast!
-      showToast('Please log in to save items', 'error');
+      // The global toast pops up from the bottom of the screen, not inside the card.
+      // (It also does the double haptic tap itself.)
+      showGlobalToast('Please log in to save items', 'error');
     } else if (result === 'removed') {
       onUnsave?.(product.id);
     }
@@ -138,8 +138,6 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
       className="relative flex flex-col h-full bg-transparent transition-transform active:scale-[0.98]"
       style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 300px' }}
     >
-      <Toast {...toast} onClose={hideToast} />
-      
       {/* Whole-card link (real <a>: prefetching, long-press, correct semantics) */}
       <Link
         href={`/product?id=${product.id}`}
