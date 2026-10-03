@@ -141,8 +141,7 @@ export default function SavedItemsPage() {
               {items.map((product) => (
                 <BuyerProductCard
                   key={product.id}
-                  product={product}
-                  initialSaved
+                  product={product as any}
                   onUnsave={handleUnsave}
                 />
               ))}
