@@ -540,24 +540,13 @@ export default function SellerDashboard() {
     setNotification({ type: null, message: '' });
 
     try {
-      // The server verifies this token itself, so it never has to trust an id sent from the browser.
-      // getSession reads local storage (and refreshes an expired token), so there is no extra network call.
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData.session?.access_token;
-
-      if (!accessToken) {
-        setNotification({ type: 'error', message: 'You must be logged in to post an item.' });
-        return;
-      }
-
       const response = await submitProductAction(
         formData,
         {
           basePrice: numericPrice,
           lastPrice: formData.allowNegotiation ? numericLastPrice : null
         },
-        editingProductId,
-        accessToken
+        editingProductId
       );
 
       if (!response.success) {
