@@ -34,8 +34,16 @@ export const BottomNav = () => {
   };
 
   return (
-    <div className={`w-full bg-white dark:bg-[#0f172a] border-t border-gray-200 dark:border-gray-800 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pb-safe pt-2 px-2 sm:px-6 rounded-t-3xl sm:rounded-none transition-transform duration-300 ease-in-out ${isVisible ? 'translate-y-0' : 'translate-y-[150%]'}`}>
-      {/* Changed to max-w-lg to keep spacing tight on tablets, and used a single justify-between flex wrapper */}
+    // The nav is pinned to the very bottom of the screen (fixed bottom-0), so its
+    // white background extends behind the system navigation bar. The safe-area
+    // inset is applied ONCE, as bottom padding below, which lifts the icons above
+    // the system buttons. Don't add a bottom offset or safe-area padding to the
+    // wrapper that renders <BottomNav />, or the gap will come back.
+    <div
+      className={`fixed bottom-0 inset-x-0 z-50 bg-white dark:bg-[#0f172a] border-t border-gray-200 dark:border-gray-800 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pt-2 px-2 sm:px-6 rounded-t-3xl sm:rounded-none transition-transform duration-300 ease-in-out ${isVisible ? 'translate-y-0' : 'translate-y-[150%]'}`}
+      style={{ paddingBottom: "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))" }}
+    >
+      {/* max-w-lg keeps spacing tight on tablets; a single justify-between flex wrapper */}
       <div className="max-w-lg mx-auto flex justify-between items-center relative h-14">
         
         {/* Left Icons */}
@@ -51,10 +59,10 @@ export const BottomNav = () => {
           );
         })}
 
-        {/* Empty Spacer to force equal distribution around the floating Seller Button */}
+        {/* Empty spacer to force equal distribution around the floating Seller button */}
         <div className="w-16"></div>
 
-        {/* Floating Seller Button (Remains Absolute Centered) */}
+        {/* Floating Seller Button (remains absolutely centered) */}
         <div className="absolute left-1/2 -translate-x-1/2 -top-8">
           <Link href="/seller" className="flex flex-col items-center justify-center">
             <div className={`w-14 h-14 rounded-full flex items-center justify-center shadow-xl transition-transform active:scale-95 ${pathname.includes('/seller') ? 'bg-orange-600 border-4 border-orange-200 dark:border-orange-900/30' : 'bg-orange-500 border-4 border-white dark:border-[#0f172a]'}`}>

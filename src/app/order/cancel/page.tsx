@@ -2,8 +2,9 @@
 
 import React, { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { mutate } from 'swr';
+import useSWR from 'swr';
 import { supabase } from '@/lib/supabase';
+import { keys, fetchAuthUser, refreshAfterOrderWrite } from '@/lib/swr-orders';
 import { Button } from '@/shared/Button';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { showGlobalToast } from '@/shared/Toast/Toast';
@@ -26,56 +27,75 @@ const NOTE_MAX = 300;
 const NOTE_CLASSES =
   "w-full !bg-transparent border border-orange-500/30 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 px-4 py-3 text-sm rounded-2xl outline-none focus:border-orange-500 transition-colors resize-none";
 
+/* ---------------------------------------------------------------------------
+ * Data layer (SWR). The fetcher throws on error so SWR keeps the last good data.
+ * Returns null when the order doesn't exist.
+ * ------------------------------------------------------------------------- */
+
+type CancelOrder = { transaction: any; productTitle: string | null };
+
+const fetchCancelOrder = async (ref: string): Promise<CancelOrder | null> => {
+  // Only the columns this page uses
+  const { data: transaction, error } = await supabase
+    .from('transactions')
+    .select('reference,created_at,status,amount,product_id')
+    .eq('reference', ref)
+    .maybeSingle();
+  if (error) throw error;
+  if (!transaction) return null;
+
+  let productTitle: string | null = null;
+  if (transaction.product_id) {
+    const { data: product, error: productError } = await supabase
+      .from('products')
+      .select('title')
+      .eq('id', transaction.product_id)
+      .maybeSingle();
+    if (productError) throw productError;
+    productTitle = product?.title ?? null;
+  }
+  return { transaction, productTitle };
+};
+
 function CancelOrderContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const txRef = searchParams.get('ref');
 
-  const [isLoading, setIsLoading] = useState(true);
-  const [transaction, setTransaction] = useState<any>(null);
-  const [productTitle, setProductTitle] = useState<string | null>(null);
+  // 1) Who is the user?
+  const {
+    data: user,
+    error: authError,
+    isLoading: userLoading,
+    mutate: mutateAuth,
+  } = useSWR(keys.authUser(), fetchAuthUser, { revalidateOnFocus: false });
+
+  // 2) The order. Key is null until the user id and ref are both known.
+  const orderKey = keys.orderCancel(user?.id, txRef);
+  const {
+    data: order,
+    error: orderError,
+    mutate: mutateOrder,
+  } = useSWR(orderKey, () => fetchCancelOrder(txRef!));
+
+  const transaction = order?.transaction ?? null;
+  const productTitle = order?.productTitle ?? null;
+
   const [reason, setReason] = useState<string>('');
   const [note, setNote] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Not signed in -> login
   useEffect(() => {
-    const load = async () => {
-      if (!txRef) {
-        setIsLoading(false);
-        return;
-      }
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-          router.replace('/login');
-          return;
-        }
+    if (user === null) router.replace('/login');
+  }, [user, router]);
 
-        const { data: tx } = await supabase
-          .from('transactions')
-          .select('*')
-          .eq('reference', txRef)
-          .maybeSingle();
-
-        if (tx) {
-          setTransaction(tx);
-          if (tx.product_id) {
-            const { data: product } = await supabase
-              .from('products')
-              .select('title')
-              .eq('id', tx.product_id)
-              .maybeSingle();
-            setProductTitle(product?.title ?? null);
-          }
-        }
-      } catch (err) {
-        console.error('Could not load order for cancellation:', err);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    load();
-  }, [txRef, router]);
+  // Skeleton only when nothing is cached. `undefined` = never loaded, `null` = order doesn't exist.
+  const showSkeleton =
+    order === undefined &&
+    !orderError &&
+    !authError &&
+    (userLoading || user === null || !!orderKey);
 
   const hoursPassed = transaction
     ? (Date.now() - new Date(transaction.created_at).getTime()) / (1000 * 60 * 60)
@@ -89,6 +109,11 @@ function CancelOrderContent() {
 
   const noteRequired = reason === 'other';
   const canSubmit = canCancel && !!reason && (!noteRequired || note.trim().length >= 3) && !isSubmitting;
+
+  const retry = () => {
+    mutateAuth();
+    mutateOrder();
+  };
 
   const handleCancel = async () => {
     if (!canSubmit) return;
@@ -114,9 +139,15 @@ function CancelOrderContent() {
 
       const refunded = Number(data.refundAmount ?? refundAmount);
 
-      // Refresh the activity list in the background, then leave. The toast lives in the
-      // layout, so it stays on screen after the page changes.
-      mutate('activity');
+      // The server confirmed, so update this page's cache straight away (no refetch)...
+      mutateOrder(
+        (cur) => (cur ? { ...cur, transaction: { ...cur.transaction, status: 'cancelled' } } : cur),
+        { revalidate: false }
+      );
+      // ...then drop the order-details cache and refetch the activity list in the background.
+      refreshAfterOrderWrite(transaction.reference, { keep: 'order-cancel' });
+
+      // The toast lives in the layout, so it stays on screen after the page changes.
       showGlobalToast(`Order cancelled. ₦${refunded.toLocaleString()} refunded to your wallet.`, 'success');
       router.replace('/transactions');
     } catch (error: any) {
@@ -125,7 +156,7 @@ function CancelOrderContent() {
     }
   };
 
-  if (isLoading) {
+  if (showSkeleton) {
     return (
       <div className="w-full min-h-screen bg-gray-50 dark:bg-[#0a1120] pb-40 animate-pulse">
         <div className="flex items-center px-3 py-1.5 gap-2">
@@ -142,12 +173,23 @@ function CancelOrderContent() {
   }
 
   if (!transaction) {
+    // A failed request with nothing cached is different from an order that doesn't exist
+    const failed = !!(orderError || authError);
     return (
       <div className="w-full h-screen flex flex-col items-center justify-center text-gray-500 pb-20 px-4 text-center bg-gray-50 dark:bg-[#0a1120]">
         <IonIcon icon={receiptOutline} className="text-5xl mb-4 text-gray-300 dark:text-gray-600" />
-        <p className="text-base font-bold text-gray-800 dark:text-gray-200">Order not found.</p>
-        <p className="text-xs text-gray-400 mt-1 max-w-[240px]">This order may have been removed or does not exist.</p>
-        <Button onClick={() => router.back()} className="mt-6 px-8 !py-3 !rounded-full">Go Back</Button>
+        <p className="text-base font-bold text-gray-800 dark:text-gray-200">
+          {failed ? "Couldn't load this order." : 'Order not found.'}
+        </p>
+        <p className="text-xs text-gray-400 mt-1 max-w-[240px]">
+          {failed
+            ? 'Check your connection and try again.'
+            : 'This order may have been removed or does not exist.'}
+        </p>
+        {failed && (
+          <Button onClick={retry} className="mt-6 px-8 !py-3 !rounded-full">Try Again</Button>
+        )}
+        <Button onClick={() => router.back()} className={`${failed ? 'mt-3' : 'mt-6'} px-8 !py-3 !rounded-full`}>Go Back</Button>
       </div>
     );
   }

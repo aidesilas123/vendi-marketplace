@@ -2,6 +2,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import useSWR from 'swr';
+import { keys, fetchAuthUser } from '@/lib/swr-orders';
 import { supabase } from '@/lib/supabase';
 import { Avatar } from '@/shared/Avatar';
 import { Badge } from '@/shared/Badge';
@@ -27,16 +29,99 @@ import {
   receiptOutline
 } from 'ionicons/icons';
 
+/* ---------------------------------------------------------------------------
+ * Data layer (SWR)
+ * Fetchers THROW on error so SWR keeps showing the last good data.
+ * ------------------------------------------------------------------------- */
+
+type OrderBundle = { transaction: any; product: any | null; seller: any | null };
+
+// Only the columns this page renders. The transaction keeps '*' because
+// effectiveTxStatus() decides the displayed status from fields not visible here.
+const PRODUCT_COLUMNS = 'id,title,images,university_id,campus,specific_location,specifications,description';
+const SELLER_COLUMNS = 'id,full_name,avatar_url,is_verified,average_rating,total_reviews,whatsapp';
+
+const parseImages = (raw: unknown): string[] => {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [raw];
+    } catch {
+      return [raw];
+    }
+  }
+  return [];
+};
+
+// Returns null when the order doesn't exist, throws when the request itself fails
+const fetchOrder = async (ref: string): Promise<OrderBundle | null> => {
+  const { data: transaction, error: txError } = await supabase
+    .from('transactions')
+    .select('*')
+    .eq('reference', ref)
+    .maybeSingle();
+  if (txError) throw txError;
+  if (!transaction) return null;
+
+  // Product and seller only depend on the transaction, so fetch them in parallel
+  const [productRes, sellerRes] = await Promise.all([
+    transaction.product_id
+      ? supabase.from('products').select(PRODUCT_COLUMNS).eq('id', transaction.product_id).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    transaction.seller_id
+      ? supabase.from('users').select(SELLER_COLUMNS).eq('id', transaction.seller_id).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ]);
+  if (productRes.error) throw productRes.error;
+  if (sellerRes.error) throw sellerRes.error;
+
+  return {
+    transaction,
+    product: productRes.data ? { ...productRes.data, images: parseImages(productRes.data.images) } : null,
+    seller: sellerRes.data ?? null,
+  };
+};
+
 export default function OrderDetails() {
   const searchParams = useSearchParams();
   const txRef = searchParams.get('ref') || searchParams.get('id');
   const router = useRouter();
 
-  const [currentUser, setCurrentUser] = useState<any>(null);
-  const [transaction, setTransaction] = useState<any>(null);
-  const [product, setProduct] = useState<any>(null);
-  const [seller, setSeller] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  // 1) Who is the user? (global per-session, no need to refetch on every focus)
+  const {
+    data: currentUser,
+    error: authError,
+    isLoading: userLoading,
+    mutate: mutateAuth,
+  } = useSWR(keys.authUser(), fetchAuthUser, { revalidateOnFocus: false });
+
+  // 2) The order. Key is null until the user id and ref are both known, so nothing fetches early.
+  const orderKey = keys.orderDetails(currentUser?.id, txRef);
+  const {
+    data: order,
+    error: orderError,
+    mutate: mutateOrder,
+  } = useSWR(orderKey, () => fetchOrder(txRef!));
+
+  const transaction = order?.transaction ?? null;
+  const product = order?.product ?? null;
+  const seller = order?.seller ?? null;
+
+  // Not signed in -> login
+  useEffect(() => {
+    if (currentUser === null) router.push('/login');
+  }, [currentUser, router]);
+
+  // Spinner/skeleton only when nothing is cached. `order === undefined` means "never loaded";
+  // `null` means "loaded, and the order doesn't exist". Once visited, the page shows instantly
+  // from cache and refreshes quietly in the background.
+  const showSkeleton =
+    order === undefined &&
+    !orderError &&
+    !authError &&
+    (userLoading || currentUser === null || !!orderKey);
+
   const { toast, showToast, hideToast } = useToast();
 
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
@@ -46,57 +131,7 @@ export default function OrderDetails() {
   // Rubber-band bounce. The wrapper only exists once the order has loaded, so `ready`
   // delays attaching the listeners until then. Fixed bars stay outside the wrapper.
   const bounceRef = useRef<HTMLDivElement>(null);
-  useRubberBand(bounceRef, { ready: !isLoading && !!transaction });
-
-  useEffect(() => {
-    const fetchOrderData = async () => {
-      if (!txRef) {
-        setIsLoading(false);
-        return;
-      }
-
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-          router.push('/login');
-          return;
-        }
-
-        setCurrentUser(user);
-
-        const { data: txData, error: txError } = await supabase
-          .from('transactions')
-          .select('*')
-          .eq('reference', txRef)
-          .maybeSingle();
-
-        if (txError || !txData) return;
-        setTransaction(txData);
-
-        if (txData.product_id) {
-          const { data: productData } = await supabase.from('products').select('*').eq('id', txData.product_id).single();
-          if (productData) {
-            let parsedImages = [];
-            if (Array.isArray(productData.images)) parsedImages = productData.images;
-            else if (typeof productData.images === 'string') {
-              try { parsedImages = JSON.parse(productData.images); } catch { parsedImages = [productData.images]; }
-            }
-            setProduct({ ...productData, images: parsedImages });
-          }
-        }
-
-        if (txData.seller_id) {
-          const { data: sellerData } = await supabase.from('users').select('*').eq('id', txData.seller_id).single();
-          if (sellerData) setSeller(sellerData);
-        }
-      } catch (err) {
-        console.error("Critical error loading order:", err);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    fetchOrderData();
-  }, [txRef, router]);
+  useRubberBand(bounceRef, { ready: !showSkeleton && !!transaction });
 
   // The status this order should DISPLAY (refund rows from a cancelled order count as cancelled)
   const status = transaction ? effectiveTxStatus(transaction) : '';
@@ -166,7 +201,12 @@ export default function OrderDetails() {
     router.push(`/order/cancel?ref=${encodeURIComponent(transaction.reference)}`);
   };
 
-  if (isLoading) {
+  const retry = () => {
+    mutateAuth();
+    mutateOrder();
+  };
+
+  if (showSkeleton) {
     return (
       <div className="w-full min-h-screen bg-gray-50 dark:bg-[#0a1120] pb-32 animate-pulse">
         {/* No pt-safe: the app shell already pads the status bar */}
@@ -197,12 +237,23 @@ export default function OrderDetails() {
   }
 
   if (!transaction) {
+    // A failed request with nothing cached is different from an order that doesn't exist
+    const failed = !!(orderError || authError);
     return (
       <div className="w-full h-screen flex flex-col items-center justify-center text-gray-500 pb-20 px-4 text-center bg-gray-50 dark:bg-[#0a1120]">
         <IonIcon icon={receiptOutline} className="text-5xl mb-4 text-gray-300 dark:text-gray-600" />
-        <p className="text-base font-bold text-gray-800 dark:text-gray-200">Order Details not found.</p>
-        <p className="text-xs text-gray-400 mt-1 max-w-[240px]">This transaction may have been removed or does not exist.</p>
-        <Button onClick={() => router.back()} className="mt-6 px-8 !py-3 !rounded-full">Go Back</Button>
+        <p className="text-base font-bold text-gray-800 dark:text-gray-200">
+          {failed ? "Couldn't load this order." : 'Order Details not found.'}
+        </p>
+        <p className="text-xs text-gray-400 mt-1 max-w-[240px]">
+          {failed
+            ? 'Check your connection and try again.'
+            : 'This transaction may have been removed or does not exist.'}
+        </p>
+        {failed && (
+          <Button onClick={retry} className="mt-6 px-8 !py-3 !rounded-full">Try Again</Button>
+        )}
+        <Button onClick={() => router.back()} className={`${failed ? 'mt-3' : 'mt-6'} px-8 !py-3 !rounded-full`}>Go Back</Button>
       </div>
     );
   }

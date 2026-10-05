@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import useSWR from 'swr';
 import { supabase } from '@/lib/supabase';
-import IonIcon from '@/shared/Icon/Icon';
+import { IonIcon } from '@ionic/react';
 import { 
   personOutline, 
   settingsOutline, 
@@ -34,41 +35,48 @@ interface SidebarProps {
 export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
   const router = useRouter();
 
-  // --- Real Profile State ---
-  const [realAvatar, setRealAvatar] = useState<string | undefined>(user?.avatarUrl);
-  const [realName, setRealName] = useState<string | undefined>(user?.name);
-  const [realEmail, setRealEmail] = useState<string | undefined>(user?.email);
-  const [isFetchingProfile, setIsFetchingProfile] = useState(false); // Prevents name flashing
+  // --- Hydration Mismatch Fix ---
+  // We wait until the component mounts on the client before rendering Ionic web components
+  const [isMounted, setIsMounted] = useState(false);
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   // --- Modal State ---
   const [showSignOutModal, setShowSignOutModal] = useState(false);
 
-  // 1. Fetch real user data dynamically from the database
-  useEffect(() => {
-    const fetchProfile = async () => {
-      setIsFetchingProfile(true);
-      const targetId = user?.id || (await supabase.auth.getUser()).data.user?.id;
-      
-      if (targetId) {
-        const { data, error } = await supabase
-          .from('users')
-          .select('full_name, avatar_url, email')
-          .eq('id', targetId)
-          .single();
-          
-        if (data && !error) {
-          if (data.avatar_url) setRealAvatar(data.avatar_url);
-          if (data.full_name) setRealName(data.full_name);
-          setRealEmail(data.email || user?.email);
-        }
-      }
-      setIsFetchingProfile(false);
-    };
-    
-    if (isOpen) fetchProfile();
-  }, [user?.id, user?.email, isOpen]);
+  // --- Swipe-to-close State ---
+  const touchStartX = useRef<number | null>(null);
+  const [swipeOffset, setSwipeOffset] = useState(0);
 
-  // 2. Prevent body scroll when open
+  // 1. Fetch auth user to get the ID if not passed in props
+  const { data: sessionUser } = useSWR('local-session', async () => {
+    const { data } = await supabase.auth.getUser();
+    return data?.user || null;
+  });
+
+  const targetId = user?.id || sessionUser?.id;
+
+  // 2. Fetch real user profile dynamically via SWR
+  const { data: profile, isLoading: isFetchingProfile } = useSWR(
+    targetId ? `profile-${targetId}` : null,
+    async () => {
+      const { data, error } = await supabase
+        .from('users')
+        .select('full_name, avatar_url, email')
+        .eq('id', targetId)
+        .single();
+        
+      if (error) throw error;
+      return data;
+    }
+  );
+
+  const realAvatar = profile?.avatar_url || user?.avatarUrl;
+  const realName = profile?.full_name || user?.name;
+  const realEmail = profile?.email || user?.email;
+
+  // Prevent body scroll when open
   useEffect(() => {
     if (isOpen || showSignOutModal) {
       document.body.style.overflow = 'hidden';
@@ -78,9 +86,14 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
     return () => { document.body.style.overflow = 'unset'; };
   }, [isOpen, showSignOutModal]);
 
+  // Handle Navigation with BFCache Trick
   const handleNavigation = (route: string) => {
     router.push(route);
-    onClose();
+    // Delay closing so the browser's Back-Forward Cache (BFCache) snapshots the page with the sidebar OPEN.
+    // When the user presses the back button, it restores the open state.
+    setTimeout(() => {
+      onClose();
+    }, 150);
   };
 
   const handleSignOut = async () => {
@@ -90,8 +103,31 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
     window.location.href = '/'; 
   };
 
+  // --- Swipe Gestures ---
+  const onTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+  };
+
+  const onTouchMove = (e: React.TouchEvent) => {
+    if (touchStartX.current === null) return;
+    const diff = e.touches[0].clientX - touchStartX.current;
+    // Only allow sliding to the right (positive diff)
+    if (diff > 0) {
+      setSwipeOffset(diff);
+    }
+  };
+
+  const onTouchEnd = () => {
+    // If they swiped more than 80px to the right, close it
+    if (swipeOffset > 80) {
+      onClose();
+    }
+    setSwipeOffset(0);
+    touchStartX.current = null;
+  };
+
   const ACCOUNT_LINKS = [
-    { name: 'My Profile', icon: personOutline, path: user?.id ? `/profile?id=${user.id}` : '/profile' },
+    { name: 'My Profile', icon: personOutline, path: targetId ? `/profile?id=${targetId}` : '/profile' },
     { name: 'Verification', icon: shieldCheckmarkOutline, path: '/verification' },
     { name: 'My Reviews', icon: starOutline, path: '/reviews' },
     { name: 'Saved Items', icon: bookmarkOutline, path: '/saved' },
@@ -108,6 +144,13 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
     { name: 'About Us', icon: peopleOutline, path: '/about' },
   ];
 
+  // Calculate inline transform for smooth swipe interactions
+  const panelTransform = isOpen 
+    ? `translateX(${swipeOffset}px)` 
+    : 'translateX(100%)';
+  
+  const panelTransition = swipeOffset > 0 ? 'none' : 'transform 300ms ease-in-out';
+
   return (
     <>
       <div className={`fixed inset-0 flex justify-end transition-all duration-300 ${showSignOutModal ? 'z-30' : 'z-[100]'} ${isOpen || showSignOutModal ? 'pointer-events-auto' : 'pointer-events-none'}`}>
@@ -118,9 +161,13 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
           onClick={onClose}
         />
 
-        {/* Sliding Panel - Restored explicit solid background colors */}
+        {/* Sliding Panel */}
         <div 
-          className={`absolute top-0 right-0 h-full w-[85vw] max-w-[340px] bg-white dark:bg-[#111b21] shadow-2xl flex flex-col transition-transform duration-300 ease-in-out rounded-l-3xl overflow-hidden ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
+          onTouchStart={onTouchStart}
+          onTouchMove={onTouchMove}
+          onTouchEnd={onTouchEnd}
+          style={{ transform: panelTransform, transition: panelTransition }}
+          className="absolute top-0 right-0 h-full w-[85vw] max-w-[340px] bg-white dark:bg-[#111b21] shadow-2xl flex flex-col rounded-l-3xl overflow-hidden"
         >
           
           <div className="absolute top-6 right-6 z-10">
@@ -128,12 +175,15 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
               onClick={onClose} 
               className="!p-2 text-gray-400 hover:text-gray-900 dark:text-gray-500 dark:hover:text-white transition-colors active:scale-95 !rounded-full"
             >
-              <IonIcon icon={closeOutline} className="text-3xl" />
+              {isMounted ? <IonIcon icon={closeOutline} className="text-3xl" /> : <div className="w-[30px] h-[30px]" />}
             </button>
           </div>
 
-          {/* Sidebar Header & User Info */}
-          <div className="px-8 pt-12 pb-8 flex flex-col gap-5">
+          {/* Sidebar Header & User Info (Clickable!) */}
+          <div 
+            onClick={() => handleNavigation(targetId ? `/profile?id=${targetId}` : '/profile')}
+            className="px-8 pt-12 pb-8 flex flex-col gap-5 cursor-pointer active:opacity-70 transition-opacity"
+          >
             {isFetchingProfile && !realName ? (
               // SKELETON PREVENTS FLASHING
               <div className="animate-pulse flex flex-col gap-4">
@@ -172,10 +222,18 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
                   className="w-full flex items-center justify-between py-3 group active:opacity-60 transition-opacity"
                 >
                   <div className="flex items-center gap-6">
-                    <IonIcon icon={link.icon} className="text-[24px] text-gray-400 group-hover:text-orange-500 transition-colors" />
+                    {isMounted ? (
+                      <IonIcon icon={link.icon} className="text-[24px] text-orange-500 transition-colors" />
+                    ) : (
+                      <div className="w-[24px] h-[24px]" /> // Placeholder prevents layout shift
+                    )}
                     <span className="text-[16px] font-bold text-gray-800 dark:text-gray-100">{link.name}</span>
                   </div>
-                  <IonIcon icon={chevronForwardOutline} className="text-gray-300 dark:text-gray-600 text-sm" />
+                  {isMounted ? (
+                    <IonIcon icon={chevronForwardOutline} className="text-gray-300 dark:text-gray-600 text-sm" />
+                  ) : (
+                    <div className="w-[14px] h-[14px]" /> // Placeholder
+                  )}
                 </button>
               ))}
             </div>
@@ -191,23 +249,31 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
                   className="w-full flex items-center justify-between py-3 group active:opacity-60 transition-opacity"
                 >
                   <div className="flex items-center gap-6">
-                    <IonIcon icon={link.icon} className="text-[24px] text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-200 transition-colors" />
+                    {isMounted ? (
+                      <IonIcon icon={link.icon} className="text-[24px] text-orange-500 transition-colors" />
+                    ) : (
+                      <div className="w-[24px] h-[24px]" /> // Placeholder prevents layout shift
+                    )}
                     <span className="text-[16px] font-bold text-gray-800 dark:text-gray-100">{link.name}</span>
                   </div>
-                  <IonIcon icon={chevronForwardOutline} className="text-gray-300 dark:text-gray-600 text-sm" />
+                  {isMounted ? (
+                    <IonIcon icon={chevronForwardOutline} className="text-gray-300 dark:text-gray-600 text-sm" />
+                  ) : (
+                    <div className="w-[14px] h-[14px]" /> // Placeholder
+                  )}
                 </button>
               ))}
             </div>
 
           </div>
 
-          {/* Sign Out Footer */}
+          {/* Bigger Sign Out Footer */}
           <div className="p-8 mt-auto border-t border-gray-100 dark:border-gray-800/50">
             <button 
               onClick={() => setShowSignOutModal(true)}
-              className="w-full flex items-center justify-center gap-3 px-4 py-4 !rounded-full bg-red-50 dark:bg-red-500/10 border border-transparent dark:border-red-500/20 text-red-600 dark:text-red-500 hover:bg-red-100 dark:hover:bg-red-500/20 active:scale-[0.98] transition-all font-black"
+              className="w-full flex items-center justify-center gap-3 px-4 py-5 !rounded-full bg-red-50 dark:bg-red-500/10 border border-transparent dark:border-red-500/20 text-red-600 dark:text-red-500 hover:bg-red-100 dark:hover:bg-red-500/20 active:scale-[0.98] transition-all font-black text-lg"
             >
-              <IonIcon icon={logOutOutline} className="text-xl" />
+              {isMounted ? <IonIcon icon={logOutOutline} className="text-2xl" /> : <div className="w-[24px] h-[24px]" />}
               <span>Sign Out</span>
             </button>
           </div>
@@ -218,11 +284,11 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
       {/* Sign Out Confirmation Modal */}
       <Modal isOpen={showSignOutModal} onClose={() => setShowSignOutModal(false)}>
         <div className="p-6 text-center relative z-[999]">
-          <IonIcon 
-            suppressHydrationWarning
-            icon={logOutOutline} 
-            className="text-6xl mb-4 text-red-500" 
-          />
+          {isMounted ? (
+            <IonIcon icon={logOutOutline} className="text-6xl mb-4 text-red-500" />
+          ) : (
+            <div className="w-[60px] h-[60px] mx-auto mb-4" />
+          )}
           <h2 className="text-xl font-black mb-2 text-gray-900 dark:text-white tracking-tight">Sign Out?</h2>
           <p className="text-gray-600 dark:text-gray-400 mb-8 font-medium leading-relaxed">
             Are you sure you want to sign out of your Vendi account?
