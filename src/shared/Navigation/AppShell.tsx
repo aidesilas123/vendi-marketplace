@@ -38,7 +38,7 @@ export const AppShell = ({ children }: AppShellProps) => {
   const isDashboard = pathname === '/';
 
   return (
-    <div className="h-[100dvh] w-full bg-gray-50 dark:bg-[#0a1120] text-gray-900 dark:text-white flex flex-col font-sans antialiased overflow-hidden relative pt-safe">
+    <div className="h-[100dvh] w-full bg-gray-50 dark:bg-[#0a1120] text-gray-900 dark:text-white flex flex-col font-sans antialiased overflow-clip relative pt-safe">
       
       {isDashboard && (
         <div className="flex-shrink-0 z-40">

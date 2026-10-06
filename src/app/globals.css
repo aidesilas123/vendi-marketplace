@@ -25,11 +25,17 @@ html ion-tab-bar {
     --border-color: #e5e7eb;
 }
 
-/* BULLETPROOF APP SCROLL LOCK */
+/* BULLETPROOF APP SCROLL LOCK
+   `overflow: hidden` only hides the scrollbar. Code (Next's post-navigation
+   scrollIntoView, focus(), etc.) can still scroll a hidden element, which is what
+   pushed the whole app up after /buy. `overflow: clip` cannot be scrolled at all.
+   The `hidden` line stays first as a fallback: a WebView that doesn't understand
+   `clip` drops the second line and keeps `hidden`. */
 html, body {
-  overflow: hidden !important; 
   height: 100% !important;
-  overscroll-behavior-y: none; 
+  overflow: hidden !important;
+  overflow: clip !important;
+  overscroll-behavior-y: none;
 }
 
 /* HIDE ALL SCROLLBARS FOR A CLEAN NATIVE APP LOOK */

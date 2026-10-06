@@ -483,7 +483,7 @@ export default function BuyPage() {
       )}
 
       {/* Rubber-band wrapper: stays mounted in every state so the bounce always has its element */}
-      <div ref={bounceRef} className="w-full min-h-screen bg-gray-50 dark:bg-[#0a1120] text-gray-900 dark:text-white pb-24 relative">
+      <div ref={bounceRef} className="w-full min-h-full bg-gray-50 dark:bg-[#0a1120] text-gray-900 dark:text-white pb-24 relative">
         {content}
       </div>
 

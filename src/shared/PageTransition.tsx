@@ -9,9 +9,11 @@ export const PageTransition = ({ children }: { children: React.ReactNode }) => {
   const shouldReduceMotion = useReducedMotion();
 
   useEffect(() => {
-    const main = document.getElementById("main-scroll-container");
-    if (main) main.scrollTo({ top: 0, left: 0, behavior: "auto" });
-  }, [pathname]);
+  const main = document.getElementById("main-scroll-container");
+  if (main) main.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  document.body.scrollTop = 0;
+  document.documentElement.scrollTop = 0;
+}, [pathname]);
 
   return (
   <motion.div

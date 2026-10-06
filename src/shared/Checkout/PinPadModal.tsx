@@ -12,11 +12,26 @@ interface PinPadModalProps {
   onBackspace: () => void;
 }
 
+// Same easing and duration the old `transition-transform duration-300` classes used.
+// Both `transform` and `translate` are listed because Tailwind v4's `translate-y-*`
+// classes use the `translate` property.
+const EASE = 'cubic-bezier(0.4, 0, 0.2, 1)';
+const SLIDE = `transform 300ms ${EASE}, translate 300ms ${EASE}`;
+
 export const PinPadModal = ({ isOpen, onClose, pinMode, pin, totalCharge, onPinPress, onBackspace }: PinPadModalProps) => {
   return (
     <>
       {isOpen && <div className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-sm transition-opacity" onClick={onClose} />}
-      <div className={`fixed bottom-0 left-0 right-0 z-[100] bg-white dark:bg-[#0f172a] rounded-t-3xl shadow-2xl transition-transform duration-300 transform ${isOpen ? 'translate-y-0' : 'translate-y-full'}`}>
+      <div
+        className={`fixed bottom-0 left-0 right-0 z-[100] bg-white dark:bg-[#0f172a] rounded-t-3xl shadow-2xl ${
+          isOpen ? 'translate-y-0 visible' : 'translate-y-full invisible pointer-events-none'
+        }`}
+        style={{
+          // Opening: becomes visible instantly, then slides up.
+          // Closing: slides down first, and only turns invisible once the slide has finished.
+          transition: isOpen ? SLIDE : `${SLIDE}, visibility 0s linear 300ms`,
+        }}
+      >
         <div className="p-6 pb-12 max-w-md mx-auto">
           <div className="flex justify-between items-center mb-6">
             <h3 className="text-xl font-black">

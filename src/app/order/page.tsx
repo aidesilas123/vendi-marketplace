@@ -140,7 +140,7 @@ export default function OrderDetails() {
   const contactLocked = isCompleted || isCancelled;
 
   const hoursPassed = transaction ? (new Date().getTime() - new Date(transaction.created_at).getTime()) / (1000 * 60 * 60) : 0;
-  const canCancel = hoursPassed >= 24 && status === 'pending';
+  const canCancel = hoursPassed >= (2 / 60) && status === 'pending';
 
   const images: string[] = product?.images?.length > 0 ? product.images : [];
 
