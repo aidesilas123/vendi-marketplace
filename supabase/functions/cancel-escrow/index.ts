@@ -70,7 +70,7 @@ Deno.serve(async (req) => {
     }
 
     const hoursPassed = (Date.now() - new Date(transaction.created_at).getTime()) / (1000 * 60 * 60);
-    if (hoursPassed < 24) {
+    if (hoursPassed < 2 / 60) {
       throw new Error('You must wait 24 hours before you can cancel this order.');
     }
 

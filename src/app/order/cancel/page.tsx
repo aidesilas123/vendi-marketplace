@@ -101,7 +101,7 @@ function CancelOrderContent() {
     ? (Date.now() - new Date(transaction.created_at).getTime()) / (1000 * 60 * 60)
     : 0;
   const isPending = transaction?.status === 'pending';
-  const canCancel = isPending && hoursPassed >= 24;
+  const canCancel = isPending && hoursPassed >= 2 / 60;
   const hoursLeft = Math.max(1, Math.ceil(24 - hoursPassed));
 
   // The server refunds exactly the amount of the original hold
