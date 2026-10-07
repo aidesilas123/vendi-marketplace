@@ -2,7 +2,7 @@
 
 // src/features/wallet/WithdrawPage.tsx
 //
-// Full-screen withdraw flow (replaces the bottom sheet):
+// Full-screen withdraw flow:
 //   form  → pick a bank (live list from Monnify) → account name is verified automatically
 //   pin   → create / confirm / verify the 4-digit transaction PIN
 //   success → receipt with "Share as image"
@@ -34,7 +34,12 @@ const QUICK_AMOUNTS = [1000, 5000, 10000];
 type Step = 'form' | 'pin' | 'success';
 type PinMode = 'create' | 'confirm' | 'verify';
 
+// `!` beats the app's global <button>/<input> styles (padding, height, borders, background)
 const FLAT_BTN = 'bg-transparent! border-0! shadow-none! p-0!';
+// Orange outline for the bank + account number fields
+const ORANGE_BORDER = 'border-2! border-solid! border-orange-500!';
+const ORANGE_FOCUS = 'focus:ring-4 focus:ring-orange-500/20';
+const CHIP = 'rounded-full! px-3.5! py-2.5! text-[13px]! font-semibold! shadow-none! border-0! disabled:opacity-40';
 
 /* -------------------------------------------------------------------------- */
 /*  PIN keypad                                                                 */
@@ -49,10 +54,10 @@ function PinPad({
   onDigit: (d: string) => void;
   onBackspace: () => void;
 }) {
-  const keyClass = `${FLAT_BTN} mx-auto flex h-16 w-16 items-center justify-center rounded-full! text-2xl font-bold active:bg-gray-200/70! dark:active:bg-white/10!`;
+  const keyClass = `${FLAT_BTN} mx-auto flex h-16 min-h-16 w-16 items-center justify-center rounded-full! text-2xl font-bold active:bg-gray-200/70! dark:active:bg-white/10!`;
   return (
     <>
-      <div className="my-10 flex justify-center gap-6">
+      <div className="my-12 flex justify-center gap-6">
         {[0, 1, 2, 3].map((i) => (
           <div
             key={i}
@@ -62,7 +67,7 @@ function PinPad({
           />
         ))}
       </div>
-      <div className="mx-auto grid max-w-[280px] grid-cols-3 gap-x-4 gap-y-5">
+      <div className="mx-auto grid max-w-[300px] grid-cols-3 gap-x-5 gap-y-6">
         {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((d) => (
           <button key={d} type="button" onClick={() => onDigit(d)} className={keyClass}>
             {d}
@@ -112,20 +117,20 @@ function BankPicker({
 
   return createPortal(
     <div className="fixed inset-0 z-[130] flex animate-fade-in flex-col bg-gray-50 text-gray-900 dark:bg-[#0b1120] dark:text-white">
-      <div className="flex shrink-0 items-center gap-1 px-4 py-4">
+      <div className="flex shrink-0 items-center gap-2 px-5 py-5">
         <button
           type="button"
           aria-label="Back"
           onClick={onClose}
-          className={`${FLAT_BTN} -ml-2 flex h-10 w-10 items-center justify-center rounded-full!`}
+          className={`${FLAT_BTN} -ml-2 flex h-11 min-h-11 w-11 items-center justify-center rounded-full!`}
         >
           <IonIcon icon={arrowBackOutline} className="text-2xl" />
         </button>
         <h2 className="text-xl font-black">Select bank</h2>
       </div>
 
-      <div className="shrink-0 px-4 pb-3">
-        <div className="flex items-center gap-2 rounded-2xl bg-gray-200/60 px-4 dark:bg-white/10">
+      <div className="shrink-0 px-5 pb-4">
+        <div className={`flex items-center gap-3 rounded-2xl bg-gray-200/60 px-4 dark:bg-white/10 ${ORANGE_BORDER}`}>
           <IonIcon icon={searchOutline} className="text-lg text-gray-500" />
           <input
             type="text"
@@ -137,34 +142,34 @@ function BankPicker({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-10" style={{ overscrollBehaviorY: 'contain' }}>
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-12" style={{ overscrollBehaviorY: 'contain' }}>
         {loading && !banks ? (
           <div className="animate-pulse space-y-1">
             {Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="my-3 h-4 w-3/5 rounded bg-gray-200 dark:bg-white/10" />
+              <div key={i} className="my-4 h-4 w-3/5 rounded bg-gray-200 dark:bg-white/10" />
             ))}
           </div>
         ) : error && !banks ? (
-          <div className="py-12 text-center">
-            <p className="text-sm font-semibold">Couldn&apos;t load banks</p>
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{friendlyError(error)}</p>
+          <div className="py-14 text-center">
+            <p className="text-base font-semibold">Couldn&apos;t load banks</p>
+            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">{friendlyError(error)}</p>
             <button
               type="button"
               onClick={onRetry}
-              className="mt-4 rounded-full! bg-orange-500! px-5 py-2 text-sm font-bold text-white! border-0! shadow-none!"
+              className="mt-6 h-12! min-h-12! rounded-full! bg-orange-500! px-8! py-0! text-sm! font-bold! text-white! border-0! shadow-none!"
             >
               Try again
             </button>
           </div>
         ) : filtered.length === 0 ? (
-          <p className="py-12 text-center text-sm text-gray-500 dark:text-gray-400">No banks found</p>
+          <p className="py-14 text-center text-sm text-gray-500 dark:text-gray-400">No banks found</p>
         ) : (
           filtered.map((bank) => (
             <button
               key={bank.code}
               type="button"
               onClick={() => onSelect(bank)}
-              className={`${FLAT_BTN} flex w-full items-center justify-between rounded-none! py-3.5 text-left text-sm font-semibold`}
+              className="flex w-full items-center justify-between rounded-none! bg-transparent! border-0! shadow-none! px-0! py-4! text-left text-sm font-semibold"
             >
               <span className="truncate pr-3">{bank.name}</span>
               {selected?.code === bank.code && <IonIcon icon={checkmarkOutline} className="text-lg text-orange-500" />}
@@ -226,6 +231,13 @@ export default function WithdrawPage({
   }, [resolveError]);
 
   const amountNum = Number(amount) || 0;
+  // Shown with thousands separators (70,000); `amount` itself stays the raw digits
+  const displayAmount = (() => {
+    if (!amount) return '';
+    const [whole, dec] = amount.split('.');
+    const wholeFmt = whole ? Number(whole).toLocaleString('en-NG') : '0';
+    return dec !== undefined ? `${wholeFmt}.${dec}` : wholeFmt;
+  })();
   const amountHint =
     amount && amountNum < MIN_WITHDRAWAL
       ? `Minimum withdrawal is ${formatNaira(MIN_WITHDRAWAL)}`
@@ -349,13 +361,13 @@ export default function WithdrawPage({
         footer={(close) => {
           if (step === 'form') {
             return (
-              <div className="mx-auto w-full max-w-md px-4 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] pt-3">
-                {/* `!` modifiers override the global button styles; h-16 / text-xl make it bigger */}
+              <div className="mx-auto w-full max-w-md px-5 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4">
+                {/* h-16 + min-h keep the button tall; `!` overrides the global button styles */}
                 <button
                   type="button"
                   onClick={handleContinue}
                   disabled={!canSubmit}
-                  className="h-16! w-full rounded-full! border-none! bg-orange-500! text-xl! font-black! text-white! shadow-[0_8px_30px_rgb(249,115,22,0.3)]! transition-all hover:bg-orange-600! disabled:bg-gray-300! disabled:shadow-none! dark:disabled:bg-gray-800!"
+                  className="h-16! min-h-16! w-full rounded-full! border-none! bg-orange-500! px-6! py-0! text-lg! font-black! text-white! shadow-[0_8px_30px_rgb(249,115,22,0.3)]! transition-all hover:bg-orange-600! disabled:bg-gray-300! disabled:shadow-none! dark:disabled:bg-gray-800!"
                 >
                   Process Withdrawal
                 </button>
@@ -364,12 +376,12 @@ export default function WithdrawPage({
           }
           if (step === 'success' && receipt) {
             return (
-              <div className="mx-auto w-full max-w-md space-y-2 px-6 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] pt-3">
+              <div className="mx-auto w-full max-w-md space-y-3 px-6 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4">
                 <ShareReceiptButton tx={receipt} />
                 <button
                   type="button"
                   onClick={close}
-                  className="h-12 w-full rounded-full! bg-transparent! text-base font-bold text-gray-900 shadow-none! border-0! dark:text-white"
+                  className="h-14! min-h-14! w-full rounded-full! bg-transparent! px-6! py-0! text-base! font-bold text-gray-900 shadow-none! border-0! dark:text-white"
                 >
                   Done
                 </button>
@@ -380,34 +392,36 @@ export default function WithdrawPage({
         }}
       >
         {step === 'form' && (
-          <div className="mx-auto w-full max-w-md px-4 pb-8">
+          <div className="mx-auto w-full max-w-md px-5 pb-12">
             {/* Amount */}
-            <div className="pt-2 text-center">
+            <div className="pt-4 text-center">
               <p className="text-sm text-gray-500 dark:text-gray-400">
                 Available balance <span className="font-bold text-gray-900 dark:text-white">{formatNaira(balance)}</span>
               </p>
-              <div className="mt-4 flex items-center justify-center gap-1">
-                <span className="text-4xl font-black text-gray-400">₦</span>
+              <div className="relative mt-6">
+                <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-base font-black text-orange-500">
+                  ₦
+                </span>
                 <input
                   type="text"
                   inputMode="decimal"
-                  value={amount}
+                  value={displayAmount}
                   onChange={(e) => handleAmountChange(e.target.value)}
                   placeholder="0.00"
                   aria-label="Amount to withdraw"
-                  className="w-full max-w-[220px] bg-transparent! text-center text-4xl font-black outline-none border-0! shadow-none!"
+                  className={`h-16 w-full rounded-2xl bg-gray-200/60 pl-10 pr-4 text-left text-lg font-semibold outline-none dark:bg-white/10 ${ORANGE_BORDER} ${ORANGE_FOCUS}`}
                 />
               </div>
-              <p className={`mt-1 h-4 text-xs font-medium text-red-500 ${amountHint ? '' : 'invisible'}`}>{amountHint || '.'}</p>
+              <p className={`mt-2 h-4 px-1 text-left text-xs font-medium text-red-500 ${amountHint ? '' : 'invisible'}`}>{amountHint || '.'}</p>
 
-              <div className="mt-3 flex justify-center gap-2">
+              <div className="mt-5 flex flex-wrap justify-center gap-2.5">
                 {QUICK_AMOUNTS.map((q) => (
                   <button
                     key={q}
                     type="button"
                     disabled={q > balance}
                     onClick={() => setAmount(String(q))}
-                    className="rounded-full! bg-gray-200/70! px-3.5 py-1.5 text-xs font-semibold text-gray-700! shadow-none! border-0! disabled:opacity-40 dark:bg-white/10! dark:text-gray-200!"
+                    className={`${CHIP} bg-gray-200/70! text-gray-700! dark:bg-white/10! dark:text-gray-200!`}
                   >
                     ₦{q.toLocaleString()}
                   </button>
@@ -416,7 +430,7 @@ export default function WithdrawPage({
                   type="button"
                   disabled={balance < MIN_WITHDRAWAL}
                   onClick={() => setAmount(String(Math.floor(balance * 100) / 100))}
-                  className="rounded-full! bg-orange-500/10! px-3.5 py-1.5 text-xs font-bold text-orange-500! shadow-none! border-0! disabled:opacity-40"
+                  className={`${CHIP} bg-orange-500/10! text-orange-500!`}
                 >
                   Max
                 </button>
@@ -424,21 +438,21 @@ export default function WithdrawPage({
             </div>
 
             {/* Recipient */}
-            <div className="mt-10 space-y-6">
+            <div className="mt-14 space-y-9">
               <div>
-                <label className="mb-2 block text-xs font-semibold text-gray-500 dark:text-gray-400">Bank</label>
+                <label className="mb-3 block text-xs font-semibold text-gray-500 dark:text-gray-400">Bank</label>
                 <button
                   type="button"
                   onClick={() => setPickerOpen(true)}
-                  className="flex h-14 w-full items-center justify-between rounded-2xl! bg-gray-200/60! px-4 text-left text-base font-semibold shadow-none! border-0! dark:bg-white/10!"
+                  className={`flex h-16! min-h-16! w-full items-center justify-between rounded-2xl! bg-gray-200/60! px-4! py-0! text-left text-base font-semibold shadow-none! dark:bg-white/10! ${ORANGE_BORDER}`}
                 >
-                  <span className={bank ? '' : 'text-gray-400'}>{bank ? bank.name : 'Select bank'}</span>
-                  <IonIcon icon={chevronForwardOutline} className="text-gray-400" />
+                  <span className={`truncate pr-3 ${bank ? '' : 'text-gray-400'}`}>{bank ? bank.name : 'Select bank'}</span>
+                  <IonIcon icon={chevronForwardOutline} className="shrink-0 text-gray-400" />
                 </button>
               </div>
 
               <div>
-                <label className="mb-2 block text-xs font-semibold text-gray-500 dark:text-gray-400">Account number</label>
+                <label className="mb-3 block text-xs font-semibold text-gray-500 dark:text-gray-400">Account number</label>
                 <input
                   type="text"
                   inputMode="numeric"
@@ -446,16 +460,21 @@ export default function WithdrawPage({
                   value={accountNumber}
                   onChange={(e) => setAccountNumber(e.target.value.replace(/\D/g, '').slice(0, 10))}
                   placeholder="0000000000"
-                  className="h-14 w-full rounded-2xl bg-gray-200/60 px-4 text-lg font-semibold tracking-widest outline-none dark:bg-white/10"
+                  className={`h-16 w-full rounded-2xl bg-gray-200/60 px-4 text-lg font-semibold tracking-widest outline-none dark:bg-white/10 ${ORANGE_BORDER} ${ORANGE_FOCUS}`}
                 />
-                <div className="mt-3 min-h-6 px-1">
+                <div className="mt-4 min-h-6 px-1">
                   {canResolve && resolving && (
                     <div className="h-4 w-40 animate-pulse rounded bg-gray-200 dark:bg-white/10" />
                   )}
                   {resolvedName && !resolving && (
-                    <p className="flex items-center gap-1.5 text-sm font-bold text-green-600 dark:text-green-400">
+                    <p className="flex items-center gap-2 text-sm font-bold text-green-600 dark:text-green-400">
                       <IonIcon icon={checkmarkCircle} className="text-base" />
                       <span className="truncate">{resolvedName}</span>
+                    </p>
+                  )}
+                  {canResolve && !resolving && !resolvedName && resolveError && (
+                    <p className="text-xs font-medium text-red-500">
+                      {friendlyError(resolveError, 'Could not verify this account')}
                     </p>
                   )}
                   {!bank && accountNumber.length === 10 && (
@@ -468,17 +487,17 @@ export default function WithdrawPage({
         )}
 
         {step === 'pin' && (
-          <div className="mx-auto flex w-full max-w-md flex-col items-center px-6 pb-10 pt-2 text-center">
+          <div className="mx-auto flex w-full max-w-md flex-col items-center px-6 pb-12 pt-4 text-center">
             <p className="text-sm text-gray-500 dark:text-gray-400">
               Sending <span className="font-bold text-gray-900 dark:text-white">{formatNaira(amountNum)}</span> to
             </p>
-            <p className="mt-1 text-base font-bold">{resolvedName}</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
+            <p className="mt-2 text-base font-bold">{resolvedName}</p>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {bank?.name} · {accountNumber}
             </p>
 
-            <h3 className="mt-10 text-lg font-black">{pinTitle}</h3>
-            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{pinHint}</p>
+            <h3 className="mt-12 text-lg font-black">{pinTitle}</h3>
+            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">{pinHint}</p>
 
             <PinPad pin={pin} onDigit={pressDigit} onBackspace={() => setPin((p) => p.slice(0, -1))} />
           </div>
@@ -487,7 +506,7 @@ export default function WithdrawPage({
         {step === 'success' && receipt && (
           <>
             <ReceiptContent tx={receipt} />
-            <p className="mx-auto max-w-xs px-6 pb-8 text-center text-xs text-gray-500 dark:text-gray-400">
+            <p className="mx-auto max-w-xs px-6 pb-10 pt-2 text-center text-xs leading-relaxed text-gray-500 dark:text-gray-400">
               Your bank transfer is being processed. This page updates once the bank confirms it.
             </p>
           </>

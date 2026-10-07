@@ -42,14 +42,15 @@ export default function AllTransactionsPage({
 
   return (
     <FullScreenPage title="All Transactions" onClosed={onClosed} onRefresh={onRefresh}>
-      <div className="mx-auto w-full max-w-md px-4 pb-16">
-        <div className="flex gap-2 pb-2">
+      <div className="mx-auto w-full max-w-md px-5 pb-20">
+        {/* min-h (not h-) because globals.css forces `button { height: auto !important }` */}
+        <div className="flex gap-3 pb-3 pt-1">
           {FILTERS.map((f) => (
             <button
               key={f.id}
               type="button"
               onClick={() => setFilter(f.id)}
-              className={`rounded-full! px-4 py-1.5 text-xs font-semibold border-0! shadow-none! ${
+              className={`min-h-10 rounded-full! px-5! py-2! text-[13px] font-semibold border-0! shadow-none! ${
                 filter === f.id
                   ? 'bg-orange-500! text-white!'
                   : 'bg-gray-200/70! text-gray-600! dark:bg-white/10! dark:text-gray-300!'
@@ -64,9 +65,9 @@ export default function AllTransactionsPage({
           <TransactionEmpty />
         ) : (
           groups.map(([label, txs]) => (
-            <section key={label} className="mt-4">
+            <section key={label} className="mt-7">
               <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400">{label}</h3>
-              <div className="mt-1">
+              <div className="mt-2">
                 {txs.map((tx) => (
                   <TransactionRow key={tx.id} tx={tx} onSelect={onSelect} />
                 ))}

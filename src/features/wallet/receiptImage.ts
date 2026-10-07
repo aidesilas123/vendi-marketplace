@@ -18,6 +18,13 @@ import {
 
 const FONT = '-apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
+// Watermark knobs: size of each "Vendi", spacing between them, and how faint they are (0 to 1)
+const WM_SIZE = 34;
+const WM_STEP_X = 210;
+const WM_STEP_Y = 130;
+const WM_ALPHA_CARD = 0.07;
+const WM_ALPHA_PAGE = 0.05;
+
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -26,6 +33,26 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.arcTo(x, y + h, x, y, r);
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
+}
+
+/** Tiles many small, tilted, faint "Vendi" marks across the whole canvas (staggered rows). */
+function drawWatermark(ctx: CanvasRenderingContext2D, W: number, H: number, alpha: number) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#F97316';
+  ctx.font = `800 ${WM_SIZE}px ${FONT}`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.translate(W / 2, H / 2);
+  ctx.rotate(-Math.PI / 9);
+  const reach = Math.hypot(W, H) / 2;
+  let row = 0;
+  for (let y = -reach; y <= reach; y += WM_STEP_Y, row++) {
+    for (let x = -reach + (row % 2) * (WM_STEP_X / 2); x <= reach; x += WM_STEP_X) {
+      ctx.fillText('Vendi', x, y);
+    }
+  }
+  ctx.restore();
 }
 
 /** Shrinks the font until the text fits, then falls back to an ellipsis. */
@@ -114,12 +141,20 @@ export async function renderReceiptBlob(tx: WalletTx): Promise<Blob> {
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Could not create receipt image');
 
-  // Page + card
+  // Page background + faint watermark
   ctx.fillStyle = '#FFF4EB';
   ctx.fillRect(0, 0, W, H);
+  drawWatermark(ctx, W, H, WM_ALPHA_PAGE);
+
+  // Card + watermark clipped inside it
   roundRect(ctx, CARD_X, 48, W - CARD_X * 2, H - 96, 48);
   ctx.fillStyle = '#FFFFFF';
   ctx.fill();
+  ctx.save();
+  roundRect(ctx, CARD_X, 48, W - CARD_X * 2, H - 96, 48);
+  ctx.clip();
+  drawWatermark(ctx, W, H, WM_ALPHA_CARD);
+  ctx.restore();
 
   // Brand row
   ctx.textBaseline = 'alphabetic';

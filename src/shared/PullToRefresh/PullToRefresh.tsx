@@ -2,21 +2,19 @@
 
 // src/shared/PullToRefresh/PullToRefresh.tsx
 //
-// A scroll container that gives any page:
-//   • rubber-band overscroll at the top AND bottom (works with or without onRefresh)
-//   • pull-to-refresh: the WHOLE page follows the finger down, the PullSpinner is revealed
-//     behind it, and when the refresh finishes the page eases gently back up
+// Pull-to-refresh where ONLY the spinner moves:
+//   • dragging a finger down at the top of the page pulls a round spinner badge down from the top
+//     edge. The page itself never moves.
+//   • release past the threshold → the badge rests near the top and spins while onRefresh runs
+//   • when the refresh finishes the badge slides smoothly back up and out of sight
+//   • (optional) a small elastic bounce at the very bottom of the page
 //
 // Usage:
 //   const ptr = useRef<PullToRefreshHandle>(null);
-//   <PullToRefresh ref={ptr} onRefresh={() => mutate()} className="h-[100dvh]">
-//     ...page content...
-//   </PullToRefresh>
-//   ptr.current?.refresh();   // run the same animated refresh from a button
+//   <PullToRefresh ref={ptr} onRefresh={() => mutate()} className="h-[100dvh]">...</PullToRefresh>
+//   ptr.current?.refresh();   // plays the same spinner animation from code
 //
-// IMPORTANT: while the page is displaced it has a CSS transform, so `position: fixed`
-// elements rendered INSIDE it would be positioned relative to it. Render modals, sheets and
-// full-screen pages as siblings of <PullToRefresh>, not children.
+// Render modals / sheets / full-screen pages as siblings of <PullToRefresh>, not children.
 
 import React, {
   forwardRef,
@@ -30,7 +28,7 @@ import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 
 export type PullToRefreshHandle = {
-  /** Plays the pull animation + spinner and runs onRefresh. */
+  /** Plays the spinner animation and runs onRefresh. */
   refresh: () => Promise<void>;
   scrollToTop: () => void;
 };
@@ -42,20 +40,25 @@ type Props = {
   className?: string;
   /** Extra classes for the scrolling element (text colour, etc.). */
   contentClassName?: string;
-  /** Must be opaque: it hides the spinner until the page is pulled down. */
+  /** Background of the page. Keep it opaque. */
   bgClassName?: string;
-  /** Resting offset (px) needed before releasing triggers a refresh. */
+  /** How far (px) the spinner must be pulled before releasing triggers a refresh. */
   threshold?: number;
+  /** Small elastic bounce when you drag past the bottom of the page. Default true. */
+  bottomBounce?: boolean;
 };
 
-const HOLD = 64; // where the page rests while refreshing
-const RUBBER_DIM = 600; // larger = stretches further before it feels tight
-const RESISTANCE = 0.8; // larger = follows the finger more closely
+const BADGE = 44; // spinner badge size (px)
+const HIDDEN_Y = -(BADGE + 16); // badge position when fully hidden above the page
+const HOLD = 76; // pull distance where the badge rests while refreshing
+const MAX_PULL = 130; // the badge never travels further than this
+const RUBBER_DIM = 600;
+const RESISTANCE = 1; // larger = badge follows the finger more closely
 const MIN_SPIN_MS = 700; // keeps the spinner from flashing on fast refreshes
-const SETTLE_MS = 520; // slide-back duration (matches SPRING below)
-const SPRING = `transform ${SETTLE_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`;
+const SETTLE_MS = 450; // slide-away duration
+const EASE = 'cubic-bezier(0.22, 1, 0.36, 1)';
 
-// iOS-style rubber band: the further you pull, the harder it resists.
+// The further you pull, the harder it resists.
 const rubber = (distance: number) =>
   (1 - 1 / ((distance * RESISTANCE) / RUBBER_DIM + 1)) * RUBBER_DIM;
 
@@ -67,27 +70,37 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
     contentClassName = '',
     bgClassName = 'bg-gray-50 dark:bg-[#0b1120]',
     threshold = HOLD,
+    bottomBounce = true,
   },
   ref
 ) {
   const scrollerRef = useRef<HTMLDivElement>(null);
-  const [offset, setOffset] = useState(0);
+  const [pull, setPull] = useState(0); // spinner travel (px)
+  const [bounce, setBounce] = useState(0); // bottom elastic offset (px, negative)
   const [dragging, setDragging] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  const offsetRef = useRef(0);
+  const pullRef = useRef(0);
+  const bounceRef = useRef(0);
   const refreshingRef = useRef(false);
   const onRefreshRef = useRef(onRefresh);
   const thresholdRef = useRef(threshold);
+  const bottomBounceRef = useRef(bottomBounce);
 
   useEffect(() => {
     onRefreshRef.current = onRefresh;
     thresholdRef.current = threshold;
-  }, [onRefresh, threshold]);
+    bottomBounceRef.current = bottomBounce;
+  }, [onRefresh, threshold, bottomBounce]);
 
-  const applyOffset = useCallback((value: number) => {
-    offsetRef.current = value;
-    setOffset(value);
+  const applyPull = useCallback((value: number) => {
+    pullRef.current = value;
+    setPull(value);
+  }, []);
+
+  const applyBounce = useCallback((value: number) => {
+    bounceRef.current = value;
+    setBounce(value);
   }, []);
 
   const runRefresh = useCallback(async () => {
@@ -95,7 +108,8 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
     refreshingRef.current = true;
     setRefreshing(true);
     setDragging(false);
-    applyOffset(HOLD);
+    applyBounce(0);
+    applyPull(HOLD);
 
     try {
       await Promise.all([
@@ -103,15 +117,15 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
         new Promise((resolve) => setTimeout(resolve, MIN_SPIN_MS)),
       ]);
     } catch {
-      // The caller surfaces its own errors (toast). We only need to slide back.
+      // The caller shows its own errors (toast). We only need to slide away.
     }
 
-    applyOffset(0); // gentle slide back
+    applyPull(0); // slides up and out
     setTimeout(() => {
       refreshingRef.current = false;
       setRefreshing(false);
     }, SETTLE_MS);
-  }, [applyOffset]);
+  }, [applyBounce, applyPull]);
 
   useImperativeHandle(
     ref,
@@ -131,7 +145,7 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
     let startX = 0;
     let startY = 0;
     let lastY = 0;
-    let anchorY = 0; // finger position where the rubber band engaged
+    let anchorY = 0;
     let horizontal = false;
     let crossed = false;
 
@@ -157,14 +171,14 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
         const dx = Math.abs(t.clientX - startX);
         const dy = Math.abs(y - startY);
         if (dx > 8 && dx > dy) {
-          horizontal = true; // let horizontal swipes (carousels, etc.) alone
+          horizontal = true; // leave horizontal swipes alone
           return;
         }
         const step = y - lastY;
-        if (step > 0 && atTop()) {
+        if (step > 0 && atTop() && onRefreshRef.current) {
           mode = 'top';
           anchorY = lastY;
-        } else if (step < 0 && atBottom()) {
+        } else if (step < 0 && atBottom() && bottomBounceRef.current) {
           mode = 'bottom';
           anchorY = lastY;
         }
@@ -173,16 +187,15 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
       if (mode === 'top') {
         const distance = y - anchorY;
         if (distance <= 0) {
-          // finger went back above where it engaged → hand control back to normal scrolling
-          applyOffset(0);
+          applyPull(0);
           setDragging(false);
           mode = 'idle';
         } else {
           if (e.cancelable) e.preventDefault();
           setDragging(true);
-          const next = rubber(distance);
-          applyOffset(next);
-          const isPast = next >= thresholdRef.current && !!onRefreshRef.current;
+          const next = Math.min(rubber(distance), MAX_PULL);
+          applyPull(next);
+          const isPast = next >= thresholdRef.current;
           if (isPast && !crossed) {
             crossed = true;
             Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
@@ -193,13 +206,13 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
       } else if (mode === 'bottom') {
         const distance = anchorY - y;
         if (distance <= 0) {
-          applyOffset(0);
+          applyBounce(0);
           setDragging(false);
           mode = 'idle';
         } else {
           if (e.cancelable) e.preventDefault();
           setDragging(true);
-          applyOffset(-rubber(distance));
+          applyBounce(-Math.min(rubber(distance), 90));
         }
       }
 
@@ -211,20 +224,13 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
       mode = 'idle';
       if (refreshingRef.current) return;
 
-      if (
-        wasMode === 'top' &&
-        onRefreshRef.current &&
-        offsetRef.current >= thresholdRef.current
-      ) {
+      if (wasMode === 'top' && onRefreshRef.current && pullRef.current >= thresholdRef.current) {
         void runRefresh();
         return;
       }
-      if (offsetRef.current !== 0) {
-        setDragging(false);
-        applyOffset(0); // springs back
-      } else {
-        setDragging(false);
-      }
+      setDragging(false);
+      if (pullRef.current !== 0) applyPull(0);
+      if (bounceRef.current !== 0) applyBounce(0);
     };
 
     el.addEventListener('touchstart', onStart, { passive: true });
@@ -237,33 +243,37 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
       el.removeEventListener('touchend', onEnd);
       el.removeEventListener('touchcancel', onEnd);
     };
-  }, [applyOffset, runRefresh]);
+  }, [applyBounce, applyPull, runRefresh]);
 
-  const pulledDown = offset > 0;
-  const progress = Math.min(1, offset / threshold);
+  const progress = Math.min(1, pull / HOLD);
 
   return (
     <div className={`relative overflow-hidden ${bgClassName} ${className}`}>
-      {/* Spinner sits behind the page and is revealed as the page is pulled down */}
+      {/* The spinner badge: the only thing that moves while you pull */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 flex justify-center"
+        className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center"
         style={{
-          paddingTop: 18,
-          opacity: pulledDown ? Math.min(1, offset / 36) : 0,
-          transition: dragging ? 'none' : 'opacity 300ms ease-out',
+          transform: `translate3d(0, ${HIDDEN_Y + Math.min(pull, MAX_PULL)}px, 0)`,
+          opacity: refreshing ? 1 : Math.min(1, pull / 24),
+          transition: dragging ? 'none' : `transform ${SETTLE_MS}ms ${EASE}, opacity 200ms ease-out`,
         }}
       >
-        <PullSpinner progress={progress} spinning={refreshing} />
+        <div
+          className="flex items-center justify-center rounded-full bg-white shadow-lg dark:bg-[#1e293b]"
+          style={{ width: BADGE, height: BADGE }}
+        >
+          <PullSpinner progress={progress} spinning={refreshing} />
+        </div>
       </div>
 
       <div
         ref={scrollerRef}
         className={`h-full overflow-y-auto ${bgClassName} ${contentClassName}`}
         style={{
-          // `none` at rest so position:fixed descendants (if any) behave normally
-          transform: offset !== 0 ? `translate3d(0, ${offset}px, 0)` : 'none',
-          transition: dragging ? 'none' : SPRING,
+          // Only the bottom bounce ever moves the page. `none` at rest so fixed descendants behave.
+          transform: bounce !== 0 ? `translate3d(0, ${bounce}px, 0)` : 'none',
+          transition: dragging ? 'none' : `transform ${SETTLE_MS}ms ${EASE}`,
           overscrollBehaviorY: 'contain',
           WebkitOverflowScrolling: 'touch',
         }}

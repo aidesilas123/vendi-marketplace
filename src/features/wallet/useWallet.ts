@@ -52,6 +52,18 @@ export function useSessionUserId() {
 /*  Wallet + transactions                                                      */
 /* -------------------------------------------------------------------------- */
 
+// Only ever one create-wallet call in flight per user (focus events, double renders, taps…)
+const creating = new Map<string, Promise<Wallet>>();
+
+function createWalletOnce(userId: string): Promise<Wallet> {
+  let pending = creating.get(userId);
+  if (!pending) {
+    pending = callEdge<Wallet>('create-wallet').finally(() => creating.delete(userId));
+    creating.set(userId, pending);
+  }
+  return pending;
+}
+
 async function fetchWalletData(userId: string): Promise<WalletData> {
   const { data, error } = await supabase
     .from('wallets')
@@ -61,7 +73,7 @@ async function fetchWalletData(userId: string): Promise<WalletData> {
   if (error) throw new Error(error.message);
 
   let wallet = data as Wallet | null;
-  if (!wallet) wallet = await callEdge<Wallet>('create-wallet');
+  if (!wallet) wallet = await createWalletOnce(userId);
 
   // wallet_id OR user_id: a row written without a wallet_id still shows up.
   const { data: txs, error: txError } = await supabase
@@ -83,8 +95,11 @@ export function useWallet() {
     (key: string[]) => fetchWalletData(key[1]),
     {
       revalidateOnFocus: true,
+      focusThrottleInterval: 15_000,
       dedupingInterval: 4000,
-      errorRetryCount: 2,
+      // A failed load (e.g. the bank provider is down) must NOT silently retry in a loop.
+      // The user retries with the Retry button / pull-to-refresh.
+      shouldRetryOnError: false,
       keepPreviousData: true,
     }
   );
@@ -120,7 +135,7 @@ export function useWallet() {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Live bank list (replaces the hard-coded NIGERIAN_BANKS array)              */
+/*  Live bank list                                                             */
 /* -------------------------------------------------------------------------- */
 
 const BANKS_CACHE_KEY = 'vendi_banks_v1';
