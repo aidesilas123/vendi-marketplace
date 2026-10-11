@@ -29,6 +29,16 @@ const AXIS_LOCK_PX = 10; // dead zone before we decide horizontal vs vertical
 const ACTIVITY_KEY = 'activity';
 const EMPTY: any[] = [];
 
+// Wrapper to prevent Next.js hydration errors from Ionicons injecting classes/roles
+function ClientIcon({ icon, className }: { icon: string; className?: string }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) {
+    return <span className={className} style={{ width: '1em', height: '1em', display: 'inline-block' }} />;
+  }
+  return <IonIcon icon={icon} className={className} />;
+}
+
 /**
  * SWR fetcher. Returns null when signed out, and throws on failure so SWR
  * keeps showing the last good data instead of overwriting it.
@@ -312,7 +322,7 @@ export default function TransactionsPage() {
         <div className="sticky top-0 z-40 bg-gray-50 dark:bg-[#0a1120]">
           <div className="flex items-center h-12 px-4">
             <button onClick={() => router.back()} className="-ml-2 w-10 h-10 flex items-center justify-center rounded-full bg-transparent text-gray-900 dark:text-white transition-colors active:scale-95">
-              <IonIcon icon={chevronBackOutline} className="text-2xl" />
+              <ClientIcon icon={chevronBackOutline} className="text-2xl" />
             </button>
             <h1 className="text-base font-black pr-8">My Activity</h1>
           </div>

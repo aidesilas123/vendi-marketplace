@@ -1,5 +1,11 @@
 @import "tailwindcss";
 @custom-variant dark (&:is(.dark *));
+@theme {
+  --color-background: #f9fafb;
+}
+.dark {
+  --color-background: #0b1120;
+}
 
 /* Hide scrollbar for the horizontal category chips */
 .scrollbar-hide::-webkit-scrollbar {

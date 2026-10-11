@@ -24,11 +24,21 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
+// Where to go after login. Only same-app paths are allowed (no open redirects).
+const getSafeRedirect = () => {
+  if (typeof window === 'undefined') return '/';
+  const redirect = new URLSearchParams(window.location.search).get('redirect');
+  return redirect && redirect.startsWith('/') && !redirect.startsWith('//')
+    ? redirect
+    : '/';
+};
+
+
   // Auto-redirect if already logged in
   useEffect(() => {
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (session) router.replace('/');
+      if (session) router.replace(getSafeRedirect());
     };
     checkSession();
   }, [router]);
@@ -44,7 +54,7 @@ export default function LoginPage() {
       setError(signInError.message);
       setIsLoading(false);
     } else {
-      window.location.href = '/';
+      window.location.href = getSafeRedirect();
     }
   };
 

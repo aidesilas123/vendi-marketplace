@@ -42,7 +42,7 @@ export default function AllTransactionsPage({
 
   return (
     <FullScreenPage title="All Transactions" onClosed={onClosed} onRefresh={onRefresh}>
-      <div className="mx-auto w-full max-w-md px-5 pb-20">
+      <div className="mx-auto w-full max-w-md px-5 pb-[calc(env(safe-area-inset-bottom,0px)+80px)]">
         {/* min-h (not h-) because globals.css forces `button { height: auto !important }` */}
         <div className="flex gap-3 pb-3 pt-1">
           {FILTERS.map((f) => (

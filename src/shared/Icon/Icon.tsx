@@ -1,12 +1,46 @@
 "use client";
-import dynamic from 'next/dynamic';
+
+import React, { useEffect, useState } from 'react';
+import { IonIcon as BaseIonIcon } from '@ionic/react';
+
+export interface IconProps {
+  icon: string;
+  className?: string;
+  style?: React.CSSProperties;
+  color?: string;
+  size?: string;
+  slot?: string;
+  suppressHydrationWarning?: boolean;
+}
 
 // IonIcon renders a Stencil custom element (<ion-icon>) that attaches
 // role="img" and class="md hydrated" asynchronously in the browser.
-// Server-rendering it always produces a hydration mismatch, so we
-// force it to mount client-side only.
-const IonIcon = dynamic(() => import('@ionic/react').then(mod => mod.IonIcon), {
-  ssr: false,
-});
+// Rendering it on SSR causes hydration mismatch errors.
+// This component mounts on client only, rendering a stable placeholder on SSR.
+export const IonIcon: React.FC<IconProps> = ({ icon, className, style, ...rest }) => {
+  const [mounted, setMounted] = useState(false);
 
-export default IonIcon;
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) {
+    return (
+      <span
+        aria-hidden="true"
+        className={className}
+        style={{
+          width: '1em',
+          height: '1em',
+          display: 'inline-block',
+          verticalAlign: 'middle',
+          ...style,
+        }}
+      />
+    );
+  }
+
+  return <BaseIonIcon icon={icon} className={className} style={style} {...rest} />;
+};
+
+export default IonIcon;

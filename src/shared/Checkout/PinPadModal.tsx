@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { IonIcon } from '@ionic/react';
 import { closeOutline, backspaceOutline } from 'ionicons/icons';
 
@@ -19,10 +19,38 @@ const EASE = 'cubic-bezier(0.4, 0, 0.2, 1)';
 const SLIDE = `transform 300ms ${EASE}, translate 300ms ${EASE}`;
 
 export const PinPadModal = ({ isOpen, onClose, pinMode, pin, totalCharge, onPinPress, onBackspace }: PinPadModalProps) => {
+  // Support physical keyboards on desktop, iPads, and Android tablets
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key >= '0' && e.key <= '9') {
+        onPinPress(e.key);
+      } else if (e.key === 'Backspace') {
+        onBackspace();
+      } else if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onPinPress, onBackspace, onClose]);
+
+  const modalTitle =
+    pinMode === 'create'
+      ? 'Create Transaction PIN'
+      : pinMode === 'confirm'
+        ? 'Confirm Your PIN'
+        : 'Enter Transaction PIN';
+
   return (
     <>
       {isOpen && <div className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-sm transition-opacity" onClick={onClose} />}
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={modalTitle}
         className={`fixed bottom-0 left-0 right-0 z-[100] bg-white dark:bg-[#0f172a] rounded-t-3xl shadow-2xl ${
           isOpen ? 'translate-y-0 visible' : 'translate-y-full invisible pointer-events-none'
         }`}
@@ -32,14 +60,17 @@ export const PinPadModal = ({ isOpen, onClose, pinMode, pin, totalCharge, onPinP
           transition: isOpen ? SLIDE : `${SLIDE}, visibility 0s linear 300ms`,
         }}
       >
-        <div className="p-6 pb-12 max-w-md mx-auto">
+        <div className="p-6 pb-[calc(env(safe-area-inset-bottom,0px)+2.5rem)] max-w-md mx-auto">
           <div className="flex justify-between items-center mb-6">
             <h3 className="text-xl font-black">
-              {pinMode === 'create' ? 'Create Transaction PIN' : 
-               pinMode === 'confirm' ? 'Confirm Your PIN' : 
-               'Enter Transaction PIN'}
+              {modalTitle}
             </h3>
-            <button onClick={onClose} className="p-2 bg-gray-100 dark:bg-gray-800 rounded-full">
+            <button 
+              type="button"
+              aria-label="Close PIN modal"
+              onClick={onClose} 
+              className="p-2 bg-gray-100 dark:bg-gray-800 rounded-full active:scale-95 transition-transform"
+            >
               <IonIcon icon={closeOutline} />
             </button>
           </div>
@@ -63,26 +94,30 @@ export const PinPadModal = ({ isOpen, onClose, pinMode, pin, totalCharge, onPinP
             ))}
           </div>
 
-          <div className="grid grid-cols-3 gap-y-6 gap-x-4 max-w-[280px] mx-auto">
+          <div className="grid grid-cols-3 gap-y-6 gap-x-4 max-w-[280px] mx-auto select-none">
             {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => (
               <button 
                 key={num} 
+                type="button"
                 onClick={() => onPinPress(num.toString())}
-                className="w-16 h-16 rounded-full flex items-center justify-center text-3xl font-black mx-auto hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                className="w-16 h-16 rounded-full flex items-center justify-center text-3xl font-black mx-auto hover:bg-gray-100 dark:hover:bg-gray-800 active:scale-95 active:bg-gray-200 dark:active:bg-gray-700 transition-all"
               >
                 {num}
               </button>
             ))}
             <div /> 
             <button 
+              type="button"
               onClick={() => onPinPress('0')}
-              className="w-16 h-16 rounded-full flex items-center justify-center text-3xl font-black mx-auto hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+              className="w-16 h-16 rounded-full flex items-center justify-center text-3xl font-black mx-auto hover:bg-gray-100 dark:hover:bg-gray-800 active:scale-95 active:bg-gray-200 dark:active:bg-gray-700 transition-all"
             >
               0
             </button>
             <button 
+              type="button"
+              aria-label="Backspace"
               onClick={onBackspace}
-              className="w-16 h-16 rounded-full flex items-center justify-center text-2xl mx-auto hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-gray-500"
+              className="w-16 h-16 rounded-full flex items-center justify-center text-2xl mx-auto hover:bg-gray-100 dark:hover:bg-gray-800 active:scale-95 active:bg-gray-200 dark:active:bg-gray-700 transition-all text-gray-500"
             >
               <IonIcon icon={backspaceOutline} />
             </button>

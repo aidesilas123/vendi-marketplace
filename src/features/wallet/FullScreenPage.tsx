@@ -69,8 +69,8 @@ export function FullScreenPage({
       }`}
       style={{ zIndex }}
     >
-      {/* Header: no border, no shadow, straight under the status bar */}
-      <div className="flex shrink-0 items-center gap-1 px-4 py-4">
+      {/* Header: no border, no shadow, safe-area clearance for the status bar */}
+      <div className="flex shrink-0 items-center gap-1 px-4 pb-4 pt-[max(env(safe-area-inset-top),16px)]">
         <button
           type="button"
           aria-label="Back"

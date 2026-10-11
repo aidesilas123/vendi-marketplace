@@ -22,12 +22,26 @@ export const CheckoutBottomSheet = ({
   const [dragY, setDragY] = useState(0);
   const startY = useRef<number | null>(null);
 
-  // Reset drag position when opened/closed
+  // Reset drag position when opened/closed and lock body scroll
   useEffect(() => {
-    if (!isOpen) setDragY(0);
-  }, [isOpen]);
+    if (!isOpen) {
+      setDragY(0);
+      return;
+    }
 
-  // Touch logic for drag-to-close
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      document.body.style.overflow = 'unset';
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [isOpen, onClose]);
+
+  // Touch logic for drag-to-close on handle/header
   const handleTouchStart = (e: React.TouchEvent) => {
     startY.current = e.touches[0].clientY;
   };
@@ -43,7 +57,7 @@ export const CheckoutBottomSheet = ({
   };
 
   const handleTouchEnd = () => {
-    if (dragY > 100) {
+    if (dragY > 80) {
       onClose();
     } else {
       setDragY(0);
@@ -68,27 +82,40 @@ export const CheckoutBottomSheet = ({
       
       {/* The Bottom Sheet */}
       <div 
-        className="absolute bottom-0 left-0 right-0 bg-white dark:bg-[#0f172a] rounded-t-[32px] shadow-2xl will-change-transform"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Checkout summary"
+        className="absolute bottom-0 left-0 right-0 bg-white dark:bg-[#0f172a] rounded-t-[32px] shadow-2xl will-change-transform max-h-[90vh] flex flex-col"
         style={{
           transform: isOpen ? `translateY(${dragY > 0 ? dragY : 0}px)` : 'translateY(100%)',
           transition: dragY > 0 ? 'none' : 'transform 0.35s cubic-bezier(0.32, 0.72, 0, 1)'
         }}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
       >
-        <div className="p-6 pb-10 max-w-xl mx-auto">
-          
+        {/* Swipe Handle Header Area */}
+        <div 
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          className="pt-4 px-6 select-none cursor-grab active:cursor-grabbing shrink-0"
+        >
           {/* Drag Handle Indicator */}
-          <div className="w-12 h-1.5 bg-gray-300 dark:bg-gray-700 rounded-full mx-auto mb-6" />
+          <div className="w-12 h-1.5 bg-gray-300 dark:bg-gray-700 rounded-full mx-auto mb-4" />
 
           {/* Header */}
-          <div className="flex justify-between items-center mb-6">
+          <div className="flex justify-between items-center mb-2">
             <h3 className="text-xl font-black text-gray-900 dark:text-white">Checkout summary</h3>
-            <button onClick={onClose} className="p-2 -mr-2 text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors bg-transparent border-none outline-none">
+            <button 
+              type="button"
+              aria-label="Close summary"
+              onClick={onClose} 
+              className="p-2 -mr-2 text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors bg-transparent border-none outline-none"
+            >
               <IonIcon icon={closeOutline} className="text-3xl" />
             </button>
           </div>
+        </div>
+
+        <div className="p-6 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+2.5rem)] max-w-xl mx-auto w-full overflow-y-auto">
           
           {/* Order Summary (No Background Card) */}
           <div className="mb-8">

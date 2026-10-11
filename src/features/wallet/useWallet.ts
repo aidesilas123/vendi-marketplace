@@ -110,7 +110,7 @@ export function useWallet() {
   useEffect(() => {
     if (!walletId) return;
     const channel = supabase
-      .channel(`wallet-${walletId}`)
+      .channel(`wallet-${walletId}-${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'wallets', filter: `id=eq.${walletId}` }, () => {
         void mutate();
       })

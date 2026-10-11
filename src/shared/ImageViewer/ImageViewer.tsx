@@ -1,6 +1,10 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { IonIcon, isPlatform } from '@ionic/react';
-import { closeOutline } from 'ionicons/icons';
+import IonIcon from '@/shared/Icon/Icon';
+import { closeOutline, downloadOutline } from 'ionicons/icons';
+import { registerBackHandler } from '@/shared/HardwareBackButton';
+import { Capacitor } from '@capacitor/core';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { hapticImpact, ImpactStyle } from '@/shared/haptics';
 
 interface ImageViewerProps {
   images: string[];
@@ -278,15 +282,11 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
   useEffect(() => {
     if (!isOpen) return;
 
-    // Native app (Capacitor / Cordova): hook into Ionic's back-button chain.
-    // Priority 101 beats overlays (100), menus (99) and the router (0).
-    if (isPlatform('hybrid')) {
-      const onIonBack = (ev: Event) => {
-        (ev as CustomEvent).detail.register(101, () => dismiss(1));
-      };
-      document.addEventListener('ionBackButton', onIonBack);
-      return () => document.removeEventListener('ionBackButton', onIonBack);
-    }
+    // Capacitor native hardware back button
+    const unregister = registerBackHandler(() => {
+      dismiss(1);
+      return true;
+    });
 
     // Mobile web / PWA: give the viewer its own history entry so "back" pops that entry
     const popped = { current: false };
@@ -298,6 +298,7 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
     };
     window.addEventListener('popstate', onPop);
     return () => {
+      unregister();
       window.removeEventListener('popstate', onPop);
       // Closed via the X / swipe → remove the entry we added
       if (!popped.current && window.history.state && window.history.state.__imageViewer) {
@@ -524,6 +525,51 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
 
   /* ───────────────────────── view ───────────────────────── */
 
+  const [savingToDevice, setSavingToDevice] = useState(false);
+  const handleSaveToDevice = async (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const currentSrc = images[g.current.index];
+    if (!currentSrc || savingToDevice) return;
+    setSavingToDevice(true);
+    hapticImpact(ImpactStyle.Light);
+    try {
+      if (Capacitor.isNativePlatform()) {
+        const response = await fetch(currentSrc);
+        const blob = await response.blob();
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          try {
+            const base64 = (reader.result as string).split(',')[1];
+            const fileName = `vendi_photo_${Date.now()}.jpg`;
+            await Filesystem.writeFile({
+              path: fileName,
+              data: base64,
+              directory: Directory.Documents,
+            });
+            hapticImpact(ImpactStyle.Medium);
+          } catch (err) {
+            console.error('[ImageViewer] Native file save failed:', err);
+          } finally {
+            setSavingToDevice(false);
+          }
+        };
+        reader.readAsDataURL(blob);
+      } else {
+        const a = document.createElement('a');
+        a.href = currentSrc;
+        a.download = `vendi_photo_${Date.now()}.jpg`;
+        a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setSavingToDevice(false);
+      }
+    } catch (err) {
+      console.error('[ImageViewer] Save failed:', err);
+      setSavingToDevice(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -540,7 +586,7 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
       onPointerCancel={onPointerCancel}
     >
       {/* Background (fades while dragging to dismiss) */}
-      <div ref={backdropRef} className="absolute inset-0 bg-gray-50 dark:bg-[#0a1120]" />
+      <div ref={backdropRef} className="absolute inset-0 bg-black/95 backdrop-blur-xl" />
 
       {/* Content (moves/scales while dragging to dismiss) */}
       <div ref={contentRef} className="absolute inset-0 will-change-transform">
@@ -568,17 +614,32 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
         </div>
       </div>
 
-      {/* Close button + dots (fade while dragging) */}
+      {/* Close button, save to device button + dots (fade while dragging) */}
       <div ref={chromeRef}>
-        <div className="pointer-events-none absolute left-0 right-0 top-0 z-20 flex justify-end p-4 pt-safe">
+        <div 
+          className="pointer-events-none absolute left-0 right-0 top-0 z-20 flex items-center justify-between px-4 pb-2"
+          style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
+        >
+          <div className="pointer-events-auto flex items-center">
+            <button
+              type="button"
+              data-no-gesture
+              aria-label="Save to device"
+              onClick={handleSaveToDevice}
+              disabled={savingToDevice}
+              className="!w-11 !h-11 !min-w-[44px] !min-h-[44px] !aspect-square !rounded-full bg-black/50 hover:bg-black/70 text-white flex items-center justify-center active:scale-95 transition-transform"
+            >
+              <IonIcon icon={downloadOutline} className="text-2xl drop-shadow-sm pointer-events-none" />
+            </button>
+          </div>
           <button
             type="button"
             data-no-gesture
             aria-label="Close image viewer"
             onClick={() => dismiss(1)}
-            className="pointer-events-auto border-none bg-transparent p-2 text-gray-900 outline-none dark:text-white"
+            className="pointer-events-auto !w-11 !h-11 !min-w-[44px] !min-h-[44px] !aspect-square !rounded-full bg-black/50 hover:bg-black/70 text-white flex items-center justify-center active:scale-95 transition-transform"
           >
-            <IonIcon icon={closeOutline} className="text-4xl drop-shadow-sm" />
+            <IonIcon icon={closeOutline} className="text-2xl drop-shadow-sm pointer-events-none" />
           </button>
         </div>
 
@@ -598,3 +659,5 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
     </div>
   );
 };
+
+export default ImageViewer;

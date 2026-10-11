@@ -31,6 +31,8 @@ export type PullToRefreshHandle = {
   /** Plays the spinner animation and runs onRefresh. */
   refresh: () => Promise<void>;
   scrollToTop: () => void;
+  /** Raw scroll container, for measurements like "is near bottom". */
+  scrollEl: () => HTMLDivElement | null;
 };
 
 type Props = {
@@ -46,6 +48,8 @@ type Props = {
   threshold?: number;
   /** Small elastic bounce when you drag past the bottom of the page. Default true. */
   bottomBounce?: boolean;
+  /** Fired when the inner scroller scrolls. */
+  onScroll?: (e: React.UIEvent<HTMLDivElement>) => void;
 };
 
 const BADGE = 44; // spinner badge size (px)
@@ -65,6 +69,7 @@ const rubber = (distance: number) =>
 export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function PullToRefresh(
   {
     onRefresh,
+    onScroll,
     children,
     className = '',
     contentClassName = '',
@@ -132,6 +137,7 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
     () => ({
       refresh: runRefresh,
       scrollToTop: () => scrollerRef.current?.scrollTo({ top: 0, behavior: 'smooth' }),
+      scrollEl: () => scrollerRef.current,
     }),
     [runRefresh]
   );
@@ -269,6 +275,7 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
 
       <div
         ref={scrollerRef}
+        onScroll={onScroll}
         className={`h-full overflow-y-auto ${bgClassName} ${contentClassName}`}
         style={{
           // Only the bottom bounce ever moves the page. `none` at rest so fixed descendants behave.

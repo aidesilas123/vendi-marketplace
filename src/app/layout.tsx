@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import IonicProvider from "./providers";
 import { NetworkListener } from "@/shared/Modal/NetworkListener";
 import { AppShell } from "@/shared/Navigation/AppShell"; 
@@ -9,7 +8,7 @@ import { PageTransition } from "@/shared/PageTransition";
 import { GlobalToastHost } from "@/shared/Toast/Toast";
 // 1. IONIC CSS MUST BE IMPORTED FIRST
 import '@ionic/react/css/core.css';
-import '@ionic/react/css/normalize.css';
+
 import '@ionic/react/css/structure.css';
 import '@ionic/react/css/typography.css';
 import '@ionic/react/css/padding.css';
@@ -30,9 +29,6 @@ export const viewport: Viewport = {
   viewportFit: "cover",
 };
 
-// Initialize the Inter font for ultra-crisp mobile readability
-const inter = Inter({ subsets: ["latin"] });
-
 export const metadata: Metadata = {
   title: "ABU Vendi",
   description: "Secure multi-campus trading platform",
@@ -42,7 +38,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning>
       {/* antialiased makes the font incredibly smooth on all devices */}
-      <body className={`${inter.className} antialiased`}>
+      <body className="font-sans antialiased">
         <HardwareBackButton />
         <StatusBarManager />
         <NetworkListener />

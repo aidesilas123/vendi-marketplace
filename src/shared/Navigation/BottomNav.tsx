@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import IonIcon from '@/shared/Icon/Icon';
 import { 
   homeOutline, home, 
@@ -12,10 +12,14 @@ import {
   storefrontOutline, storefront
 } from 'ionicons/icons';
 import { useHideOnScroll } from '@/shared/hooks/useHideOnScroll';
+import { useSessionUserId } from '@/features/wallet/useWallet';
 
 export const BottomNav = () => {
   const pathname = usePathname();
+  const router = useRouter();
   const isVisible = useHideOnScroll('main-scroll-container');
+  // undefined = session still being checked, null = signed out, string = signed in
+  const sessionUserId = useSessionUserId();
 
   const navItems = [
     { name: "Feed", route: "/", outline: homeOutline, solid: home },
@@ -30,6 +34,14 @@ export const BottomNav = () => {
       const main = document.getElementById('main-scroll-container');
       if (main) main.scrollTo({ top: 0, behavior: 'smooth' });
       window.dispatchEvent(new Event('refresh-feed'));
+    }
+  };
+
+  // Wallet needs an account: taps while signed out go to login, then back to Wallet.
+  const handleProtectedClick = (e: React.MouseEvent, route: string) => {
+    if (route === '/wallet' && sessionUserId === null) {
+      e.preventDefault();
+      router.push('/login?redirect=/wallet');
     }
   };
 
@@ -48,13 +60,13 @@ export const BottomNav = () => {
         
         {/* Left Icons */}
         {navItems.slice(0, 2).map((item) => {
-          const isActive = pathname === item.route || pathname.startsWith(`${item.route}?`); 
+          const isActive = pathname === item.route || (item.route !== '/' && pathname.startsWith(item.route));
           return (
-            <Link key={item.name} href={item.route} onClick={(e) => handleHomeClick(e, item.route)} className="flex flex-col items-center justify-center gap-1 w-16">
+            <Link key={item.name} href={item.route} onClick={(e) => handleHomeClick(e, item.route)} aria-current={isActive ? 'page' : undefined} className="flex flex-col items-center justify-center gap-1 w-16">
               <span suppressHydrationWarning className="flex items-center justify-center">
                 <IonIcon icon={isActive ? item.solid : item.outline} className={`text-[22px] transition-colors ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`} />
               </span>
-              <span className={`text-[9px] font-black uppercase tracking-wider ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`}>{item.name}</span>
+              <span className={`text-[10px] font-black uppercase tracking-wider ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`}>{item.name}</span>
             </Link>
           );
         })}
@@ -76,13 +88,13 @@ export const BottomNav = () => {
 
         {/* Right Icons */}
         {navItems.slice(2, 4).map((item) => {
-          const isActive = pathname === item.route || pathname.startsWith(`${item.route}?`);
+          const isActive = pathname === item.route || (item.route !== '/' && pathname.startsWith(item.route));
           return (
-            <Link key={item.name} href={item.route} className="flex flex-col items-center justify-center gap-1 w-16">
+            <Link key={item.name} href={item.route} onClick={(e) => handleProtectedClick(e, item.route)} aria-current={isActive ? 'page' : undefined} className="flex flex-col items-center justify-center gap-1 w-16">
               <span suppressHydrationWarning className="flex items-center justify-center">
                 <IonIcon icon={isActive ? item.solid : item.outline} className={`text-[22px] transition-colors ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`} />
               </span>
-              <span className={`text-[9px] font-black uppercase tracking-wider ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`}>{item.name}</span>
+              <span className={`text-[10px] font-black uppercase tracking-wider ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`}>{item.name}</span>
             </Link>
           );
         })}

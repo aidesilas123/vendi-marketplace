@@ -1,134 +1,105 @@
 "use client";
 /*
   ============================================================================
-  THIS SESSION — REALTIME PRESENCE, READ RECEIPTS, REPORT ROUTING, SEARCH,
-  DRAGGABLE WAVEFORM SEEKING, AND PRODUCTION POLISH
+  THIS SESSION — SWR, PORTAL CROPPING FIX, SHARED PULL-TO-REFRESH, IN-APP
+  CAMERA / GALLERY / CROP PREVIEW, PRODUCTION POLISH
   ============================================================================
-  1. TYPING & RECORDING INDICATOR BUBBLES
-     A small `w-fit` (never full-width) status bubble now renders at the
-     bottom of the chat feed, left-aligned like an incoming message, when
-     the partner is typing (animated 3-dot bubble) or recording a voice
-     note (pulsing mic bubble). `w-fit` is what keeps it tiny instead of
-     stretching to the feed's width.
-  2. SUPABASE REALTIME BROADCASTS (TYPING/RECORDING STATUS)
-     The channel used for postgres_changes is now also used for a
-     `broadcast` event called `activity`. `broadcastActivity('typing' |
-     'recording' | null)` sends `{ userId, activity }` over the socket.
-     Typing broadcasts auto-clear after 2.5s of no keystrokes; recording
-     broadcasts clear on stop/cancel/send. On the receiving side, a
-     watchdog timeout auto-clears a stale partner activity after 6s in
-     case a `null` broadcast is ever missed (e.g. tab closed mid-action).
-  3. HEADER INTEGRATION
-     The "Secure Deal Room" subtitle under the partner's name now swaps to
-     an orange, pulsing "typing…" label, or a mic icon + "recording…"
-     label, driven by the same `partnerActivity` state as the feed bubble.
-  4. WHATSAPP-STYLE READ RECEIPTS
-     A new `useEffect` scans `messages` whenever it changes. Any message
-     where `receiver_id === currentUser.id` and `status !== 'read'` gets
-     optimistically flipped to `read` locally, then a single batched
-     `UPDATE ... WHERE id IN (...)` is fired at Supabase. `renderTicks`
-     already mapped sent/delivered/read to single-grey / double-grey /
-     double-orange ticks — that mapping is unchanged, just now actually
-     gets fed real `read` statuses.
-  5. "REPORT TO VENDI" PAYLOAD ROUTING
-     `handleReportAction` replaces the old inert menu item. It takes
-     `messages.slice(-10)`, JSON-stringifies it into
-     `sessionStorage['vendi_report_context']` along with the transaction
-     ref and partner id, then routes to `/report`.
-  6. DELETED-MESSAGE ALIGNMENT
-     "This message was deleted" pills are no longer centered — they now
-     sit right-aligned for your own deleted messages and left-aligned for
-     the partner's, matching normal bubble alignment.
-  7. DRAGGABLE VOICE-NOTE WAVEFORM
-     The waveform now supports press-and-drag scrubbing, not just a single
-     click: `onPointerDown`/`onPointerMove`/`onPointerUp` on the waveform
-     track compute the pointer's position as a percentage of the track
-     width and seek there live as you drag, starting playback if the note
-     wasn't already loaded. All waveform pointer handlers `stopPropagation`
-     so they never trigger the bubble's long-press/swipe-to-reply gesture.
-  8. FUNCTIONAL SEARCH BAR
-     A search icon in the header toggles a search input. Typing filters
-     text messages (case-insensitive substring match), shows an "N / M"
-     match counter, and up/down buttons jump between matches — each jump
-     smooth-scrolls to and highlights (`ring-2 ring-orange-400`) that
-     bubble via a `messageRefs` map keyed by message id.
-  9. RECORDING RESPONSIVENESS POLISH
-     Drag-left-to-cancel now fades the mic button's opacity proportionally
-     as you drag toward the cancel threshold (instead of a hard cutoff),
-     and both the lock and cancel thresholds fire a single short haptic
-     pulse (guarded so it only fires once per gesture) so the "handoff"
-     feels tactile on devices that support `navigator.vibrate`.
-  ⚠️ REQUIRED DATABASE / BACKEND NOTES
-     - Read receipts and the report payload assume `messages.status` and
-       `messages.receiver_id` already exist (they did in the prior version).
-     - Typing/recording presence requires no schema change — it rides the
-       existing Supabase Realtime channel as an ephemeral `broadcast`
-       event, not a table write.
-     - Unread-count badges (orange, and not re-showing once read) live on
-       your conversations-LIST screen, not this per-conversation chat
-       screen — that file wasn't provided, so it isn't touched here. Happy
-       to wire that up too if you share it.
+  1. SWR FOR MESSAGE HISTORY
+     History loads through `useSWR(['chat-history', txRef])`. Server truth
+     lives in the SWR cache; in-flight optimistic messages (temp_ ids) live
+     in separate `optimisticMsgs` state so a revalidation can never wipe a
+     pending upload. All realtime INSERT/UPDATE, read receipts, edits and
+     deletes write through `updateMessages()` (mutate with revalidate:false).
+     Temp→saved transitions drop the temp and append the saved row with an
+     id-dedup guard against the realtime INSERT echo.
+  2. PULLSPINNER LOADING OVERLAY
+     While the session or history is loading, a full-screen overlay shows
+     the shared PullSpinner ("Loading chat…") — same spinner as the inbox.
+  3. SECURITY NOTICE — BRAND-NEW CHATS ONLY
+     The "Security Notice" pill + escrow warning now render only when
+     `messages.length === 0` (and history finished loading). Any message
+     in the conversation hides them.
+  4. RUBBER-BAND PULL ON THE FEED
+     The shared <PullToRefresh> wrapper (src/shared/PullToRefresh) owns the
+     feed: pull down at the top and only the spinner badge moves — header,
+     composer and messages never shift. Release past the threshold runs an
+     SWR history revalidation with a haptic tick and a min 700ms spin.
+  5. IN-APP CAMERA (CameraCapture)
+     Camera icon opens a custom capture UI: live getUserMedia preview,
+     gallery shortcut, big capture button, front/back switch. No video
+     mode, no filters. Falls back gracefully if the camera is unavailable.
+     Desktop browser: camera icon opens the file picker directly instead.
+  6. GALLERY GRID (GalleryPicker)
+     Attach icon opens an in-app "Recents" photo grid — pictures only, no
+     videos/files — via @capgo/capacitor-photo-library (native). On web /
+     without the plugin it falls back to the system file picker.
+  7. CROP PREVIEW (PhotoPreview)
+     Both capture and gallery pick land on one preview screen in app theme
+     (light/dark aware, not hardcoded): close button, crop toggle
+     (react-easy-crop), save button. No filters/stickers/text. Save emits
+     a JPEG data URL into the normal upload pipeline.
+  8. PERF
+     - `renderedMessages` stays memoized; typing never re-renders the feed.
+     - Auto-scroll sticks to bottom only when already near it.
+     - Chat images lazy-load. SSR-safe Icon wrapper (no hydration mismatch).
   ============================================================================
-  PRESERVED FROM PRIOR SESSIONS (see below for full detail in-line):
-  - Attach/camera inputs appended to the DOM before .click() (Chrome device
-    toolbar fix), cleaned up on file pick or window refocus.
-  - max-w-[...] on the outer flex-row child + min-w-0 + break-all to stop
-    long unbroken strings from overflowing/misaligning bubbles.
-  - Message list wrapped in useMemo so typing in the composer never
-    re-renders the message list.
-  - Per-message waveform bar heights cached in a ref.
-  - Pointer-capture guards (try/catch) around every setPointerCapture /
-    releasePointerCapture call, including the new gesture and waveform
-    handlers added this session.
-  - Long-press / right-click message menu (Reply / Copy / Edit / Delete),
-    swipe-right-to-reply, reply preview banner, edit banner.
-  - Optimistic local previews + real upload-progress rings for image/video/
-    voice notes via XMLHttpRequest (fetch() can't report upload progress).
-  - Video renders in the same bubble/thumbnail/tap-to-fullscreen pattern as
-    images.
-  - Avatar/name tap routes to /profile?id=... (previously nested inside the
-    "go back" button by mistake).
+  PRESERVED FROM PRIOR SESSIONS:
+  - Typing/recording presence via Supabase Realtime broadcast + watchdog.
+    NOTE: channel is now the STABLE `chat_${txRef}` — a per-client suffix
+    (e.g. Date.now()) breaks presence because broadcasts only reach clients
+    on the SAME channel topic.
+  - WhatsApp-style read receipts (batched UPDATE ... WHERE id IN ...).
+  - Report-to-Vendi payload routing via sessionStorage.
+  - Deleted-message alignment, draggable waveform seeking, functional
+    in-chat search, haptic recording thresholds, long-press/swipe gestures,
+    optimistic uploads with XHR progress rings.
+  ============================================================================
+  FIX 2026-10-11 — INIT INFINITE LOOP:
+  - The init effect previously listed `currentUser` in its deps while calling
+    `setCurrentUser()` inside → infinite re-init loop (new realtime channel +
+    fresh queries every cycle), which hung the page on the loading spinner.
+  - Init effect deps are now `[txRef, partnerId, router, initAttempt]` only;
+    realtime handlers read `currentUserRef` instead of the stale closure.
+  - Init is wrapped in try/catch + a 20s safety timeout: any failure surfaces
+    an error UI with a Retry button instead of spinning forever.
+  FIX 2026-10-11 — PORTAL REMOVED:
+  - The document.body portal was blanking the page (loader painted but
+    header/feed/composer never appeared). Rendering in-place instead.
+  - NOTE: the portal originally escaped PageTransition's transformed ancestor
+    which cropped `fixed` content on mobile. If mobile cropping returns,
+    revisit with a non-portal approach (e.g. normal-flow layout).
   ============================================================================
 */
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import useSWR from 'swr';
 import { supabase } from '@/lib/supabase';
 import { Avatar } from '@/shared/Avatar';
 import { Badge } from '@/shared/Badge';
-import { Button } from '@/shared/Button';
-import { IonIcon } from '@ionic/react';
+import IonIcon from '@/shared/Icon/Icon';
+import { PullSpinner } from '@/shared/Loaders/PullSpinner';
+import { PullToRefresh, type PullToRefreshHandle } from '@/shared/PullToRefresh/PullToRefresh';
+import { CameraCapture } from './components/CameraCapture';
+import { GalleryPicker } from './components/GalleryPicker';
+import { PhotoPreview } from './components/PhotoPreview';
+import { ImageViewer } from '@/shared/ImageViewer/ImageViewer';
+import { VoiceNotePlayer } from './components/VoiceNotePlayer';
+import { hapticImpact, ImpactStyle } from '@/shared/haptics';
+import {
+  chevronBackOutline, sendOutline, micOutline, cameraOutline, attachOutline,
+  playOutline, pauseOutline, closeOutline, trashOutline, lockClosedOutline,
+  checkmarkOutline, checkmarkDoneOutline, timeOutline, searchOutline,
+  chevronUpOutline, chevronDownOutline, ellipsisVerticalOutline, flagOutline,
+  copyOutline, pencilOutline, trashBinOutline, arrowUndoOutline, shieldCheckmarkOutline,
+  downloadOutline, imageOutline
+} from 'ionicons/icons';
 import { Capacitor } from '@capacitor/core';
 import { VoiceRecorder } from 'capacitor-voice-recorder';
-import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
-import {
-  chevronBackOutline,
-  chevronUpOutline,
-  chevronDownOutline,
-  ellipsisVerticalOutline,
-  cameraOutline,
-  micOutline,
-  sendOutline,
-  attachOutline,
-  checkmarkOutline,
-  checkmarkDoneOutline,
-  playOutline,
-  pauseOutline,
-  trashOutline,
-  shieldCheckmarkOutline,
-  flagOutline,
-  closeOutline,
-  timeOutline,
-  lockClosedOutline,
-  arrowUndoOutline,
-  pencilOutline,
-  copyOutline,
-  trashBinOutline,
-  searchOutline
-} from 'ionicons/icons';
+import { registerBackHandler } from '@/shared/HardwareBackButton';
 
 type RecordState = 'idle' | 'holding' | 'locked' | 'paused';
 type SelectedMedia = { url: string; type: 'image' | 'video' };
-type ReplyTarget = { id: string; type: string; content: string; senderLabel: string };
+type ReplyTarget = { id: string; type: string; content: string; senderLabel: string; mediaUrl?: string };
 type MenuAnchor = { x: number; y: number };
 type PartnerActivity = 'typing' | 'recording' | null;
 
@@ -200,7 +171,47 @@ export default function DealRoomChat() {
 
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [partnerInfo, setPartnerInfo] = useState<any>(null);
-  const [messages, setMessages] = useState<any[]>([]);
+  // Ref mirror of currentUser for realtime handlers — the init effect must
+  // NOT depend on currentUser state, or setCurrentUser() inside it loops forever.
+  const currentUserRef = useRef<any>(null);
+  // Init failure surfacing: never leave the user staring at a spinner forever.
+  const [initError, setInitError] = useState<string | null>(null);
+  const [initAttempt, setInitAttempt] = useState(0);
+
+  /* ------------------------------------------------------------------ */
+  /*  Messages via SWR. Server truth lives in the SWR cache; in-flight   */
+  /*  optimistic messages (temp_ ids) live in separate local state so a   */
+  /*  revalidation can never wipe them while uploading.                  */
+  /* ------------------------------------------------------------------ */
+  const fetchHistory = useCallback(async ([, ref]: [string, string]) => {
+    const { data, error } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('transaction_ref', ref)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    return (data ?? []) as any[];
+  }, []);
+  const {
+    data: serverMessages,
+    isLoading: historyLoading,
+    mutate,
+  } = useSWR(txRef ? ['chat-history', txRef] : null, fetchHistory, {
+    revalidateOnFocus: false,
+    dedupingInterval: 20000,
+  });
+  const [optimisticMsgs, setOptimisticMsgs] = useState<any[]>([]);
+  const messages = useMemo(
+    () => [...(serverMessages ?? []), ...optimisticMsgs],
+    [serverMessages, optimisticMsgs]
+  );
+  /** setMessages replacement: writes through the SWR cache, no refetch. */
+  const updateMessages = useCallback(
+    (fn: (prev: any[]) => any[]) => {
+      void mutate((prev: any[] | undefined) => fn(prev ?? []), { revalidate: false });
+    },
+    [mutate]
+  );
   const [messageText, setMessageText] = useState('');
   const [showMenu, setShowMenu] = useState(false);
   const [partnerActivity, setPartnerActivity] = useState<PartnerActivity>(null);
@@ -232,6 +243,27 @@ export default function DealRoomChat() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchIndex, setSearchIndex] = useState(0);
 
+  // --- Camera / gallery / preview overlays ---
+  const [showCamera, setShowCamera] = useState(false);
+  const [showGallery, setShowGallery] = useState(false);
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [viewingImages, setViewingImages] = useState<string[]>([]);
+  const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
+  const [loadedMedia, setLoadedMedia] = useState<Record<string, boolean>>({});
+  const initialScrollDone = useRef(false);
+  const swipedTriggeredRef = useRef(false);
+
+  const showCameraRef = useRef(false);
+  showCameraRef.current = showCamera;
+  const showGalleryRef = useRef(false);
+  showGalleryRef.current = showGallery;
+  const previewSrcRef = useRef<string | null>(null);
+  previewSrcRef.current = previewSrc;
+  const isPoppedByHistory = useRef(false);
+
+  // --- Pull-to-refresh on the feed (shared <PullToRefresh> wrapper) ---
+  const ptrRef = useRef<PullToRefreshHandle>(null);
+
   const showError = (title: string, message: string) => setModalConfig({ isOpen: true, title, message, type: 'error' });
 
   const updateState = (newState: RecordState) => {
@@ -256,95 +288,183 @@ export default function DealRoomChat() {
 
   // 1. INITIALIZATION & WEBSOCKET
   useEffect(() => {
-    if (!txRef) return;
-    const uniqueChannelName = `chat_${txRef}_${Date.now()}`;
+    if (!txRef) {
+      router.replace('/messages');
+      return;
+    }
+    let cancelled = false;
+    // Safety net: if init hasn't produced a user after 20s, surface an error
+    // with a retry button instead of spinning forever.
+    const safetyTimeout = setTimeout(() => {
+      if (!cancelled && !currentUserRef.current) {
+        setInitError('Loading is taking too long. Check your connection and try again.');
+      }
+    }, 20000);
+
+    // Stable channel name shared by both participants: typing/recording
+    // broadcasts only reach clients subscribed to the SAME channel topic,
+    // so a per-client suffix (Date.now()) would silently break presence.
+    const uniqueChannelName = `chat_${txRef}`;
     const chatChannel = supabase.channel(uniqueChannelName);
     chatChannelRef.current = chatChannel;
 
     const initializeChat = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return router.push('/login');
+      try {
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+        if (userError) throw userError;
+        if (!user) { router.push('/login'); return; }
 
-      const { data: userProfile, error: profileError } = await supabase
-        .from('users')
-        .select('id, full_name, avatar_url')
-        .eq('id', user.id)
-        .single();
-
-      if (profileError) {
-        console.warn('[Chat] Could not load your profile row from `users` (check table/column names and RLS policies):', profileError.message);
-      }
-
-      setCurrentUser(userProfile || {
-        id: user.id,
-        full_name: user.user_metadata?.full_name,
-        avatar_url: user.user_metadata?.avatar_url
-      });
-
-      if (partnerId) {
-        const { data: partnerData, error: partnerError } = await supabase
+        const { data: userProfile, error: profileError } = await supabase
           .from('users')
-          .select('id, full_name, avatar_url, is_verified')
-          .eq('id', partnerId)
+          .select('id, full_name, avatar_url')
+          .eq('id', user.id)
           .single();
 
-        if (partnerError) {
-          console.warn("[Chat] Could not load the other user's profile (usually an RLS policy blocking reads of other users' rows):", partnerError.message);
+        if (profileError) {
+          console.warn('[Chat] Could not load your profile row from `users` (check table/column names and RLS policies):', profileError.message);
         }
-        if (partnerData) setPartnerInfo(partnerData);
-      }
 
-      const { data: history, error } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('transaction_ref', txRef)
-        .order('created_at', { ascending: true });
+        if (cancelled) return;
+        const me = userProfile || {
+          id: user.id,
+          full_name: user.user_metadata?.full_name,
+          avatar_url: user.user_metadata?.avatar_url
+        };
+        currentUserRef.current = me;
+        setCurrentUser(me);
+        setInitError(null);
 
-      if (!error && history) setMessages(history);
+        if (partnerId) {
+          const { data: partnerData, error: partnerError } = await supabase
+            .from('users')
+            .select('id, full_name, avatar_url, is_verified')
+            .eq('id', partnerId)
+            .single();
 
-      chatChannel.on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `transaction_ref=eq.${txRef}` },
-        (payload: any) => {
-          setMessages((prev) => {
-             if (prev.find(m => m.id === payload.new.id)) return prev;
-             return [...prev, payload.new];
-          });
-        }
-      ).on(
-        // Keep edits/deletes made from other devices/tabs in sync.
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'messages', filter: `transaction_ref=eq.${txRef}` },
-        (payload: any) => {
-          setMessages((prev) => prev.map((m) => m.id === payload.new.id ? { ...m, ...payload.new } : m));
-        }
-      ).on(
-        // Presence: partner's typing/recording activity broadcast.
-        'broadcast',
-        { event: 'activity' },
-        (payload: any) => {
-          const { userId, activity } = payload?.payload || {};
-          if (!partnerId || userId !== partnerId) return;
-          setPartnerActivity(activity || null);
-          if (partnerActivityWatchdogRef.current) clearTimeout(partnerActivityWatchdogRef.current);
-          if (activity) {
-            partnerActivityWatchdogRef.current = setTimeout(() => setPartnerActivity(null), PARTNER_ACTIVITY_WATCHDOG_MS);
+          if (partnerError) {
+            console.warn("[Chat] Could not load the other user's profile (usually an RLS policy blocking reads of other users' rows):", partnerError.message);
           }
+          if (!cancelled && partnerData) setPartnerInfo(partnerData);
         }
-      ).subscribe();
+
+        // History is loaded by SWR (see fetchHistory above) — no manual fetch here.
+
+        chatChannel.on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'messages', filter: `transaction_ref=eq.${txRef}` },
+          (payload: any) => {
+            updateMessages((prev) => {
+               if (prev.find(m => m.id === payload.new.id)) return prev;
+               return [...prev, payload.new];
+            });
+            const meNow = currentUserRef.current;
+            if (meNow && payload.new.receiver_id === meNow.id) {
+              chatChannel.send({ type: 'broadcast', event: 'messages_read', payload: { ids: [payload.new.id] } });
+              supabase.from('messages').update({ status: 'read' }).eq('id', payload.new.id);
+            }
+          }
+        ).on(
+          // Keep edits/deletes made from other devices/tabs in sync.
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'messages', filter: `transaction_ref=eq.${txRef}` },
+          (payload: any) => {
+            updateMessages((prev) => prev.map((m) => m.id === payload.new.id ? { ...m, ...payload.new } : m));
+          }
+        ).on(
+          // Instant Peer-to-Peer Realtime Broadcast for zero-latency incoming messages
+          'broadcast',
+          { event: 'new_message' },
+          (payload: any) => {
+            const newMsg = payload?.payload;
+            if (!newMsg) return;
+            updateMessages((prev) => {
+              if (prev.find(m => m.id === newMsg.id)) return prev;
+              return [...prev, newMsg];
+            });
+            const meNow = currentUserRef.current;
+            if (meNow && newMsg.receiver_id === meNow.id) {
+              chatChannel.send({ type: 'broadcast', event: 'messages_read', payload: { ids: [newMsg.id] } });
+              supabase.from('messages').update({ status: 'read' }).eq('id', newMsg.id);
+            }
+          }
+        ).on(
+          // Live read receipts broadcast
+          'broadcast',
+          { event: 'messages_read' },
+          (payload: any) => {
+            const { ids } = payload?.payload || {};
+            if (Array.isArray(ids)) {
+              updateMessages((prev) => prev.map((m) => ids.includes(m.id) ? { ...m, status: 'read' } : m));
+            }
+          }
+        ).on(
+          // Live delivered ticks broadcast
+          'broadcast',
+          { event: 'messages_delivered' },
+          (payload: any) => {
+            const { ids } = payload?.payload || {};
+            if (Array.isArray(ids)) {
+              updateMessages((prev) => prev.map((m) => ids.includes(m.id) && m.status !== 'read' ? { ...m, status: 'delivered' } : m));
+            }
+          }
+        ).on(
+          // Presence: partner's typing/recording activity broadcast.
+          'broadcast',
+          { event: 'activity' },
+          (payload: any) => {
+            const { userId, activity } = payload?.payload || {};
+            if (!partnerId || userId !== partnerId) return;
+            setPartnerActivity(activity || null);
+            if (partnerActivityWatchdogRef.current) clearTimeout(partnerActivityWatchdogRef.current);
+            if (activity) {
+              partnerActivityWatchdogRef.current = setTimeout(() => setPartnerActivity(null), PARTNER_ACTIVITY_WATCHDOG_MS);
+            }
+          }
+        ).subscribe();
+      } catch (err: any) {
+        console.error('[Chat] Initialization failed:', err);
+        if (!cancelled) setInitError(err?.message || 'Could not load this chat. Please try again.');
+      }
     };
 
     initializeChat();
 
     return () => {
+      cancelled = true;
+      clearTimeout(safetyTimeout);
       supabase.removeChannel(chatChannel);
       chatChannelRef.current = null;
       if (partnerActivityWatchdogRef.current) clearTimeout(partnerActivityWatchdogRef.current);
     };
-  }, [txRef, partnerId, router]);
+  }, [txRef, partnerId, router, initAttempt]);
 
-  const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  useEffect(() => { scrollToBottom(); }, [messages]);
+  const scrollToBottom = (smooth = true) =>
+    messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
+
+  // Stick to bottom only when the user is already near it — never yank them
+  // away from older messages when a read receipt or realtime update lands.
+  const isNearBottom = () => {
+    const feed = ptrRef.current?.scrollEl();
+    if (!feed) return true;
+    return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 140;
+  };
+
+  // Immediate auto-scroll on opening chats to bottom messages
+  useEffect(() => {
+    if (!historyLoading && messages.length > 0) {
+      if (!initialScrollDone.current) {
+        initialScrollDone.current = true;
+        scrollToBottom(false);
+        requestAnimationFrame(() => scrollToBottom(false));
+      } else if (isNearBottom()) {
+        scrollToBottom(true);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, historyLoading]);
+
+  // Pull-to-refresh on the feed is handled by the shared <PullToRefresh>
+  // wrapper (see feed JSX below) — onRefresh revalidates the SWR history.
 
   useEffect(() => {
     if (recordingDuration >= MAX_RECORDING_SECONDS && (recordState === 'holding' || recordState === 'locked')) {
@@ -397,7 +517,7 @@ export default function DealRoomChat() {
     );
     if (unread.length === 0) return;
     const ids = unread.map((m) => m.id);
-    setMessages((prev) => prev.map((m) => (ids.includes(m.id) ? { ...m, status: 'read' } : m)));
+    updateMessages((prev) => prev.map((m) => (ids.includes(m.id) ? { ...m, status: 'read' } : m)));
     supabase.from('messages').update({ status: 'read' }).in('id', ids).then(({ error }: any) => {
       if (error) {
         console.error('[Chat] Failed to mark messages as read on the server:', error.message);
@@ -427,9 +547,9 @@ export default function DealRoomChat() {
   const getPreviewLabel = (msg: any): string => {
     if (msg.is_deleted) return 'This message was deleted';
     if (msg.message_type === 'text') return msg.content || '';
-    if (msg.message_type === 'image') return '📷 Photo';
-    if (msg.message_type === 'video') return '🎥 Video';
-    if (msg.message_type === 'audio') return '🎤 Voice message';
+    if (msg.message_type === 'image') return msg.content && msg.content !== 'Photo' ? msg.content : 'Photo';
+    if (msg.message_type === 'video') return 'Video';
+    if (msg.message_type === 'audio') return 'Voice message';
     return msg.content || '';
   };
 
@@ -447,9 +567,11 @@ export default function DealRoomChat() {
       id: msg.id,
       type: msg.message_type,
       content: getPreviewLabel(msg),
-      senderLabel: msg.sender_id === currentUser?.id ? 'You' : (partnerInfo?.full_name || 'Them')
+      senderLabel: msg.sender_id === currentUser?.id ? 'You' : (partnerInfo?.full_name || 'Them'),
+      mediaUrl: msg.media_url
     });
     setOpenMenuFor(null);
+    hapticImpact(ImpactStyle.Light);
     textareaRef.current?.focus();
   };
 
@@ -481,7 +603,7 @@ export default function DealRoomChat() {
 
   const handleDeleteMessage = async (msg: any) => {
     setOpenMenuFor(null);
-    setMessages((prev) => prev.map((m) => m.id === msg.id ? { ...m, is_deleted: true, content: '', media_url: null } : m));
+    updateMessages((prev) => prev.map((m) => m.id === msg.id ? { ...m, is_deleted: true, content: '', media_url: null } : m));
     const { error } = await supabase.from('messages').update({
       is_deleted: true, content: '', media_url: null
     }).eq('id', msg.id);
@@ -503,9 +625,6 @@ export default function DealRoomChat() {
     }
   };
 
-  // Same defensive pattern as the mic button (stopPropagation + try/catch
-  // guarded releasePointerCapture) so this gesture can never reproduce
-  // the "No active pointer with the given id" crash.
   const handleBubblePointerDown = (msg: any) => (e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation();
     gestureStartRef.current = { x: e.clientX, y: e.clientY };
@@ -513,12 +632,12 @@ export default function DealRoomChat() {
     swipeTriggeredRef.current = false;
     setSwipeMsgId(msg.id);
     setSwipeX(0);
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
     clearLongPress();
     longPressTimerRef.current = setTimeout(() => {
       longPressFiredRef.current = true;
       openMessageMenu(msg, e.clientX, e.clientY);
-      if (navigator.vibrate) navigator.vibrate(15);
+      hapticImpact(ImpactStyle.Medium);
     }, LONG_PRESS_MS);
   };
 
@@ -531,17 +650,20 @@ export default function DealRoomChat() {
       e.stopPropagation();
       const clamped = Math.min(dx, SWIPE_MAX_PX);
       setSwipeX(clamped);
-      swipeTriggeredRef.current = clamped >= SWIPE_TRIGGER_PX;
+      const isPastTrigger = clamped >= SWIPE_TRIGGER_PX;
+      if (!swipeTriggeredRef.current && isPastTrigger) {
+        hapticImpact(ImpactStyle.Light);
+      }
+      swipeTriggeredRef.current = isPastTrigger;
     }
   };
 
   const handleBubblePointerUp = (msg: any) => (e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation();
     clearLongPress();
-    try {
-      const target = e.currentTarget;
-      if (target.hasPointerCapture(e.pointerId)) target.releasePointerCapture(e.pointerId);
-    } catch (err) {}
+    // hasPointerCapture() itself throws NotFoundError for a dead pointer id,
+    // so just attempt the release directly inside try/catch.
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
     if (swipeTriggeredRef.current && !longPressFiredRef.current) {
       handleReplyMessage(msg);
     }
@@ -581,12 +703,54 @@ export default function DealRoomChat() {
     ) : null
   );
 
+  const scrollToMessage = (msgId: string) => {
+    const el = document.getElementById(`msg-${msgId}`) || messageRefs.current[msgId];
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedMsgId(msgId);
+      setTimeout(() => setHighlightedMsgId(null), 1800);
+      hapticImpact(ImpactStyle.Light);
+    }
+  };
+
   const renderReplyQuote = (msg: any) => {
     if (!msg.reply_to_id) return null;
+    const targetMsg = messages.find((m) => m.id === msg.reply_to_id);
+    const isImage = msg.reply_to_type === 'image' || targetMsg?.message_type === 'image';
+    const isAudio = msg.reply_to_type === 'audio' || targetMsg?.message_type === 'audio';
+    const thumbUrl = targetMsg?.media_url || (msg as any).reply_to_media_url;
+
     return (
-      <div className="mb-1.5 pl-2 py-1 pr-2 border-l-[3px] !border-orange-500/70 bg-black/5 dark:bg-white/10 !rounded-md max-w-full min-w-0">
-        <p className="text-[11px] font-black !text-orange-600 dark:!text-orange-400 truncate">{msg.reply_to_sender_label || 'Message'}</p>
-        <p className="text-[12px] text-gray-600 dark:text-gray-300 truncate">{msg.reply_to_content}</p>
+      <div
+        onClick={(e) => {
+          e.stopPropagation();
+          scrollToMessage(msg.reply_to_id);
+        }}
+        className="mb-1.5 pl-2 py-1 pr-2 border-l-[3px] !border-orange-500/70 bg-black/5 dark:bg-white/10 !rounded-md max-w-full min-w-0 flex items-center justify-between gap-2 cursor-pointer active:opacity-75 transition-opacity"
+      >
+        <div className="flex flex-col overflow-hidden min-w-0">
+          <p className="text-[11px] font-black !text-orange-600 dark:!text-orange-400 truncate">
+            {msg.reply_to_sender_label || 'Message'}
+          </p>
+          <div className="flex items-center gap-1 text-[12px] text-gray-600 dark:text-gray-300 truncate">
+            {isAudio ? (
+              <>
+                <IonIcon icon={micOutline} className="text-orange-500 text-sm shrink-0" />
+                <span>Voice message</span>
+              </>
+            ) : isImage ? (
+              <>
+                <IonIcon icon={imageOutline} className="text-orange-500 text-sm shrink-0" />
+                <span>{msg.reply_to_content && msg.reply_to_content !== 'Photo' ? msg.reply_to_content : 'Photo'}</span>
+              </>
+            ) : (
+              <span>{msg.reply_to_content}</span>
+            )}
+          </div>
+        </div>
+        {isImage && thumbUrl && (
+          <img src={thumbUrl} alt="" className="w-8 h-8 rounded object-cover shrink-0 ml-1 border border-black/10 dark:border-white/10" />
+        )}
       </div>
     );
   };
@@ -595,7 +759,8 @@ export default function DealRoomChat() {
     reply_to_id: replyTarget.id,
     reply_to_type: replyTarget.type,
     reply_to_content: replyTarget.content,
-    reply_to_sender_label: replyTarget.senderLabel
+    reply_to_sender_label: replyTarget.senderLabel,
+    reply_to_media_url: replyTarget.mediaUrl
   } : {});
 
   const handleSendText = async () => {
@@ -608,7 +773,7 @@ export default function DealRoomChat() {
 
     if (editingMessageId) {
       const idBeingEdited = editingMessageId;
-      setMessages((prev) => prev.map((m) => m.id === idBeingEdited ? { ...m, content: textToSend, is_edited: true } : m));
+      updateMessages((prev) => prev.map((m) => m.id === idBeingEdited ? { ...m, content: textToSend, is_edited: true } : m));
       setMessageText('');
       setEditingMessageId(null);
       if (textareaRef.current) textareaRef.current.style.height = 'auto';
@@ -626,7 +791,7 @@ export default function DealRoomChat() {
       content: textToSend, message_type: 'text', status: 'sending', created_at: new Date().toISOString(),
       ...replyMeta
     };
-    setMessages((prev) => [...prev, optimisticMsg]);
+    setOptimisticMsgs((prev) => [...prev, optimisticMsg]);
     setMessageText('');
     setReplyTarget(null);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
@@ -638,9 +803,15 @@ export default function DealRoomChat() {
     }).select().single();
 
     if (error || !savedMsg) {
-      setMessages((prev) => prev.map((msg) => msg.id === tempId ? { ...msg, status: 'failed' } : msg));
+      setOptimisticMsgs((prev) => prev.map((msg) => msg.id === tempId ? { ...msg, status: 'failed' } : msg));
     } else {
-      setMessages((prev) => prev.map((msg) => msg.id === tempId ? { ...savedMsg } : msg));
+      setOptimisticMsgs((prev) => prev.filter((msg) => msg.id !== tempId));
+      updateMessages((prev) => (prev.find((m) => m.id === savedMsg.id) ? prev : [...prev, savedMsg]));
+      chatChannelRef.current?.send({
+        type: 'broadcast',
+        event: 'new_message',
+        payload: savedMsg
+      });
     }
   };
 
@@ -680,11 +851,18 @@ export default function DealRoomChat() {
   };
 
   // --- MULTIMEDIA UPLOAD (CAMERA & GALLERY) ---
-  const uploadMediaAndSend = async (base64Data: string, mimeType: string, msgType: 'image' | 'video', localPreviewUrl?: string) => {
+  const uploadMediaAndSend = async (
+    base64Data: string,
+    mimeType: string,
+    msgType: 'image' | 'video',
+    localPreviewUrl?: string,
+    caption?: string
+  ) => {
     const tempId = `temp_${msgType}_${Date.now()}`;
     const replyMeta = buildReplyMeta();
-    setMessages((prev) => [...prev, {
-      id: tempId, sender_id: currentUser.id, receiver_id: partnerId, content: msgType === 'video' ? "Video" : "Image", media_url: localPreviewUrl || "",
+    const finalContent = caption ? caption : (msgType === 'video' ? "Video message" : "Photo");
+    setOptimisticMsgs((prev) => [...prev, {
+      id: tempId, sender_id: currentUser.id, receiver_id: partnerId, content: finalContent, media_url: localPreviewUrl || "",
       message_type: msgType, status: 'sending', created_at: new Date().toISOString(), ...replyMeta
     }]);
     setReplyTarget(null);
@@ -703,121 +881,194 @@ export default function DealRoomChat() {
       });
       const { data: savedMsg, error } = await supabase.from('messages').insert({
         transaction_ref: txRef, sender_id: currentUser.id, receiver_id: partnerId,
-        content: msgType === 'video' ? "Video message" : "Photo", media_url: uploadData.secure_url, message_type: msgType, status: 'sent',
+        content: finalContent, media_url: uploadData.secure_url, message_type: msgType, status: 'sent',
         ...replyMeta
       }).select().single();
       if (!error && savedMsg) {
-        setMessages((prev) => prev.map((msg) => msg.id === tempId ? { ...savedMsg } : msg));
+        setOptimisticMsgs((prev) => prev.filter((msg) => msg.id !== tempId));
+        updateMessages((prev) => (prev.find((m) => m.id === savedMsg.id) ? prev : [...prev, savedMsg]));
+        chatChannelRef.current?.send({
+          type: 'broadcast',
+          event: 'new_message',
+          payload: savedMsg
+        });
       } else throw new Error("Database save failed");
     } catch (err: any) {
        showError('Upload Failed', err.message || `Could not send ${msgType}.`);
-       setMessages((prev) => prev.map((msg) => msg.id === tempId ? { ...msg, status: 'failed' } : msg));
+       setOptimisticMsgs((prev) => prev.map((msg) => msg.id === tempId ? { ...msg, status: 'failed' } : msg));
     } finally {
       clearUploadProgress(tempId);
       if (localPreviewUrl && localPreviewUrl.startsWith('blob:')) URL.revokeObjectURL(localPreviewUrl);
     }
   };
 
-  const handleCameraClick = async (e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    if (isNativeRef.current) {
-      try {
-        const image = await Camera.getPhoto({
-          quality: 80,
-          allowEditing: false,
-          resultType: CameraResultType.Base64,
-          source: CameraSource.Camera
-        });
-        if (image.base64String) {
-          const mime = `image/${image.format}`;
-          const localPreview = `data:${mime};base64,${image.base64String}`;
-          await uploadMediaAndSend(image.base64String, mime, 'image', localPreview);
-        }
-      } catch (err) {
-        console.error("Camera error:", err);
-      }
-      return;
-    }
-    try {
-      const fileInput = document.createElement('input');
-      fileInput.type = 'file';
-      fileInput.accept = 'image/*';
-      (fileInput as any).capture = 'environment';
-      // Fix: a detached input (never appended to the document) doesn't
-      // reliably trigger the native file picker under Chrome's device
-      // toolbar / touch emulation. Attaching it (hidden, off-screen) makes
-      // the picker fire consistently in both normal and emulated views.
-      fileInput.style.position = 'fixed';
-      fileInput.style.top = '-9999px';
-      fileInput.style.left = '-9999px';
-      document.body.appendChild(fileInput);
-      const cleanup = () => {
-        if (fileInput.parentNode) fileInput.parentNode.removeChild(fileInput);
-      };
-      fileInput.onchange = async (ev: any) => {
-        const file = ev.target.files[0];
-        if (!file) { cleanup(); return; }
-        const localPreview = URL.createObjectURL(file);
-        const reader = new FileReader();
-        reader.onload = async () => {
-          const base64String = (reader.result as string).split(',')[1];
-          await uploadMediaAndSend(base64String, file.type, 'image', localPreview);
-        };
-        reader.readAsDataURL(file);
-        cleanup();
-      };
-      // No reliable "cancel" event across browsers — clean up once the
-      // window regains focus (i.e. the picker dialog closed either way).
-      window.addEventListener('focus', cleanup, { once: true });
-      fileInput.click();
-    } catch (err) {
-      console.error("Camera error:", err);
-    }
+  // --- Camera → custom in-app capture UI (CameraCapture overlay) ---
+  // Desktop browser only: skip the camera UI and open the file picker directly.
+  const isDesktopBrowser = () => {
+    if (typeof window === 'undefined' || Capacitor.isNativePlatform()) return false;
+    const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    const mobileUA = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    return !hasTouch && !mobileUA;
   };
 
+  const openImageFilePicker = (onPick: (url: string) => void) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.style.position = 'fixed';
+    input.style.top = '-9999px';
+    document.body.appendChild(input);
+    const cleanup = () => { input.remove(); };
+    input.onchange = () => {
+      const file = input.files?.[0];
+      cleanup();
+      if (file) onPick(URL.createObjectURL(file));
+    };
+    window.addEventListener('focus', cleanup, { once: true });
+    input.click();
+  };
+
+  const openCamera = () => {
+    if (typeof window !== 'undefined') {
+      window.history.pushState({ ...window.history.state, __vendiChatOverlay: 'camera' }, '');
+    }
+    setShowCamera(true);
+  };
+
+  const closeCamera = () => {
+    if (!isPoppedByHistory.current && typeof window !== 'undefined' && window.history.state?.__vendiChatOverlay) {
+      window.history.back();
+    }
+    isPoppedByHistory.current = false;
+    setShowCamera(false);
+  };
+
+  const openGallery = () => {
+    if (typeof window !== 'undefined') {
+      window.history.pushState({ ...window.history.state, __vendiChatOverlay: 'gallery' }, '');
+    }
+    setShowGallery(true);
+  };
+
+  const closeGallery = () => {
+    if (!isPoppedByHistory.current && typeof window !== 'undefined' && window.history.state?.__vendiChatOverlay) {
+      window.history.back();
+    }
+    isPoppedByHistory.current = false;
+    setShowGallery(false);
+  };
+
+  const switchCameraToGallery = () => {
+    if (typeof window !== 'undefined' && window.history.state?.__vendiChatOverlay) {
+      window.history.replaceState({ ...window.history.state, __vendiChatOverlay: 'gallery' }, '');
+    }
+    setShowCamera(false);
+    setShowGallery(true);
+  };
+
+  const openPreview = (src: string) => {
+    if (typeof window !== 'undefined') {
+      if (window.history.state?.__vendiChatOverlay) {
+        window.history.replaceState({ ...window.history.state, __vendiChatOverlay: 'preview' }, '');
+      } else {
+        window.history.pushState({ ...window.history.state, __vendiChatOverlay: 'preview' }, '');
+      }
+    }
+    setPreviewSrc(src);
+  };
+
+  const closePreview = () => {
+    if (!isPoppedByHistory.current && typeof window !== 'undefined' && window.history.state?.__vendiChatOverlay) {
+      window.history.back();
+    }
+    isPoppedByHistory.current = false;
+    setPreviewSrc(null);
+  };
+
+  // 1. Hardware Back Button (Capacitor Android native app):
+  // When camera, gallery, or photo preview is open, intercept system back and close it instead of leaving /chats.
+  useEffect(() => {
+    return registerBackHandler(() => {
+      if (previewSrcRef.current) {
+        closePreview();
+        return true;
+      }
+      if (showCameraRef.current) {
+        closeCamera();
+        return true;
+      }
+      if (showGalleryRef.current) {
+        closeGallery();
+        return true;
+      }
+      return false;
+    });
+  }, []);
+
+  // 2. Browser History (popstate) for Web / PWA / Swipe-back:
+  useEffect(() => {
+    const handlePopState = () => {
+      isPoppedByHistory.current = true;
+      if (previewSrcRef.current) {
+        setPreviewSrc(null);
+      } else if (showCameraRef.current) {
+        setShowCamera(false);
+      } else if (showGalleryRef.current) {
+        setShowGallery(false);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // 3. Escape key support
+  useEffect(() => {
+    if (!showCamera && !showGallery && !previewSrc) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (previewSrcRef.current) closePreview();
+        else if (showCameraRef.current) closeCamera();
+        else if (showGalleryRef.current) closeGallery();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showCamera, showGallery, previewSrc]);
+
+  const handleCameraClick = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (isDesktopBrowser()) {
+      openImageFilePicker((url) => handleGallerySelect(url));
+      return;
+    }
+    openCamera();
+  };
+
+  // --- Attach → in-app gallery grid, pictures only (GalleryPicker overlay) ---
   const handleAttachmentClick = (e?: React.MouseEvent) => {
     e?.stopPropagation();
-    try {
-      const fileInput = document.createElement('input');
-      fileInput.type = 'file';
-      fileInput.accept = 'image/*,video/*';
-      // Fix: same issue as the camera fallback above — a detached input
-      // doesn't reliably open the native file picker under Chrome's device
-      // toolbar / touch emulation (works in a normal window, silently does
-      // nothing in responsive view). Attaching it (hidden, off-screen)
-      // before .click() makes it fire consistently everywhere.
-      fileInput.style.position = 'fixed';
-      fileInput.style.top = '-9999px';
-      fileInput.style.left = '-9999px';
-      document.body.appendChild(fileInput);
-      const cleanup = () => {
-        if (fileInput.parentNode) fileInput.parentNode.removeChild(fileInput);
-      };
-      fileInput.onchange = async (ev: any) => {
-        const file = ev.target.files[0];
-        if (!file) { cleanup(); return; }
-        if (file.type.startsWith('video/') && file.size > 15 * 1024 * 1024) {
-          showError("File Too Large", "Videos must be less than 15MB to ensure fast delivery.");
-          cleanup();
-          return;
-        }
-        const localPreview = URL.createObjectURL(file);
-        const msgType = file.type.startsWith('video/') ? 'video' : 'image';
-        const reader = new FileReader();
-        reader.onload = async () => {
-          const base64String = (reader.result as string).split(',')[1];
-          await uploadMediaAndSend(base64String, file.type, msgType, localPreview);
-        };
-        reader.readAsDataURL(file);
-        cleanup();
-      };
-      // No reliable "cancel" event across browsers — clean up once the
-      // window regains focus (i.e. the picker dialog closed either way).
-      window.addEventListener('focus', cleanup, { once: true });
-      fileInput.click();
-    } catch (err) {
-      console.error("Attachment error:", err);
-    }
+    openGallery();
+  };
+
+  // Camera shutter → preview screen (crop / save / close)
+  const handleCameraCapture = (dataUrl: string) => {
+    setShowCamera(false);
+    openPreview(dataUrl);
+  };
+
+  // Gallery pick → same preview screen as a capture
+  const handleGallerySelect = (fullUrl: string) => {
+    setShowGallery(false);
+    openPreview(fullUrl);
+  };
+
+  // Preview "Save" → optimistic bubble + upload through the normal pipeline
+  const handlePreviewSave = async (jpegDataUrl: string, caption?: string) => {
+    closePreview();
+    const base64 = jpegDataUrl.split(',')[1] || '';
+    const mime = (jpegDataUrl.split(';')[0].split(':')[1] || 'image/jpeg').split(';')[0];
+    await uploadMediaAndSend(base64, mime, 'image', jpegDataUrl, caption);
   };
 
   const checkPermissions = async () => {
@@ -930,9 +1181,10 @@ export default function DealRoomChat() {
       showError('Hold On', 'Still loading your session — try again in a moment.');
       return;
     }
+    hapticImpact(ImpactStyle.Light);
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
-    } catch (err) {}
+    } catch {}
     setStartPos({ x: e.clientX, y: e.clientY });
     pressTimeRef.current = Date.now();
     cancelHapticFiredRef.current = false;
@@ -959,10 +1211,6 @@ export default function DealRoomChat() {
       setDragOffset({ x: 0, y: 0 });
       return;
     }
-    // A single short pulse as the drag first crosses ~70% of the cancel
-    // threshold, so the "point of no return" has tactile feedback before
-    // the hard cutoff — makes cancel-on-release feel responsive rather
-    // than sudden.
     if (diffX < -CANCEL_DRAG_PX * 0.7 && !cancelHapticFiredRef.current) {
       cancelHapticFiredRef.current = true;
       if (navigator.vibrate) navigator.vibrate(8);
@@ -972,12 +1220,7 @@ export default function DealRoomChat() {
 
   const handlePointerUp = async (e: React.PointerEvent<HTMLButtonElement>) => {
     e.stopPropagation();
-    try {
-      const target = e.currentTarget;
-      if (target.hasPointerCapture(e.pointerId)) {
-        target.releasePointerCapture(e.pointerId);
-      }
-    } catch (err) {}
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
     setDragOffset({ x: 0, y: 0 });
     if (activeStateRef.current !== 'holding') return;
     const pressDuration = Date.now() - pressTimeRef.current;
@@ -1041,7 +1284,7 @@ export default function DealRoomChat() {
         if (!result.value || !result.value.recordDataBase64 || finalDuration < 1) return;
         const cleanMimeType = (result.value.mimeType || 'audio/aac').split(';')[0];
         const dataUri = `data:${cleanMimeType};base64,${result.value.recordDataBase64}`;
-        setMessages((prev) => [...prev, {
+        setOptimisticMsgs((prev) => [...prev, {
           id: tempId, sender_id: currentUser.id, receiver_id: partnerId, content: "Voice note",
           media_url: dataUri, message_type: 'audio', status: 'sending', created_at: new Date().toISOString(),
           _localDuration: finalDuration, _localWaveform: finalWaveform, ...replyMeta
@@ -1062,7 +1305,7 @@ export default function DealRoomChat() {
           throw new Error('That recording was too short. Please try again.');
         }
         const localUrl = URL.createObjectURL(blob);
-        setMessages((prev) => [...prev, {
+        setOptimisticMsgs((prev) => [...prev, {
           id: tempId, sender_id: currentUser.id, receiver_id: partnerId, content: "Voice note",
           media_url: localUrl, message_type: 'audio', status: 'sending', created_at: new Date().toISOString(),
           _localDuration: finalDuration, _localWaveform: finalWaveform, ...replyMeta
@@ -1127,8 +1370,14 @@ export default function DealRoomChat() {
     }).select().single();
     if (!error && savedMsg) {
       setAudioDurations((prev) => ({ ...prev, [savedMsg.id]: duration }));
-      setMessages((prev) => prev.map((msg) => msg.id === tempId ? { ...savedMsg } : msg));
+      setOptimisticMsgs((prev) => prev.filter((msg) => msg.id !== tempId));
+      updateMessages((prev) => (prev.find((m) => m.id === savedMsg.id) ? prev : [...prev, savedMsg]));
       setPlayback((p) => (p.id === tempId ? { ...p, id: savedMsg.id } : p));
+      chatChannelRef.current?.send({
+        type: 'broadcast',
+        event: 'new_message',
+        payload: savedMsg
+      });
     } else {
       failVoiceNote(tempId, new Error("Database save failed"));
     }
@@ -1137,7 +1386,7 @@ export default function DealRoomChat() {
   const failVoiceNote = (tempId: string, error: any) => {
     console.error(error);
     showError('Upload Failed', error?.message || 'Could not send voice note. Check your connection.');
-    setMessages((prev) => prev.map((msg) => msg.id === tempId ? { ...msg, status: 'failed' } : msg));
+    setOptimisticMsgs((prev) => prev.map((msg) => msg.id === tempId ? { ...msg, status: 'failed' } : msg));
   };
 
   const togglePauseAction = async () => {
@@ -1247,7 +1496,7 @@ export default function DealRoomChat() {
     const rect = e.currentTarget.getBoundingClientRect();
     waveformDragRef.current = { msgId, url };
     seekToPercent(msgId, url, percentFromEvent(e, rect));
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
   };
 
   const handleWaveformPointerMove = (msgId: string, url: string) => (e: React.PointerEvent<HTMLDivElement>) => {
@@ -1260,13 +1509,8 @@ export default function DealRoomChat() {
   const handleWaveformPointerUp = () => (e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation();
     waveformDragRef.current = null;
-    try {
-      const target = e.currentTarget;
-      if (target.hasPointerCapture(e.pointerId)) target.releasePointerCapture(e.pointerId);
-    } catch (err) {}
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
   };
-
-  const hasSentMessage = messages.some(msg => msg.sender_id === currentUser?.id);
 
   const renderTicks = (status?: string) => {
     if (!status) return null;
@@ -1358,11 +1602,6 @@ export default function DealRoomChat() {
 
   useEffect(() => { setSearchIndex(0); }, [searchQuery]);
 
-  const scrollToMessage = (id: string) => {
-    const el = messageRefs.current[id];
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  };
-
   useEffect(() => {
     if (searchMatches.length > 0 && showSearch) {
       scrollToMessage(searchMatches[searchIndex]);
@@ -1396,8 +1635,6 @@ export default function DealRoomChat() {
     } catch (err) {
       console.error('[Chat] Could not save report context to sessionStorage:', err);
     }
-    
-    // CORE FIX: Route with the exact transaction and seller parameters
     router.push(`/report?ref=${txRef}&seller=${partnerId}`);
   };
   // ==========================================================================
@@ -1429,7 +1666,14 @@ export default function DealRoomChat() {
 
       if (msg.message_type === 'text') {
         return (
-          <div key={msg.id} ref={setBubbleRef} className={`flex w-full min-w-0 ${isMe ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2 duration-200`}>
+          <div
+            key={msg.id}
+            id={`msg-${msg.id}`}
+            ref={setBubbleRef}
+            className={`flex w-full min-w-0 ${isMe ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2 duration-200 transition-all ${
+              highlightedMsgId === msg.id ? 'scale-[1.02] ring-2 ring-orange-500 rounded-2xl' : ''
+            }`}
+          >
             <div className="relative max-w-[80%] min-w-0">
               {renderSwipeReplyIndicator(msg)}
               <div
@@ -1455,61 +1699,49 @@ export default function DealRoomChat() {
       }
 
       if (msg.message_type === 'audio') {
-        const isThisPlaying = playback.id === msg.id && playback.isPlaying;
         const knownDuration = audioDurations[msg.id] ?? msg._localDuration ?? 0;
-        const displaySeconds = playback.id === msg.id ? playback.currentTime : knownDuration;
         const waveform = msg._localWaveform ?? getSeededWaveform(msg.id);
-        const progress = knownDuration > 0 && playback.id === msg.id ? Math.min(1, playback.currentTime / knownDuration) : 0;
-        const isUploading = msg.status === 'sending' && uploadProgress[msg.id] !== undefined;
+        const isUploading = msg.status === 'sending';
         return (
-          <div key={msg.id} ref={setBubbleRef} className={`flex w-full min-w-0 ${isMe ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2 duration-200`}>
+          <div
+            key={msg.id}
+            id={`msg-${msg.id}`}
+            ref={setBubbleRef}
+            className={`flex w-full min-w-0 ${isMe ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2 duration-200 transition-all ${
+              highlightedMsgId === msg.id ? 'scale-[1.02] ring-2 ring-orange-500 rounded-2xl' : ''
+            }`}
+          >
             <div className="relative max-w-[85%] min-w-0">
               {renderSwipeReplyIndicator(msg)}
               <div
                 {...bubbleGestureProps(msg)}
                 style={bubbleSwipeStyle(msg)}
-                className={`relative w-[260px] max-w-full min-w-0 px-2 py-2 shadow-sm flex flex-col gap-1 select-none ${
+                className={`relative max-w-full min-w-0 px-2.5 py-1.5 shadow-sm flex flex-col gap-0.5 select-none ${
                   isMe ? 'bg-[#e5ddd5] dark:bg-[#1f2937] !rounded-2xl !rounded-tr-sm border border-orange-500/30' : 'bg-white dark:bg-[#111b2c] !rounded-2xl !rounded-tl-sm border border-transparent'
                 }`}
               >
                 {renderReplyQuote(msg)}
-                <div className="flex items-center gap-2">
-                  <div className="relative flex-shrink-0">
-                    <Avatar
-                      src={isMe ? currentUser?.avatar_url : partnerInfo?.avatar_url}
-                      name={isMe ? (currentUser?.full_name || "Me") : (partnerInfo?.full_name || "Partner")}
-                      size="sm"
-                    />
-                    <div className="absolute -bottom-1 -right-1 !bg-orange-500 !rounded-full p-[2px] border border-white dark:border-[#111b2c] flex items-center justify-center">
-                      <IonIcon icon={micOutline} className="text-[10px] text-white" />
-                    </div>
-                  </div>
-                  {isUploading ? (
-                    <div className="flex-shrink-0">
-                      {renderProgressRing(uploadProgress[msg.id], 40, 'light')}
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => togglePlayback(msg.id, msg.media_url)}
-                      className={`!text-orange-500 active:scale-95 transition-transform !rounded-full flex-shrink-0 ${!msg.media_url ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      disabled={!msg.media_url}
-                    >
-                      <IonIcon icon={isThisPlaying ? pauseOutline : playOutline} className="text-4xl" />
-                    </button>
-                  )}
-                  <div className="flex-1 flex flex-col pt-1 min-w-0">
-                    <div className="flex items-center gap-1 w-full">
-                      <div className="w-2.5 h-2.5 !bg-orange-500 !rounded-full shadow-sm"></div>
-                      {renderWaveform({ levels: waveform, progress, msgId: msg.id, url: msg.media_url })}
-                    </div>
-                    <div className="flex justify-between items-center mt-1">
-                      <span className={`text-[10px] font-bold ${isMe ? 'text-gray-500' : 'text-gray-400'}`}>{formatDuration(displaySeconds)}</span>
-                      <div className="flex items-center gap-0.5">
-                        <span className={`text-[9px] font-bold ${isMe ? 'text-gray-500' : 'text-gray-400'}`}>{msgTime}</span>
-                        {isMe && renderTicks(msg.status)}
-                      </div>
-                    </div>
-                  </div>
+                <VoiceNotePlayer
+                  id={msg.id}
+                  url={msg.media_url}
+                  duration={knownDuration}
+                  waveform={waveform}
+                  isMe={isMe}
+                  activePlayingId={playback.id}
+                  isPlaying={playback.isPlaying}
+                  currentTime={playback.currentTime}
+                  onPlayRequest={(id, url) => startOrSwitchPlayback(id, url)}
+                  onPauseRequest={() => {
+                    playbackAudioRef.current?.pause();
+                    setPlayback((p) => ({ ...p, isPlaying: false }));
+                  }}
+                  onSeekRequest={(id, percent) => seekToPercent(id, msg.media_url, percent)}
+                  isUploading={isUploading}
+                  uploadProgress={uploadProgress[msg.id]}
+                />
+                <div className="flex items-center justify-end gap-1 px-1 -mt-1 pb-0.5">
+                  <span className={`text-[9px] font-bold ${isMe ? 'text-gray-500' : 'text-gray-400'}`}>{msgTime}</span>
+                  {isMe && renderTicks(msg.status)}
                 </div>
               </div>
             </div>
@@ -1518,28 +1750,52 @@ export default function DealRoomChat() {
       }
 
       if (msg.message_type === 'image') {
-        const isUploading = msg.status === 'sending' && uploadProgress[msg.id] !== undefined;
+        const isUploading = msg.status === 'sending';
+        const isLoaded = loadedMedia[msg.id];
         return (
-          <div key={msg.id} ref={setBubbleRef} className={`flex w-full min-w-0 ${isMe ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2 duration-200`}>
-            <div className="relative max-w-[75%] min-w-0">
+          <div
+            key={msg.id}
+            id={`msg-${msg.id}`}
+            ref={setBubbleRef}
+            className={`flex w-full min-w-0 ${isMe ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2 duration-200 transition-all ${
+              highlightedMsgId === msg.id ? 'scale-[1.02] ring-2 ring-orange-500 rounded-2xl' : ''
+            }`}
+          >
+            <div className="relative max-w-[85%] sm:max-w-[70%] min-w-0">
               {renderSwipeReplyIndicator(msg)}
               <div
                 {...bubbleGestureProps(msg)}
                 style={bubbleSwipeStyle(msg)}
-                className={`relative w-full min-w-0 p-1 shadow-sm select-none ${
+                className={`relative w-full min-w-0 p-1.5 shadow-sm select-none ${
                   isMe ? 'bg-[#e5ddd5] dark:bg-[#1f2937] !rounded-2xl !rounded-tr-sm border border-orange-500/30' : 'bg-white dark:bg-[#111b2c] !rounded-2xl !rounded-tl-sm border border-transparent'
                 }`}
               >
                 {renderReplyQuote(msg)}
-                <div className="relative">
+                <div
+                  className="relative w-64 max-w-[72vw] aspect-[4/3] rounded-xl overflow-hidden bg-black/10 dark:bg-white/5 cursor-pointer"
+                  onClick={() => msg.media_url && setViewingImages([msg.media_url])}
+                >
                   <img
                     src={msg.media_url}
-                    onClick={() => msg.media_url && setSelectedMedia({ url: msg.media_url, type: 'image' })}
-                    className="w-full h-56 object-cover !rounded-xl cursor-pointer active:scale-[0.98] transition-transform"
+                    loading="lazy"
+                    onLoad={() => setLoadedMedia((prev) => ({ ...prev, [msg.id]: true }))}
+                    className="w-full h-full object-cover rounded-xl transition-opacity duration-200"
                   />
-                  {isUploading && renderUploadOverlay(uploadProgress[msg.id])}
+                  {!isLoaded && !isUploading && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                      <div className="w-10 h-10 rounded-full bg-black/50 text-white flex items-center justify-center">
+                        <IonIcon icon={downloadOutline} className="text-xl" />
+                      </div>
+                    </div>
+                  )}
+                  {isUploading && renderUploadOverlay(uploadProgress[msg.id] ?? 0)}
                 </div>
-                <div className="flex items-center justify-end gap-1 px-2 pb-1 pt-1">
+                {msg.content && msg.content !== 'Photo' && (
+                  <p className={`text-[14px] font-medium px-1.5 pt-1.5 leading-snug ${isMe ? 'text-gray-900 dark:text-white' : 'text-gray-900 dark:text-gray-100'}`}>
+                    {msg.content}
+                  </p>
+                )}
+                <div className="flex items-center justify-end gap-1 px-1 pt-1">
                   <span className={`text-[9px] font-bold ${isMe ? 'text-gray-500' : 'text-gray-400'}`}>{msgTime}</span>
                   {isMe && renderTicks(msg.status)}
                 </div>
@@ -1590,7 +1846,7 @@ export default function DealRoomChat() {
       return null;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, currentUser, partnerInfo, playback, audioDurations, uploadProgress, swipeMsgId, swipeX, searchQuery, searchMatches, searchIndex]);
+  }, [messages, currentUser, partnerInfo, playback, audioDurations, uploadProgress, swipeMsgId, swipeX, searchQuery, searchMatches, searchIndex, highlightedMsgId, loadedMedia]);
 
   // Cancel-drag opacity fade: full opacity at rest, fading toward ~30% as
   // the mic button is dragged toward the cancel threshold.
@@ -1598,8 +1854,20 @@ export default function DealRoomChat() {
     ? Math.max(0.3, 1 + dragOffset.x / CANCEL_DRAG_PX)
     : 1;
 
+  // NOTE: previously portaled to document.body to escape PageTransition's
+  // transformed ancestor. The portal blanked the page, so we render in place.
+  // If mobile cropping returns, revisit (e.g. non-fixed flow layout).
   return (
-    <div className="fixed inset-0 z-[999] flex flex-col w-full h-[100dvh] bg-[#e5ddd5] dark:bg-[#0a1120]">
+    <div className="fixed inset-0 z-[999] flex flex-col w-full h-[100dvh] bg-[#e5ddd5] dark:bg-[#0a1120] overflow-hidden">
+      {/* Background wallpaper with faded Vendi logos pattern */}
+      <div
+        className="absolute inset-0 pointer-events-none z-0 opacity-[0.035] dark:opacity-[0.02]"
+        style={{
+          backgroundImage: "url('/icon.png')",
+          backgroundRepeat: 'repeat',
+          backgroundSize: '70px 70px',
+        }}
+      />
       {selectedMedia && (
         <div className="absolute inset-0 z-[1000] bg-black/95 backdrop-blur-xl flex flex-col animate-in fade-in zoom-in-95 duration-200">
           <div className="absolute top-0 left-0 right-0 p-4 pt-safe flex justify-end z-10">
@@ -1773,25 +2041,34 @@ export default function DealRoomChat() {
         )}
       </div>
 
-      {/* CHAT FEED */}
-      <div
-        className="flex-1 overflow-y-auto px-3 sm:px-4 py-6 space-y-4 scrollbar-hide relative z-0"
+      {/* CHAT FEED — pull-to-refresh via the shared <PullToRefresh> wrapper.
+          Only the spinner badge moves on pull; header and composer stay put. */}
+      <PullToRefresh
+        ref={ptrRef}
+        onRefresh={async () => { await mutate(); }}
         onScroll={() => { if (openMenuFor) setOpenMenuFor(null); }}
+        className="flex-1 min-h-0 relative z-10"
+        bgClassName="bg-transparent"
+        contentClassName="px-3 sm:px-4 py-6 space-y-4 scrollbar-hide relative"
       >
-        <div className="flex justify-center mb-6">
-          <span className="px-3 py-1 bg-white/60 dark:bg-[#1f2937]/60 backdrop-blur-md !rounded-lg text-[10px] font-black uppercase tracking-widest text-gray-500 dark:text-gray-400 shadow-sm">
-            Security Notice
-          </span>
-        </div>
-        {!hasSentMessage && (
-          <div className="flex justify-center my-4 animate-in fade-in zoom-in-95 duration-300">
-            <div className="bg-[#fff3e0] dark:bg-[#3e2723] border border-orange-200 dark:border-orange-900/50 px-4 py-3 !rounded-2xl max-w-[85%] text-center shadow-sm">
-              <IonIcon icon={shieldCheckmarkOutline} className="!text-orange-500 text-xl mb-1" />
-              <p className="text-[11px] font-bold text-orange-800 dark:text-orange-200/80 leading-relaxed">
-                Escrow Hold Active. Your funds are protected by Vendi. Do not release funds until you have inspected the item in a public campus space.
-              </p>
+        {/* Security notice + escrow warning: brand-new chats only.
+            Hidden the moment any message exists in the conversation. */}
+        {messages.length === 0 && !historyLoading && (
+          <>
+            <div className="flex justify-center mb-6">
+              <span className="px-3 py-1 bg-white/60 dark:bg-[#1f2937]/60 backdrop-blur-md !rounded-lg text-[10px] font-black uppercase tracking-widest text-gray-500 dark:text-gray-400 shadow-sm">
+                Security Notice
+              </span>
             </div>
-          </div>
+            <div className="flex justify-center my-4 animate-in fade-in zoom-in-95 duration-300">
+              <div className="bg-[#fff3e0] dark:bg-[#3e2723] border border-orange-200 dark:border-orange-900/50 px-4 py-3 !rounded-2xl max-w-[85%] text-center shadow-sm">
+                <IonIcon icon={shieldCheckmarkOutline} className="!text-orange-500 text-xl mb-1" />
+                <p className="text-[11px] font-bold text-orange-800 dark:text-orange-200/80 leading-relaxed">
+                  Escrow Hold Active. Your funds are protected by Vendi. Do not release funds until you have inspected the item in a public campus space.
+                </p>
+              </div>
+            </div>
+          </>
         )}
         {renderedMessages}
 
@@ -1816,21 +2093,36 @@ export default function DealRoomChat() {
         )}
 
         <div ref={messagesEndRef} className="h-2" />
-      </div>
+      </PullToRefresh>
 
       {/* --- INPUT AREA --- */}
       <div className="flex-shrink-0 p-2 pb-safe bg-transparent relative z-50">
         {/* Reply / Edit banner above the composer */}
         {(replyTarget || editingMessageId) && (
           <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between gap-2 bg-white dark:bg-[#1f2937] !rounded-xl px-3 py-2 shadow-md border-l-4 !border-orange-500 animate-in slide-in-from-bottom-2 duration-150">
-            <div className="flex flex-col overflow-hidden min-w-0">
+            <div className="flex flex-col overflow-hidden min-w-0 flex-1">
               <span className="text-[11px] font-black !text-orange-500 uppercase tracking-wide">
                 {editingMessageId ? 'Editing message' : `Replying to ${replyTarget?.senderLabel}`}
               </span>
-              <span className="text-[13px] text-gray-600 dark:text-gray-300 truncate">
-                {editingMessageId ? (messages.find(m => m.id === editingMessageId)?.content || '') : replyTarget?.content}
-              </span>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                {replyTarget?.type === 'audio' && (
+                  <IonIcon icon={micOutline} className="text-orange-500 text-sm flex-shrink-0" />
+                )}
+                {replyTarget?.type === 'image' && (
+                  <IonIcon icon={imageOutline} className="text-orange-500 text-sm flex-shrink-0" />
+                )}
+                <span className="text-[13px] text-gray-600 dark:text-gray-300 truncate">
+                  {editingMessageId ? (messages.find(m => m.id === editingMessageId)?.content || '') : replyTarget?.content}
+                </span>
+              </div>
             </div>
+            {replyTarget?.type === 'image' && replyTarget.mediaUrl && (
+              <img
+                src={replyTarget.mediaUrl}
+                alt="Reply preview"
+                className="w-10 h-10 object-cover !rounded-lg flex-shrink-0 border border-gray-200 dark:border-gray-700"
+              />
+            )}
             <button
               onClick={editingMessageId ? cancelEdit : cancelReply}
               className="!p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 !rounded-full flex-shrink-0"
@@ -1945,6 +2237,57 @@ export default function DealRoomChat() {
           )}
         </div>
       </div>
+
+      {/* Initial loading overlay — same PullSpinner as the inbox */}
+      {(!currentUser || historyLoading) && !initError && (
+        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-3 bg-[#e5ddd5] dark:bg-[#0a1120]">
+          <PullSpinner spinning size={36} />
+          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Loading chat…</p>
+        </div>
+      )}
+
+      {/* Init failure — never leave the user staring at a spinner forever */}
+      {initError && (
+        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-3 px-8 text-center bg-[#e5ddd5] dark:bg-[#0a1120]">
+          <p className="text-[15px] font-bold text-gray-900 dark:text-white">Couldn't open this chat</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400">{initError}</p>
+          <button
+            onClick={() => { setInitError(null); setInitAttempt((a) => a + 1); }}
+            className="mt-1 px-6 py-2.5 rounded-full bg-orange-500 text-white text-sm font-bold shadow-md shadow-orange-500/30 active:scale-95 transition-transform"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* In-app camera / gallery / crop-preview overlays */}
+      {showCamera && (
+        <CameraCapture
+          onCapture={handleCameraCapture}
+          onClose={closeCamera}
+          onOpenGallery={switchCameraToGallery}
+        />
+      )}
+      {showGallery && (
+        <GalleryPicker
+          onSelect={handleGallerySelect}
+          onClose={closeGallery}
+        />
+      )}
+      {previewSrc && (
+        <PhotoPreview
+          src={previewSrc}
+          onClose={closePreview}
+          onSave={handlePreviewSave}
+        />
+      )}
+      {/* Fullscreen Image Viewer with mobile pinch/pan/swipe & save button */}
+      <ImageViewer
+        images={viewingImages}
+        isOpen={viewingImages.length > 0}
+        onClose={() => setViewingImages([])}
+        initialIndex={0}
+      />
     </div>
   );
 }

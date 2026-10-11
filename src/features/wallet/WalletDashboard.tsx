@@ -31,6 +31,7 @@ import { TransactionList, TransactionListSkeleton } from './TransactionList';
 import AllTransactionsPage from './AllTransactionsPage';
 import WithdrawPage from './WithdrawPage';
 import TransactionReceiptPage from './TransactionReceipt';
+import { registerBackHandler } from '@/shared/HardwareBackButton';
 
 type View = 'none' | 'topup' | 'allTx' | 'withdraw';
 
@@ -83,6 +84,105 @@ export default function WalletDashboard() {
     if (stored !== null) setShowBalance(stored === 'true');
   }, []);
 
+  const [topupDragY, setTopupDragY] = useState(0);
+  const topupTouchStartY = useRef<number | null>(null);
+
+  const receiptTxRef = useRef<WalletTx | null>(null);
+  receiptTxRef.current = receiptTx;
+  const viewRef = useRef<View>('none');
+  viewRef.current = view;
+
+  // Track if close was already initiated by a popstate event to prevent double-popping history
+  const isPoppedByHistory = useRef(false);
+
+  const openView = (target: View) => {
+    if (typeof window !== 'undefined') {
+      window.history.pushState({ ...window.history.state, __vendiWalletOverlay: true, view: target }, '');
+    }
+    setView(target);
+  };
+
+  const closeView = () => {
+    if (!isPoppedByHistory.current && typeof window !== 'undefined' && window.history.state?.__vendiWalletOverlay) {
+      window.history.back();
+    }
+    isPoppedByHistory.current = false;
+    setView('none');
+  };
+
+  const openReceipt = (tx: WalletTx) => {
+    if (typeof window !== 'undefined') {
+      window.history.pushState({ ...window.history.state, __vendiWalletOverlay: true, receiptId: tx.id }, '');
+    }
+    setReceiptTx(tx);
+  };
+
+  const closeReceipt = () => {
+    if (!isPoppedByHistory.current && typeof window !== 'undefined' && window.history.state?.__vendiWalletOverlay) {
+      window.history.back();
+    }
+    isPoppedByHistory.current = false;
+    setReceiptTx(null);
+  };
+
+  // 1. Hardware Back Button (Capacitor Android native app):
+  // When receipt or a subview is open, closing it intercepts the hardware back button instead of leaving the wallet.
+  useEffect(() => {
+    return registerBackHandler(() => {
+      if (receiptTxRef.current) {
+        closeReceipt();
+        return true;
+      }
+      if (viewRef.current !== 'none') {
+        closeView();
+        return true;
+      }
+      return false;
+    });
+  }, []);
+
+  // 2. Browser History (popstate) for Web / PWA / Swipe-back:
+  useEffect(() => {
+    const handlePopState = () => {
+      isPoppedByHistory.current = true;
+      if (receiptTxRef.current) {
+        setReceiptTx(null);
+      } else if (viewRef.current !== 'none') {
+        setView('none');
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    if (view === 'none') return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeView();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [view]);
+
+  const onTopupTouchStart = (e: React.TouchEvent) => {
+    topupTouchStartY.current = e.touches[0].clientY;
+  };
+
+  const onTopupTouchMove = (e: React.TouchEvent) => {
+    if (topupTouchStartY.current === null) return;
+    const diff = e.touches[0].clientY - topupTouchStartY.current;
+    if (diff > 0) setTopupDragY(diff);
+  };
+
+  const onTopupTouchEnd = () => {
+    if (topupDragY > 80) {
+      closeView();
+    }
+    setTopupDragY(0);
+    topupTouchStartY.current = null;
+  };
+
   // One toast per distinct error (no repeat spam while the same failure persists)
   useEffect(() => {
     if (!error) {
@@ -134,7 +234,7 @@ export default function WalletDashboard() {
   // Top up / Withdraw stay tappable even before the wallet exists: tapping tries to load it
   const openWhenReady = (target: View) => () => {
     if (wallet) {
-      setView(target);
+      openView(target);
       return;
     }
     showGlobalToast('Setting up your wallet…');
@@ -244,7 +344,7 @@ export default function WalletDashboard() {
               <h3 className="text-sm font-bold">Recent transactions</h3>
               <button
                 type="button"
-                onClick={() => setView('allTx')}
+                onClick={() => openView('allTx')}
                 className="bg-transparent! border-0! shadow-none! px-0! py-2! text-xs font-semibold text-orange-500"
               >
                 See all
@@ -254,7 +354,7 @@ export default function WalletDashboard() {
               {showSkeleton ? (
                 <TransactionListSkeleton />
               ) : (
-                <TransactionList txs={transactions} limit={3} onSelect={setReceiptTx} />
+                <TransactionList txs={transactions} limit={3} onSelect={openReceipt} />
               )}
             </div>
           </section>
@@ -263,18 +363,30 @@ export default function WalletDashboard() {
 
       {/* ----------------------------- Top-up sheet ---------------------------- */}
       <div
-        onClick={() => setView('none')}
+        role="button"
+        tabIndex={view === 'topup' ? 0 : -1}
+        aria-label="Close fund wallet sheet"
+        onClick={closeView}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') closeView(); }}
         className={`fixed inset-0 z-[90] bg-black/50 transition-opacity duration-300 ${
           view === 'topup' ? 'opacity-100' : 'pointer-events-none opacity-0'
         }`}
       />
       <div
-        className={`fixed inset-x-0 bottom-0 z-[100] rounded-t-3xl bg-white text-gray-900 transition-transform duration-300 dark:bg-[#0f172a] dark:text-white ${
-          view === 'topup' ? 'translate-y-0' : 'translate-y-full'
-        }`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Fund wallet"
+        onTouchStart={onTopupTouchStart}
+        onTouchMove={onTopupTouchMove}
+        onTouchEnd={onTopupTouchEnd}
+        style={{
+          transform: view === 'topup' ? `translateY(${topupDragY > 0 ? topupDragY : 0}px)` : 'translateY(100%)',
+          transition: topupDragY > 0 ? 'none' : 'transform 300ms ease-out',
+        }}
+        className="fixed inset-x-0 bottom-0 z-[100] rounded-t-3xl bg-white text-gray-900 dark:bg-[#0f172a] dark:text-white"
       >
         <div className="mx-auto max-w-md px-6 pb-[calc(env(safe-area-inset-bottom,0px)+40px)] pt-3">
-          <div className="mx-auto mb-7 h-1.5 w-12 rounded-full bg-gray-300 dark:bg-gray-700" />
+          <div className="mx-auto mb-7 h-1.5 w-12 cursor-grab rounded-full bg-gray-300 active:cursor-grabbing dark:bg-gray-700" />
           <h3 className="text-xl font-black">Fund wallet</h3>
           <p className="mt-2 text-sm leading-relaxed text-gray-500 dark:text-gray-400">
             Send money from any bank app to this account, then tap the refresh icon on your balance to see it.
@@ -314,17 +426,17 @@ export default function WalletDashboard() {
       {view === 'allTx' && (
         <AllTransactionsPage
           transactions={transactions}
-          onSelect={setReceiptTx}
+          onSelect={openReceipt}
           onRefresh={refresh}
-          onClosed={() => setView('none')}
+          onClosed={closeView}
         />
       )}
 
       {view === 'withdraw' && wallet && (
-        <WithdrawPage wallet={wallet} onClosed={() => setView('none')} onCompleted={() => void refresh()} />
+        <WithdrawPage wallet={wallet} onClosed={closeView} onCompleted={() => void refresh()} />
       )}
 
-      {receiptTx && <TransactionReceiptPage tx={receiptTx} onClose={() => setReceiptTx(null)} />}
+      {receiptTx && <TransactionReceiptPage tx={receiptTx} onClose={closeReceipt} />}
     </>
   );
 }

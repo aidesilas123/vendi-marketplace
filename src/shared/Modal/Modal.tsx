@@ -19,17 +19,23 @@ export const Modal = ({
   children, 
   maxWidth = "max-w-md" 
 }: ModalProps) => {
-  // Prevent scrolling on the body when the modal is open
+  // Prevent scrolling on the body and listen for Escape key when the modal is open
   useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = 'unset';
-    }
-    return () => {
-      document.body.style.overflow = 'unset';
+    if (!isOpen) return;
+
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
     };
-  }, [isOpen]);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -38,24 +44,29 @@ export const Modal = ({
       {/* Blurred Backdrop */}
       <div 
         className="absolute inset-0 bg-[#0f172a]/60 dark:bg-black/80 backdrop-blur-sm transition-opacity"
-        onClick={onClose}
+        onClick={onClose} 
       />
 
       {/* Modal Content */}
       <div 
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? 'modal-title' : undefined}
         className={`relative w-full ${maxWidth} bg-white dark:bg-[#0f172a] rounded-3xl shadow-2xl border border-gray-100 dark:border-gray-800 animate-in fade-in zoom-in-95 duration-200 overflow-hidden flex flex-col max-h-[90vh]`}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
           {title && (
-            <h3 className="text-lg font-black text-[#0f172a] dark:text-white">
+            <h3 id="modal-title" className="text-lg font-black text-[#0f172a] dark:text-white">
               {title}
             </h3>
           )}
-          {/* UPDATED: Transparent Close Button */}
+          {/* UPDATED: Accessible Close Button with recommended touch target */}
           <button 
+            type="button"
+            aria-label="Close modal"
             onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center rounded-full bg-transparent text-gray-500 hover:text-orange-500 hover:bg-black/5 dark:hover:bg-white/10 transition-colors ml-auto"
+            className="w-10 h-10 flex items-center justify-center rounded-full bg-transparent text-gray-500 hover:text-orange-500 hover:bg-black/5 dark:hover:bg-white/10 active:scale-95 transition-all ml-auto"
           >
             <IonIcon icon={closeOutline} className="text-2xl" />
           </button>

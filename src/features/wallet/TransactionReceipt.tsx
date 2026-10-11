@@ -135,11 +135,18 @@ export default function TransactionReceiptPage({ tx, onClose }: { tx: WalletTx; 
       title="Receipt"
       zIndex={120}
       onClosed={onClose}
-      footer={
-        <div className="mx-auto w-full max-w-md px-5 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4">
+      footer={(close) => (
+        <div className="mx-auto w-full max-w-md space-y-3 px-5 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4">
           <ShareReceiptButton tx={tx} />
+          <button
+            type="button"
+            onClick={close}
+            className="h-14! min-h-14! w-full rounded-full! bg-transparent! px-6! py-0! text-base! font-bold text-gray-900 shadow-none! border-0! dark:text-white"
+          >
+            Done
+          </button>
         </div>
-      }
+      )}
     >
       <ReceiptContent tx={tx} />
     </FullScreenPage>

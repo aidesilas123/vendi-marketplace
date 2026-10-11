@@ -499,7 +499,7 @@ export default function WithdrawPage({
             <h3 className="mt-12 text-lg font-black">{pinTitle}</h3>
             <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">{pinHint}</p>
 
-            <PinPad pin={pin} onDigit={pressDigit} onBackspace={() => setPin((p) => p.slice(0, -1))} />
+            <PinPad pin={pin} onDigit={pressDigit} onBackspace={() => { if (!processing) setPin((p) => p.slice(0, -1)); }} />
           </div>
         )}
 
@@ -531,7 +531,7 @@ export default function WithdrawPage({
       {processing &&
         typeof document !== 'undefined' &&
         createPortal(
-          <div className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-black/50 p-4 backdrop-blur-md">
+          <div role="alertdialog" aria-modal="true" aria-label="Processing withdrawal" className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-black/50 p-4 backdrop-blur-md">
             <div className="mb-4 h-14 w-14 animate-spin rounded-full border-4 border-orange-500 border-t-transparent" />
             <p className="animate-pulse text-lg font-black tracking-wide text-white">Processing securely…</p>
           </div>,

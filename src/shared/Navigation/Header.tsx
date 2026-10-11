@@ -46,17 +46,19 @@ export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications
   };
 
   return (
-    <div className="sticky top-0 z-50 h-12 bg-gray-50 dark:bg-[#0a1120] px-4 flex items-center justify-between">
-      <div className="flex items-center">
+    <div className="sticky top-0 z-50 h-12 bg-gray-50 dark:bg-[#0b1120] px-4 flex items-center justify-between">
+      <div className="flex items-center gap-2">
         {/* Replace '/icon.png' with the actual path to your logo in the public folder */}
         <img src="/icon.png" alt="Vendi Logo" className="w-6 h-6 rounded-md object-contain shadow-sm" />
         <h1 className="text-lg font-black text-foreground leading-none mb-0">Vendi</h1>
       </div>
 
-      <div className="flex items-center">
+      <div className="flex items-center gap-1">
         <button 
+          type="button"
+          aria-label="Refresh feed"
           onClick={handleRefresh}
-          className="w-8 h-8 flex-shrink-0 rounded-full bg-transparent flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
+          className="w-10 h-10 flex-shrink-0 rounded-full bg-transparent flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
         >
           <span suppressHydrationWarning className="flex items-center justify-center">
             <IonIcon icon={refreshOutline} className={`text-xl ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -65,7 +67,11 @@ export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications
 
         {user ? (
           <>
-            <button className="relative w-8 h-8 flex-shrink-0 rounded-full bg-transparent flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors">
+            <button
+              type="button"
+              aria-label={`Notifications${unreadNotifications > 0 ? ` (${unreadNotifications} unread)` : ''}`}
+              className="relative w-10 h-10 flex-shrink-0 rounded-full bg-transparent flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
+            >
               <span suppressHydrationWarning className="flex items-center justify-center">
                 <IonIcon icon={notificationsOutline} className="text-xl" />
               </span>
@@ -74,15 +80,17 @@ export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications
               )}
             </button>
 
-            <div 
+            <button
+              type="button"
+              aria-label="Open menu"
               onClick={onOpenSidebar} 
-              className="cursor-pointer w-8 h-8 flex-shrink-0 rounded-full overflow-hidden flex items-center justify-center"
+              className="cursor-pointer w-10 h-10 flex-shrink-0 rounded-full overflow-hidden flex items-center justify-center"
             >
               <Avatar src={user?.avatarUrl} name={user?.name || "Student"} size="sm" />
-            </div>
+            </button>
           </>
         ) : isCheckingAuth ? (
-          <div className="w-8 h-8 flex-shrink-0 rounded-full bg-muted animate-pulse" />
+          <div className="w-10 h-10 flex-shrink-0 rounded-full bg-muted animate-pulse" />
         ) : (
           <Link 
             href="/login" 

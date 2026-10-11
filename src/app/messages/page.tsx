@@ -1,20 +1,25 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import useSWR from 'swr';
+import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { supabase } from '@/lib/supabase';
 import { Avatar } from '@/shared/Avatar';
-import { IonIcon } from '@ionic/react';
-import { 
-  searchOutline, 
-  micOutline, 
-  checkmarkDoneOutline, 
-  checkmarkOutline, 
-  imageOutline, 
-  ellipsisVerticalOutline,
+import IonIcon from '@/shared/Icon/Icon';
+import { PullSpinner } from '@/shared/Loaders/PullSpinner';
+import { showGlobalToast } from '@/shared/Toast/Toast';
+import { useSessionUserId } from '@/features/wallet/useWallet';
+import {
+  searchOutline,
+  micOutline,
+  checkmarkDoneOutline,
+  checkmarkOutline,
+  imageOutline,
   flagOutline,
   closeOutline,
-  playOutline
+  playOutline,
+  chatbubblesOutline,
 } from 'ionicons/icons';
 
 type ChatPreview = {
@@ -24,284 +29,451 @@ type ChatPreview = {
   unreadCount: number;
 };
 
+/* ------------------------------------------------------------------ */
+/*  Inbox fetcher: latest message per transaction_ref + unread counts  */
+/* ------------------------------------------------------------------ */
+async function fetchInbox([_key, userId]: [string, string]): Promise<ChatPreview[]> {
+  const { data: msgs, error } = await supabase
+    .from('messages')
+    .select(
+      `*,
+       sender:sender_id(id, full_name, avatar_url),
+       receiver:receiver_id(id, full_name, avatar_url)`
+    )
+    .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+
+  const chatMap = new Map<string, ChatPreview>();
+  const unreadByRef = new Map<string, number>();
+
+  for (const msg of msgs ?? []) {
+    if (msg.receiver_id === userId && msg.status !== 'read') {
+      unreadByRef.set(msg.transaction_ref, (unreadByRef.get(msg.transaction_ref) ?? 0) + 1);
+    }
+    if (!chatMap.has(msg.transaction_ref)) {
+      chatMap.set(msg.transaction_ref, {
+        transaction_ref: msg.transaction_ref,
+        partner: msg.sender_id === userId ? msg.receiver : msg.sender,
+        latestMessage: msg,
+        unreadCount: 0,
+      });
+    }
+  }
+  for (const chat of chatMap.values()) {
+    chat.unreadCount = unreadByRef.get(chat.transaction_ref) ?? 0;
+  }
+  return Array.from(chatMap.values());
+}
+
+/* ------------------------------------------------------------------ */
+/*  Relative time: 9:44 PM / Yesterday / Monday / 12/05/2026           */
+/* ------------------------------------------------------------------ */
+function formatTime(dateString: string) {
+  const date = new Date(dateString);
+  const now = new Date();
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const daysDiff = Math.round(
+    (startOfDay(now).getTime() - startOfDay(date).getTime()) / 86400000
+  );
+  if (daysDiff <= 0) return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (daysDiff === 1) return 'Yesterday';
+  if (daysDiff < 7) return date.toLocaleDateString([], { weekday: 'long' });
+  return date.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Rubber band: the further you pull, the harder it resists          */
+/* ------------------------------------------------------------------ */
+const rubber = (distance: number) =>
+  (1 - 1 / (distance / 600 + 1)) * 600;
+
+const PULL_THRESHOLD = 64; // px of stretch needed to trigger a refresh
+const STRIP_REST_H = 52; // strip height while the refresh spinner runs
+
 export default function MessagesList() {
   const router = useRouter();
-  const [chats, setChats] = useState<ChatPreview[]>([]);
-  const [currentUser, setCurrentUser] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  
+  // undefined = session still checking, null = signed out, string = signed in
+  const userId = useSessionUserId();
+
   const [activeFilter, setActiveFilter] = useState<'all' | 'unread'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [showMenu, setShowMenu] = useState(false);
 
+  // Rubber-band pull-to-refresh: ONLY the list body stretches — the sticky
+  // header never moves. The strip grows in-flow above the list, pushing it
+  // down elastically; nothing ever slides up behind the header.
+  const pullZoneRef = useRef<HTMLDivElement>(null);
+  const [stripH, setStripH] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const dragRef = useRef<{ startY: number; h: number } | null>(null);
+  const refreshingRef = useRef(false);
+  const lastTouchEndRef = useRef(0);
+
+  const {
+    data: chats,
+    error,
+    isLoading,
+    mutate,
+  } = useSWR(userId ? ['inbox', userId] : null, fetchInbox, {
+    revalidateOnFocus: true,
+    dedupingInterval: 4000,
+    shouldRetryOnError: false,
+  });
+
+  // Signed out → login
   useEffect(() => {
-    fetchChats();
+    if (userId === null) router.replace('/login');
+  }, [userId, router]);
 
-    // Subscribe to ALL message changes to auto-update unread badges and latest messages instantly
-    const inboxChannel = supabase.channel('inbox_changes')
+  const mutateRef = useRef(mutate);
+  mutateRef.current = mutate;
+
+  // Realtime: any message change refreshes the inbox
+  useEffect(() => {
+    if (!userId) return;
+    const channel = supabase
+      .channel(`inbox_${userId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
-        fetchChats();
+        void mutateRef.current();
       })
-      .subscribe();
-
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR') {
+          console.warn('[Inbox] Realtime channel warning:', err);
+        }
+      });
     return () => {
-      supabase.removeChannel(inboxChannel);
+      void supabase.removeChannel(channel);
     };
-  }, []);
+  }, [userId]);
 
-  // Close the menu when tapping anywhere else
+  // Toast on load failure
   useEffect(() => {
-    if (!showMenu) return;
-    const handler = () => setShowMenu(false);
-    document.addEventListener('click', handler);
-    return () => document.removeEventListener('click', handler);
-  }, [showMenu]);
+    if (error && !chats) showGlobalToast('Could not load chats. Please try again.', 'error');
+  }, [error, chats]);
 
-  const fetchChats = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return router.push('/login');
-    setCurrentUser(user);
-
+  const doRefresh = useCallback(async () => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    setStripH(STRIP_REST_H);
     try {
-      // 1. Fetch all messages involving this user
-      const { data: msgs, error } = await supabase
-        .from('messages')
-        .select(`
-          *,
-          sender:sender_id(id, full_name, avatar_url),
-          receiver:receiver_id(id, full_name, avatar_url)
-        `)
-        .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-
-      if (msgs) {
-        // 2. Group by transaction_ref to extract the single latest message per conversation
-        const chatMap = new Map<string, ChatPreview>();
-
-        msgs.forEach((msg) => {
-          if (!chatMap.has(msg.transaction_ref)) {
-            const partner = msg.sender_id === user.id ? msg.receiver : msg.sender;
-            const unreadCount = msgs.filter(m => m.transaction_ref === msg.transaction_ref && m.receiver_id === user.id && m.status !== 'read').length;
-
-            chatMap.set(msg.transaction_ref, {
-              transaction_ref: msg.transaction_ref,
-              partner,
-              latestMessage: msg,
-              unreadCount
-            });
-          }
-        });
-
-        setChats(Array.from(chatMap.values()));
-      }
-    } catch (err) {
-      console.error("Error fetching chats:", err);
+      await Haptics.impact({ style: ImpactStyle.Light });
+    } catch {
+      /* haptics unavailable on web */
+    }
+    try {
+      await mutate();
     } finally {
-      setIsLoading(false);
+      refreshingRef.current = false;
+      setRefreshing(false);
+      setStripH(0);
     }
-  };
+  }, [mutate]);
 
-  const formatTime = (dateString: string) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const isToday = date.getDate() === now.getDate() && date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
+  // Body-only rubber band: finger on the list, drag down while the page is at
+  // the top → the strip stretches elastically. Header stays exactly put.
+  // Mouse events mirror the same logic so the pull can be tested on desktop.
+  useEffect(() => {
+    const zone = pullZoneRef.current;
+    if (!zone) return;
 
-    if (isToday) {
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }
-    return "Yesterday"; 
-  };
+    const begin = (clientY: number) => {
+      if (refreshingRef.current || dragRef.current) return false;
+      const scroller = document.getElementById('main-scroll-container');
+      if (scroller && scroller.scrollTop > 0) return false; // mid-list → native scroll
+      dragRef.current = { startY: clientY, h: 0 };
+      return true;
+    };
+
+    const move = (clientY: number) => {
+      const d = dragRef.current;
+      if (!d || refreshingRef.current) return;
+      const dy = clientY - d.startY;
+      if (dy <= 0) {
+        if (d.h > 0) {
+          d.h = 0;
+          setStripH(0);
+        }
+        return;
+      }
+      setDragging(true);
+      d.h = rubber(dy);
+      setStripH(d.h);
+    };
+
+    const end = () => {
+      const d = dragRef.current;
+      dragRef.current = null;
+      setDragging(false);
+      if (!d || refreshingRef.current) return;
+      if (d.h >= PULL_THRESHOLD) void doRefresh();
+      else setStripH(0);
+    };
+
+    const onTouchStart = (e: TouchEvent) => {
+      begin(e.touches[0].clientY);
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (!dragRef.current || refreshingRef.current) return;
+      if (e.cancelable) e.preventDefault(); // take over from native scroll/overscroll
+      move(e.touches[0].clientY);
+    };
+    const onTouchEnd = () => {
+      lastTouchEndRef.current = Date.now();
+      end();
+    };
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      // Ignore the synthetic mouse events a touch sequence emits afterwards
+      if (Date.now() - lastTouchEndRef.current < 800) return;
+      if (!begin(e.clientY)) return;
+      const onMouseMove = (ev: MouseEvent) => move(ev.clientY);
+      const onMouseUp = () => {
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+        end();
+      };
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+    };
+
+    zone.addEventListener('touchstart', onTouchStart, { passive: true });
+    zone.addEventListener('touchmove', onTouchMove, { passive: false });
+    zone.addEventListener('touchend', onTouchEnd);
+    zone.addEventListener('touchcancel', onTouchEnd);
+    zone.addEventListener('mousedown', onMouseDown);
+    return () => {
+      zone.removeEventListener('touchstart', onTouchStart);
+      zone.removeEventListener('touchmove', onTouchMove);
+      zone.removeEventListener('touchend', onTouchEnd);
+      zone.removeEventListener('touchcancel', onTouchEnd);
+      zone.removeEventListener('mousedown', onMouseDown);
+    };
+  }, [doRefresh]);
+
+  const filteredChats = useMemo(() => {
+    const list = chats ?? [];
+    const query = searchQuery.trim().toLowerCase();
+    return list.filter((c) => {
+      if (activeFilter === 'unread' && c.unreadCount === 0) return false;
+      if (query) {
+        const partnerName = (c.partner?.full_name || '').toLowerCase();
+        const lastMsg = (c.latestMessage?.content || '').toLowerCase();
+        if (!partnerName.includes(query) && !lastMsg.includes(query)) return false;
+      }
+      return true;
+    });
+  }, [chats, activeFilter, searchQuery]);
 
   const renderMessagePreview = (msg: any) => {
-    const isMe = msg.sender_id === currentUser?.id;
+    const isMe = msg.sender_id === userId;
 
-    // CORE FIX: Orange double ticks for 'read', grey double for 'delivered', grey single for 'sent'
+    // WhatsApp-style ticks: single grey = sent, double grey = delivered, double orange = read
     const tickIcon = isMe ? (
-      <IonIcon 
-        icon={(msg.status === 'read' || msg.status === 'delivered') ? checkmarkDoneOutline : checkmarkOutline} 
-        className={`text-[15px] mr-1 ${msg.status === 'read' ? '!text-orange-500' : 'text-muted-foreground'}`} 
+      <IonIcon
+        icon={msg.status === 'sent' ? checkmarkOutline : checkmarkDoneOutline}
+        className={`text-[16px] mr-1 shrink-0 ${
+          msg.status === 'read' ? 'text-orange-500' : 'text-gray-400'
+        }`}
       />
     ) : null;
 
     if (msg.is_deleted) {
       return (
-        <div className="flex items-center text-muted-foreground text-[14px] italic">
-          <IonIcon icon={closeOutline} className="text-[15px] mr-1" />
-          This message was deleted
+        <div className="flex items-center text-gray-400 text-sm italic">
+          <IonIcon icon={closeOutline} className="text-[15px] mr-1 shrink-0" />
+          <span className="truncate">This message was deleted</span>
         </div>
       );
     }
 
     if (msg.message_type === 'audio') {
       return (
-        <div className="flex items-center text-muted-foreground text-[14px]">
+        <div className="flex items-center text-gray-500 dark:text-gray-400 text-sm">
           {tickIcon}
-          <IonIcon icon={micOutline} className="text-orange-500 text-[15px] mr-1" /> 
-          Voice message
+          <IonIcon icon={micOutline} className="text-orange-500 text-[15px] mr-1 shrink-0" />
+          <span className="truncate">Voice message</span>
         </div>
       );
     }
 
     if (msg.message_type === 'image') {
-       return (
-         <div className="flex items-center text-muted-foreground text-[14px]">
-           {tickIcon}
-           <IonIcon icon={imageOutline} className="text-[15px] mr-1" /> 
-           Photo
-         </div>
-       );
+      return (
+        <div className="flex items-center text-gray-500 dark:text-gray-400 text-sm">
+          {tickIcon}
+          <IonIcon icon={imageOutline} className="text-[15px] mr-1 shrink-0" />
+          <span className="truncate">Photo</span>
+        </div>
+      );
     }
 
     if (msg.message_type === 'video') {
-       return (
-         <div className="flex items-center text-muted-foreground text-[14px]">
-           {tickIcon}
-           <IonIcon icon={playOutline} className="text-[15px] mr-1" /> 
-           Video
-         </div>
-       );
+      return (
+        <div className="flex items-center text-gray-500 dark:text-gray-400 text-sm">
+          {tickIcon}
+          <IonIcon icon={playOutline} className="text-[15px] mr-1 shrink-0" />
+          <span className="truncate">Video</span>
+        </div>
+      );
     }
 
     return (
-      <div className="flex items-center text-muted-foreground text-[14px] w-full">
+      <div className="flex items-center text-gray-500 dark:text-gray-400 text-sm w-full">
         {tickIcon}
         <span className="truncate">{msg.content}</span>
       </div>
     );
   };
 
-  // Functional Search & Filter logic
-  const filteredChats = chats.filter(c => {
-    // 1. Filter by unread status if active
-    if (activeFilter === 'unread' && c.unreadCount === 0) return false;
-    
-    // 2. Filter by search query
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      const partnerName = (c.partner?.full_name || '').toLowerCase();
-      const lastMsg = (c.latestMessage?.content || '').toLowerCase();
-      
-      if (!partnerName.includes(query) && !lastMsg.includes(query)) {
-        return false;
-      }
-    }
-    
-    return true;
-  });
-
   return (
-    <div className="min-h-screen bg-background text-foreground pt-safe pb-20">
-
-      {/* HEADER */}
-      <div className="px-4 py-3 flex items-center justify-between sticky top-0 bg-background/95 backdrop-blur-sm z-30">
-        <h1 className="text-2xl font-medium tracking-tight">Vendi Chats</h1>
-        
-        <div className="relative">
-          <button 
-            onClick={(e) => { e.stopPropagation(); setShowMenu((v) => !v); }} 
-            className="!w-10 !h-10 !flex !items-center !justify-center active:scale-95 transition-transform !rounded-full text-muted-foreground hover:bg-muted"
+    <div className="min-h-screen bg-background text-foreground pt-safe pb-28">
+      {/* HEADER — solid, same theme as the body. No blur, no transparency. */}
+      <div className="sticky top-0 z-30 bg-background">
+        <div className="max-w-md mx-auto px-4 pt-4 pb-2 flex items-center justify-between">
+          <h1 className="text-[22px] font-black tracking-tight text-gray-900 dark:text-white">
+            Vendi Chats
+          </h1>
+          {/* Report: solid orange, never transparent */}
+          <button
+            onClick={() => router.push('/support')}
+            aria-label="Report an issue"
+            className="w-10 h-10 rounded-full bg-orange-500 text-white flex items-center justify-center shadow-md shadow-orange-500/30 active:scale-95 transition-transform"
           >
-            <IonIcon icon={ellipsisVerticalOutline} className="text-2xl" />
+            <IonIcon icon={flagOutline} className="text-xl" />
           </button>
-          
-          {/* Dropdown Menu for Report Issue */}
-          {showMenu && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setShowMenu(false)} />
-              <div className="absolute right-2 top-12 min-w-[200px] bg-card !rounded-2xl shadow-xl border border-border overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-100">
-                <button 
-                  onClick={(e) => { e.stopPropagation(); router.push('/support'); }} 
-                  className="!w-full !text-left !px-5 !py-4 text-[15px] font-bold text-foreground hover:!bg-muted transition-colors !flex items-center gap-3"
-                >
-                  <IonIcon icon={flagOutline} className="text-xl text-red-500" /> Report Issue
-                </button>
-              </div>
-            </>
+        </div>
+
+        {/* SEARCH */}
+        <div className="max-w-md mx-auto px-4 pb-2">
+          <div className="bg-gray-100 dark:bg-white/5 rounded-full flex items-center px-4 py-2.5">
+            <IonIcon icon={searchOutline} className="text-gray-400 text-lg mr-3 shrink-0" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search chats..."
+              className="bg-transparent border-none outline-none text-[15px] w-full text-gray-900 dark:text-white placeholder:text-gray-400"
+            />
+          </div>
+        </div>
+
+        {/* FILTER PILLS — same rounded tab style as the home feed */}
+        <div className="max-w-md mx-auto flex gap-2 px-4 pb-3">
+          {(['all', 'unread'] as const).map((f) => (
+            <button
+              key={f}
+              onClick={() => setActiveFilter(f)}
+              className={`whitespace-nowrap flex-shrink-0 px-4 py-2 rounded-full text-xs font-bold transition-all shadow-sm active:scale-95 ${
+                activeFilter === f
+                  ? 'bg-orange-500 text-white border border-orange-500'
+                  : 'bg-orange-100 text-gray-700 dark:bg-orange-500/20 dark:text-gray-200 border border-orange-200 dark:border-orange-500/30'
+              }`}
+            >
+              {f === 'all' ? 'All' : 'Unread'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* CHAT LIST — the pull zone. Only this body stretches on pull-down;
+          the sticky header above never moves, so rows can never slide
+          visibly behind the tabs or search bar. min-h keeps the empty
+          area below a short list pullable too. */}
+      <div ref={pullZoneRef} data-pull-zone className="max-w-md mx-auto min-h-[50dvh]">
+        {/* Rubber-band strip: grows elastically above the list while pulling */}
+        <div
+          className="overflow-hidden flex items-center justify-center"
+          style={{
+            height: stripH,
+            transition: dragging ? 'none' : 'height 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
+          }}
+        >
+          {(stripH > 4 || refreshing) && (
+            <PullSpinner
+              spinning={refreshing}
+              progress={refreshing ? 1 : Math.min(1, stripH / PULL_THRESHOLD)}
+              size={28}
+            />
           )}
         </div>
-      </div>
-
-      {/* FUNCTIONAL SEARCH BAR */}
-      <div className="px-3 pb-3">
-        <div className="bg-muted !rounded-full flex items-center px-4 py-2.5">
-          <IonIcon icon={searchOutline} className="text-muted-foreground text-lg mr-3" />
-          <input 
-            type="text" 
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search chats..." 
-            className="bg-transparent border-none outline-none text-[15px] w-full text-foreground placeholder:text-muted-foreground"
-          />
-        </div>
-      </div>
-
-      {/* FILTER PILLS */}
-      <div className="flex gap-2 px-4 pb-3 overflow-x-auto scrollbar-hide">
-        <button 
-          onClick={() => setActiveFilter('all')}
-          className={`!px-4 !py-1.5 !rounded-full text-sm font-medium transition-colors ${activeFilter === 'all' ? 'bg-orange-500/10 text-orange-500' : 'bg-muted text-muted-foreground'}`}
-        >
-          All
-        </button>
-        <button 
-          onClick={() => setActiveFilter('unread')}
-          className={`!px-4 !py-1.5 !rounded-full text-sm font-medium transition-colors ${activeFilter === 'unread' ? 'bg-orange-500/10 text-orange-500' : 'bg-muted text-muted-foreground'}`}
-        >
-          Unread
-        </button>
-      </div>
-
-      {/* CHAT LIST */}
-      <div className="flex flex-col">
-        {isLoading ? (
-          <div className="p-4 space-y-4">
-            {[1, 2, 3, 4, 5].map(i => (
-              <div key={i} className="flex gap-4 items-center animate-pulse">
-                <div className="w-12 h-12 bg-muted !rounded-full flex-shrink-0" />
-                <div className="flex-1 space-y-2">
-                  <div className="h-4 bg-muted !rounded w-1/3" />
-                  <div className="h-3 bg-muted !rounded w-2/3" />
-                </div>
-              </div>
-            ))}
+        {userId === undefined || isLoading ? (
+          <div className="flex flex-col items-center justify-center pt-24 gap-3">
+            <PullSpinner spinning size={32} />
+            <p className="text-sm font-medium text-gray-400">Loading chats…</p>
+          </div>
+        ) : error && !chats ? (
+          <div className="flex flex-col items-center justify-center pt-24 px-6 text-center">
+            <p className="text-[15px] font-semibold text-gray-900 dark:text-white">
+              Couldn't load chats
+            </p>
+            <p className="text-sm text-gray-400 mt-1 mb-4">Check your connection and try again.</p>
+            <button
+              onClick={() => void mutate()}
+              className="px-6 py-2.5 rounded-full bg-orange-500 text-white text-sm font-bold shadow-md shadow-orange-500/30 active:scale-95 transition-transform"
+            >
+              Retry
+            </button>
           </div>
         ) : filteredChats.length > 0 ? (
           filteredChats.map((chat) => (
-            <div 
-              key={chat.transaction_ref} 
-              onClick={() => router.push(`/chats?seller=${chat.partner?.id}&ref=${chat.transaction_ref}`)}
-              className="flex items-center gap-3 px-4 py-3 active:bg-muted/50 cursor-pointer transition-colors hover:bg-muted/50"
+            <button
+              key={chat.transaction_ref}
+              onClick={() =>
+                router.push(`/chats?seller=${chat.partner?.id}&ref=${chat.transaction_ref}`)
+              }
+              className="w-full flex items-center gap-3 px-4 py-3 text-left active:bg-gray-100 dark:active:bg-white/5 transition-colors"
             >
-              <Avatar src={chat.partner?.avatar_url} name={chat.partner?.full_name || "User"} size="lg" />
+              <Avatar
+                src={chat.partner?.avatar_url}
+                name={chat.partner?.full_name || 'User'}
+                size="lg"
+              />
 
-              <div className="flex-1 min-w-0 border-b border-border pb-3">
-                <div className="flex items-center justify-between mb-1">
-                  <h3 className="font-medium text-[16px] text-foreground truncate pr-2">
-                    {chat.partner?.full_name || "Vendi User"}
+              <div className="flex-1 min-w-0 border-b border-gray-100 dark:border-white/5 pb-3">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-[16px] font-semibold text-gray-900 dark:text-white truncate">
+                    {chat.partner?.full_name || 'Vendi User'}
                   </h3>
-                  <span className={`text-xs ${chat.unreadCount > 0 ? 'text-orange-500 font-bold' : 'text-muted-foreground'}`}>
+                  <span
+                    className={`text-[12px] shrink-0 ${
+                      chat.unreadCount > 0
+                        ? 'text-orange-500 font-bold'
+                        : 'text-gray-400 font-medium'
+                    }`}
+                  >
                     {formatTime(chat.latestMessage.created_at)}
                   </span>
                 </div>
 
-                <div className="flex items-center justify-between">
-                  <div className="flex-1 truncate pr-4">
+                <div className="flex items-center justify-between gap-2 mt-0.5">
+                  <div className="flex-1 min-w-0">
                     {renderMessagePreview(chat.latestMessage)}
                   </div>
                   {chat.unreadCount > 0 && (
-                    <div className="!bg-orange-500 text-white text-[11px] font-bold !w-5 !h-5 !min-w-[20px] !min-h-[20px] flex items-center justify-center !rounded-full flex-shrink-0 shadow-sm">
+                    <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-orange-500 text-white text-[11px] font-bold flex items-center justify-center shadow-sm">
                       {chat.unreadCount}
-                    </div>
+                    </span>
                   )}
                 </div>
               </div>
-            </div>
+            </button>
           ))
         ) : (
-          <div className="flex flex-col items-center justify-center pt-20 text-muted-foreground">
-            <p className="text-[15px]">{searchQuery ? "No chats match your search." : "No chats found."}</p>
+          <div className="flex flex-col items-center justify-center pt-24 px-6 text-center">
+            <span className="w-16 h-16 rounded-full bg-orange-500/10 flex items-center justify-center mb-4">
+              <IonIcon icon={chatbubblesOutline} className="text-3xl text-orange-500" />
+            </span>
+            <p className="text-[15px] font-semibold text-gray-900 dark:text-white">
+              {searchQuery ? 'No chats match your search' : 'No chats yet'}
+            </p>
+            <p className="text-sm text-gray-400 mt-1">
+              {searchQuery
+                ? 'Try a different name or message.'
+                : 'Your conversations with buyers and sellers will show up here.'}
+            </p>
           </div>
         )}
       </div>

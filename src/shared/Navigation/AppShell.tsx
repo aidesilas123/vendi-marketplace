@@ -14,13 +14,14 @@ interface AppShellProps {
 export const AppShell = ({ children }: AppShellProps) => {
   const pathname = usePathname();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [user, setUser] = useState<{ name: string; email: string; avatarUrl?: string } | null>(null);
+  const [user, setUser] = useState<{ id?: string; name: string; email: string; avatarUrl?: string } | null>(null);
 
   useEffect(() => {
     const fetchUser = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
         setUser({
+          id: session.user.id,
           name: session.user.user_metadata?.full_name || "Campus Student",
           email: session.user.email || "",
           avatarUrl: session.user.user_metadata?.avatar_url,
@@ -33,7 +34,8 @@ export const AppShell = ({ children }: AppShellProps) => {
   useEffect(() => setIsSidebarOpen(false), [pathname]);
 
   const isAuthPage = pathname === '/login' || pathname === '/signup';
-  if (isAuthPage) return <>{children}</>;
+  const isChatRoom = pathname === '/chats' || pathname?.startsWith('/chats');
+  if (isAuthPage || isChatRoom) return <>{children}</>;
 
   const isDashboard = pathname === '/';
 
@@ -61,7 +63,7 @@ export const AppShell = ({ children }: AppShellProps) => {
         </div>
       </main>
 
-      <div className="absolute bottom-0 left-0 right-0 w-full z-50 pointer-events-none pb-safe">
+      <div className="absolute bottom-0 left-0 right-0 w-full z-50 pointer-events-none">
         <div className="pointer-events-auto">
           <BottomNav />
         </div>

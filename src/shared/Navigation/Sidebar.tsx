@@ -47,7 +47,19 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
 
   // --- Swipe-to-close State ---
   const touchStartX = useRef<number | null>(null);
+  const touchStartY = useRef<number | null>(null);
+  const isHorizontalSwipe = useRef<boolean | null>(null);
   const [swipeOffset, setSwipeOffset] = useState(0);
+
+  // Keyboard Escape listener
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
 
   // 1. Fetch auth user to get the ID if not passed in props
   const { data: sessionUser } = useSWR('local-session', async () => {
@@ -106,24 +118,37 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
   // --- Swipe Gestures ---
   const onTouchStart = (e: React.TouchEvent) => {
     touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+    isHorizontalSwipe.current = null;
   };
 
   const onTouchMove = (e: React.TouchEvent) => {
-    if (touchStartX.current === null) return;
-    const diff = e.touches[0].clientX - touchStartX.current;
-    // Only allow sliding to the right (positive diff)
-    if (diff > 0) {
-      setSwipeOffset(diff);
+    if (touchStartX.current === null || touchStartY.current === null) return;
+    const diffX = e.touches[0].clientX - touchStartX.current;
+    const diffY = e.touches[0].clientY - touchStartY.current;
+
+    // Disambiguate horizontal swipe from vertical scrolling
+    if (isHorizontalSwipe.current === null) {
+      if (Math.abs(diffX) > 8 || Math.abs(diffY) > 8) {
+        isHorizontalSwipe.current = Math.abs(diffX) > Math.abs(diffY);
+      }
+    }
+
+    // Only allow sliding to the right if horizontal swipe is confirmed
+    if (isHorizontalSwipe.current && diffX > 0) {
+      setSwipeOffset(diffX);
     }
   };
 
   const onTouchEnd = () => {
-    // If they swiped more than 80px to the right, close it
+    // If swiped more than 80px to the right, close it
     if (swipeOffset > 80) {
       onClose();
     }
     setSwipeOffset(0);
     touchStartX.current = null;
+    touchStartY.current = null;
+    isHorizontalSwipe.current = null;
   };
 
   const ACCOUNT_LINKS = [
@@ -163,15 +188,20 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
 
         {/* Sliding Panel */}
         <div 
+          role="dialog"
+          aria-modal="true"
+          aria-label="Navigation menu"
           onTouchStart={onTouchStart}
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}
           style={{ transform: panelTransform, transition: panelTransition }}
-          className="absolute top-0 right-0 h-full w-[85vw] max-w-[340px] bg-white dark:bg-[#111b21] shadow-2xl flex flex-col rounded-l-3xl overflow-hidden"
+          className="absolute top-0 right-0 h-full w-[85vw] max-w-[340px] bg-white dark:bg-[#0b1120] shadow-2xl flex flex-col rounded-l-3xl overflow-hidden"
         >
           
-          <div className="absolute top-6 right-6 z-10">
+          <div className="absolute top-[max(env(safe-area-inset-top),1.5rem)] right-6 z-10">
             <button 
+              type="button"
+              aria-label="Close navigation"
               onClick={onClose} 
               className="!p-2 text-gray-400 hover:text-gray-900 dark:text-gray-500 dark:hover:text-white transition-colors active:scale-95 !rounded-full"
             >
@@ -182,7 +212,7 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
           {/* Sidebar Header & User Info (Clickable!) */}
           <div 
             onClick={() => handleNavigation(targetId ? `/profile?id=${targetId}` : '/profile')}
-            className="px-8 pt-12 pb-8 flex flex-col gap-5 cursor-pointer active:opacity-70 transition-opacity"
+            className="px-8 pt-[max(env(safe-area-inset-top),3rem)] pb-8 flex flex-col gap-5 cursor-pointer active:opacity-70 transition-opacity"
           >
             {isFetchingProfile && !realName ? (
               // SKELETON PREVENTS FLASHING
@@ -268,8 +298,9 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
           </div>
 
           {/* Bigger Sign Out Footer */}
-          <div className="p-8 mt-auto border-t border-gray-100 dark:border-gray-800/50">
+          <div className="p-8 pb-[max(env(safe-area-inset-bottom),2rem)] mt-auto border-t border-gray-100 dark:border-gray-800/50">
             <button 
+              type="button"
               onClick={() => setShowSignOutModal(true)}
               className="w-full flex items-center justify-center gap-3 px-4 py-5 !rounded-full bg-red-50 dark:bg-red-500/10 border border-transparent dark:border-red-500/20 text-red-600 dark:text-red-500 hover:bg-red-100 dark:hover:bg-red-500/20 active:scale-[0.98] transition-all font-black text-lg"
             >

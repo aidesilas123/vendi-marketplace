@@ -21,29 +21,29 @@ export function EscrowBreakdown({
 
       <div className="space-y-2 text-sm">
         <div className="flex items-center justify-between">
-          <span className="text-gray-500">{priceLabel}</span>
-          <span className="font-bold">{naira(price)}</span>
+          <span className="text-gray-500 dark:text-gray-400">{priceLabel}</span>
+          <span className="font-bold text-gray-900 dark:text-white">{naira(price)}</span>
         </div>
 
         <div className="flex items-center justify-between">
-          <span className="text-gray-500">Platform fee ({fees.pct}%)</span>
+          <span className="text-gray-500 dark:text-gray-400">Platform fee ({fees.pct}%)</span>
           {fees.isPromo ? (
             <span className="flex items-center gap-2">
-              <s className="text-gray-400">{naira(fees.standardFee)}</s>
-              <span className="font-bold text-green-600">Free</span>
+              <s className="text-gray-400 dark:text-gray-500">{naira(fees.standardFee)}</s>
+              <span className="font-bold text-green-600 dark:text-green-400">Free</span>
             </span>
           ) : (
-            <span className="font-bold">{naira(fees.buyerFee)}</span>
+            <span className="font-bold text-gray-900 dark:text-white">{naira(fees.buyerFee)}</span>
           )}
         </div>
 
         <div className="flex items-center justify-between border-t border-[#D4AF37]/20 pt-2">
-          <span className="font-black">Total due</span>
+          <span className="font-black text-gray-900 dark:text-white">Total due</span>
           <span className="text-base font-black text-orange-500">{naira(fees.total)}</span>
         </div>
       </div>
 
-      <p className="mt-3 text-[11px] text-gray-500">
+      <p className="mt-3 text-[11px] text-gray-500 dark:text-gray-400">
         {fees.isPromo
           ? 'Launch promo: no platform fee on this transaction.'
           : `${fees.pct}% platform fee is added to this transaction.`}
