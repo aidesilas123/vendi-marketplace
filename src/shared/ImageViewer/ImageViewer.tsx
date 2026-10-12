@@ -683,6 +683,7 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
           </div>
         )}
       </div>
+      
     </div>
   );
 };
