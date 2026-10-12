@@ -47,10 +47,11 @@ export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications
 
   return (
     <div className="sticky top-0 z-50 h-12 bg-gray-50 dark:bg-[#0b1120] px-4 flex items-center justify-between">
-      <div className="flex items-center gap-2">
-        {/* Replace '/icon.png' with the actual path to your logo in the public folder */}
-        <img src="/icon.png" alt="Vendi Logo" className="w-6 h-6 rounded-md object-contain shadow-sm" />
-        <h1 className="text-lg font-black text-foreground leading-none mb-0">Vendi</h1>
+      <div className="flex items-center gap-2.5">
+        <img src="/icon.png" alt="Vendi Logo" className="w-7 h-7 rounded-lg object-contain shadow-sm" />
+        <span className="text-[19px] font-black tracking-tight text-gray-900 dark:text-white leading-none">
+          Vendi<span className="text-orange-500">.</span>
+        </span>
       </div>
 
       <div className="flex items-center gap-1">

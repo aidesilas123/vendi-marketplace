@@ -329,47 +329,39 @@ export default function MessagesList() {
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground pt-safe pb-28">
-      {/* HEADER — solid, same theme as the body. No blur, no transparency. */}
+    <div className="min-h-screen bg-background text-foreground pb-24">
+      {/* HEADER — solid, same theme as the body. Clean tight status bar spacing. */}
       <div className="sticky top-0 z-30 bg-background">
-        <div className="max-w-md mx-auto px-4 pt-4 pb-2 flex items-center justify-between">
-          <h1 className="text-[22px] font-black tracking-tight text-gray-900 dark:text-white">
+        <div className="max-w-md mx-auto px-4 pt-2 pb-1.5 flex items-center justify-between">
+          <h1 className="text-lg font-bold tracking-tight text-gray-900 dark:text-white">
             Vendi Chats
           </h1>
-          {/* Report: solid orange, never transparent */}
-          <button
-            onClick={() => router.push('/support')}
-            aria-label="Report an issue"
-            className="w-10 h-10 rounded-full bg-orange-500 text-white flex items-center justify-center shadow-md shadow-orange-500/30 active:scale-95 transition-transform"
-          >
-            <IonIcon icon={flagOutline} className="text-xl" />
-          </button>
         </div>
 
         {/* SEARCH */}
         <div className="max-w-md mx-auto px-4 pb-2">
-          <div className="bg-gray-100 dark:bg-white/5 rounded-full flex items-center px-4 py-2.5">
-            <IonIcon icon={searchOutline} className="text-gray-400 text-lg mr-3 shrink-0" />
+          <div className="bg-gray-100 dark:bg-white/5 rounded-full flex items-center px-3.5 py-2">
+            <IonIcon icon={searchOutline} className="text-gray-400 text-lg mr-2.5 shrink-0" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search chats..."
-              className="bg-transparent border-none outline-none text-[15px] w-full text-gray-900 dark:text-white placeholder:text-gray-400"
+              className="bg-transparent border-none outline-none text-sm w-full text-gray-900 dark:text-white placeholder:text-gray-400"
             />
           </div>
         </div>
 
-        {/* FILTER PILLS — same rounded tab style as the home feed */}
-        <div className="max-w-md mx-auto flex gap-2 px-4 pb-3">
+        {/* FILTER PILLS — refined compact pill style */}
+        <div className="max-w-md mx-auto flex gap-2 px-4 pb-2.5">
           {(['all', 'unread'] as const).map((f) => (
             <button
               key={f}
               onClick={() => setActiveFilter(f)}
-              className={`whitespace-nowrap flex-shrink-0 px-4 py-2 rounded-full text-xs font-bold transition-all shadow-sm active:scale-95 ${
+              className={`whitespace-nowrap flex-shrink-0 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all shadow-sm active:scale-95 outline-none border-0 ${
                 activeFilter === f
-                  ? 'bg-orange-500 text-white border border-orange-500'
-                  : 'bg-orange-100 text-gray-700 dark:bg-orange-500/20 dark:text-gray-200 border border-orange-200 dark:border-orange-500/30'
+                  ? 'bg-orange-500 text-white'
+                  : 'bg-orange-100 text-gray-700 dark:bg-orange-500/20 dark:text-gray-200'
               }`}
             >
               {f === 'all' ? 'All' : 'Unread'}
@@ -424,17 +416,17 @@ export default function MessagesList() {
               onClick={() =>
                 router.push(`/chats?seller=${chat.partner?.id}&ref=${chat.transaction_ref}`)
               }
-              className="w-full flex items-center gap-3 px-4 py-3 text-left active:bg-gray-100 dark:active:bg-white/5 transition-colors"
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-left active:bg-gray-100 dark:active:bg-white/5 transition-colors"
             >
               <Avatar
                 src={chat.partner?.avatar_url}
                 name={chat.partner?.full_name || 'User'}
-                size="lg"
+                size="md"
               />
 
-              <div className="flex-1 min-w-0 border-b border-gray-100 dark:border-white/5 pb-3">
+              <div className="flex-1 min-w-0 border-b border-gray-100 dark:border-white/5 pb-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-[16px] font-semibold text-gray-900 dark:text-white truncate">
+                  <h3 className="text-[15px] font-semibold text-gray-900 dark:text-white truncate">
                     {chat.partner?.full_name || 'Vendi User'}
                   </h3>
                   <span

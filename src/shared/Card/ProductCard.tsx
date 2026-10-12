@@ -232,7 +232,7 @@ export const ProductCard = ({
         <h3 className="font-bold text-gray-900 dark:text-white text-[10px] mb-0.5 truncate">{title}</h3>
         <div className="flex items-center justify-between mt-auto">
           {/* Swapped to price (which maps to product.base_price from SellerDashboard) */}
-          <p className={`text-sm font-black ${status === 'SOLD' ? 'text-gray-400 line-through' : 'text-orange-500'}`}>
+          <p className={`text-sm font-bold ${status === 'SOLD' ? 'text-gray-400 line-through' : 'text-orange-500'}`}>
             ₦{basePrice?.toLocaleString('en-NG')}
           </p>
           <div className="flex items-center gap-1 text-[10px] font-bold text-gray-500 tracking-wider">

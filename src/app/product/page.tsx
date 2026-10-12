@@ -902,11 +902,11 @@ export default function ProductDetails() {
 
           {/* Title + price */}
           <div className="pb-2 pt-6">
-            <h1 className="text-2xl font-black leading-tight md:text-3xl">{product.title}</h1>
-            <div className="mt-3 flex items-end gap-3">
-              <p className="text-3xl font-black text-orange-500">{naira(displayPrice)}</p>
+            <h1 className="text-lg sm:text-xl font-bold leading-snug text-gray-900 dark:text-white">{product.title}</h1>
+            <div className="mt-2.5 flex items-end gap-3">
+              <p className="text-2xl font-bold text-orange-500">{naira(displayPrice)}</p>
               {product.slashed_price && Number(product.slashed_price) > displayPrice && (
-                <p className="mb-1 text-lg font-bold text-gray-400 line-through">{naira(Number(product.slashed_price))}</p>
+                <p className="mb-0.5 text-base font-semibold text-gray-400 line-through">{naira(Number(product.slashed_price))}</p>
               )}
             </div>
 

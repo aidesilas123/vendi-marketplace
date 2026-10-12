@@ -42,8 +42,8 @@ const ICON_BTN = `flex h-10 min-h-10 w-10 items-center justify-center rounded-fu
 const PRIMARY_BTN =
   'h-12! min-h-12! min-w-32 rounded-full! bg-orange-500! px-8! py-0! text-sm! font-bold! text-white! border-0! shadow-none!';
 
-// Stretches the header securely to the absolute top of edge-to-edge mobile screens
-const HEADER_SPACE = 'pt-[max(env(safe-area-inset-top),16px)] pb-6';
+// Compact header padding since AppShell already provides pt-safe
+const HEADER_SPACE = 'pt-2 pb-3';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -251,7 +251,7 @@ export default function WalletDashboard() {
         <div className="mx-auto w-full max-w-md px-5 pb-40">
           {/* Header: z-10 allows the spinner to smoothly glide over it */}
           <header className={`sticky top-0 z-10 -mx-5 bg-gray-50 px-5 dark:bg-[#0b1120] ${HEADER_SPACE}`}>
-            <h1 className="text-xl font-black">
+            <h1 className="text-lg font-bold">
               My <span className="text-orange-500">Wallet</span>
             </h1>
           </header>
@@ -289,7 +289,7 @@ export default function WalletDashboard() {
                     {reloading ? (
                       <Spinner className="h-7 w-7" />
                     ) : (
-                      <h2 className="text-[32px] font-black leading-tight tracking-tight tabular-nums">
+                      <h2 className="text-[28px] font-bold leading-tight tracking-tight tabular-nums">
                         {balanceText}
                       </h2>
                     )}

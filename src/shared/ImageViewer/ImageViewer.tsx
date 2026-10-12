@@ -5,6 +5,7 @@ import { registerBackHandler } from '@/shared/HardwareBackButton';
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { hapticImpact, ImpactStyle } from '@/shared/haptics';
+import { showGlobalToast } from '@/shared/Toast/Toast';
 
 interface ImageViewerProps {
   images: string[];
@@ -26,6 +27,9 @@ const SWIPE_VELOCITY = 0.35; // px/ms
 const SWIPE_FRACTION = 0.2; // of viewport width
 const DURATION = 300; // ms
 const EASE = 'cubic-bezier(0.22, 1, 0.36, 1)';
+
+/** Native gallery folder: /storage/emulated/0/Pictures/Vendi/ (shows as the "Vendi" album, like WhatsApp) */
+const NATIVE_ALBUM_DIR = 'Pictures/Vendi';
 
 type Mode = 'idle' | 'undecided' | 'swipe' | 'dismiss' | 'pan' | 'pinch';
 interface Pt {
@@ -532,28 +536,41 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
     if (!currentSrc || savingToDevice) return;
     setSavingToDevice(true);
     hapticImpact(ImpactStyle.Light);
+    showGlobalToast('Downloading photo…', 'info');
     try {
       if (Capacitor.isNativePlatform()) {
         const response = await fetch(currentSrc);
+        if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
         const blob = await response.blob();
-        const reader = new FileReader();
-        reader.onloadend = async () => {
-          try {
-            const base64 = (reader.result as string).split(',')[1];
-            const fileName = `vendi_photo_${Date.now()}.jpg`;
-            await Filesystem.writeFile({
-              path: fileName,
-              data: base64,
-              directory: Directory.Documents,
-            });
-            hapticImpact(ImpactStyle.Medium);
-          } catch (err) {
-            console.error('[ImageViewer] Native file save failed:', err);
-          } finally {
-            setSavingToDevice(false);
-          }
-        };
-        reader.readAsDataURL(blob);
+        const dataUrl: string = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            if (typeof reader.result === 'string') resolve(reader.result);
+            else reject(new Error('Could not read photo data'));
+          };
+          reader.onerror = () => reject(new Error('Could not read photo data'));
+          reader.readAsDataURL(blob);
+        });
+        const base64 = dataUrl.split(',')[1];
+        if (!base64) throw new Error('Could not read photo data');
+        const fileName = `vendi_photo_${Date.now()}.jpg`;
+        // Ensure the Vendi album folder exists (no-op if it already does)
+        try {
+          await Filesystem.mkdir({
+            path: NATIVE_ALBUM_DIR,
+            directory: Directory.ExternalStorage,
+            recursive: true,
+          });
+        } catch {
+          /* folder already exists */
+        }
+        await Filesystem.writeFile({
+          path: `${NATIVE_ALBUM_DIR}/${fileName}`,
+          data: base64,
+          directory: Directory.ExternalStorage,
+        });
+        hapticImpact(ImpactStyle.Medium);
+        showGlobalToast('Photo saved to your Vendi album', 'success');
       } else {
         const a = document.createElement('a');
         a.href = currentSrc;
@@ -562,10 +579,12 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        setSavingToDevice(false);
+        showGlobalToast('Photo downloaded', 'success');
       }
     } catch (err) {
       console.error('[ImageViewer] Save failed:', err);
+      showGlobalToast('Download failed. Check your connection.', 'error');
+    } finally {
       setSavingToDevice(false);
     }
   };
@@ -616,7 +635,7 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
 
       {/* Close button, save to device button + dots (fade while dragging) */}
       <div ref={chromeRef}>
-        <div 
+        <div
           className="pointer-events-none absolute left-0 right-0 top-0 z-20 flex items-center justify-between px-4 pb-2"
           style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
         >
@@ -629,7 +648,15 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
               disabled={savingToDevice}
               className="!w-11 !h-11 !min-w-[44px] !min-h-[44px] !aspect-square !rounded-full bg-black/50 hover:bg-black/70 text-white flex items-center justify-center active:scale-95 transition-transform"
             >
-              <IonIcon icon={downloadOutline} className="text-2xl drop-shadow-sm pointer-events-none" />
+              {savingToDevice ? (
+                <span
+                  role="status"
+                  aria-label="Downloading"
+                  className="w-5 h-5 rounded-full border-[3px] border-white/40 border-t-white animate-spin pointer-events-none"
+                />
+              ) : (
+                <IonIcon icon={downloadOutline} className="text-2xl drop-shadow-sm pointer-events-none" />
+              )}
             </button>
           </div>
           <button

@@ -204,7 +204,7 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
         {settingsLoading ? (
           <Skeleton className="w-16 h-5 rounded-full mb-2" />
         ) : (
-          <p className={`text-sm font-black mb-2 ${product.status === 'SOLD' ? 'text-gray-400 line-through' : 'text-orange-500'}`}>
+          <p className={`text-sm font-bold mb-2 ${product.status === 'SOLD' ? 'text-gray-400 line-through' : 'text-orange-500'}`}>
             {naira(displayPrice)}
           </p>
         )}

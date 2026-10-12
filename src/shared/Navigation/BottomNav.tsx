@@ -52,7 +52,7 @@ export const BottomNav = () => {
     // the system buttons. Don't add a bottom offset or safe-area padding to the
     // wrapper that renders <BottomNav />, or the gap will come back.
     <div
-      className={`fixed bottom-0 inset-x-0 z-50 bg-white dark:bg-[#0f172a] border-t border-gray-200 dark:border-gray-800 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pt-2 px-2 sm:px-6 rounded-t-3xl sm:rounded-none transition-transform duration-300 ease-in-out ${isVisible ? 'translate-y-0' : 'translate-y-[150%]'}`}
+      className={`fixed bottom-0 inset-x-0 z-50 bg-white dark:bg-[#0f172a] border-t border-gray-200 dark:border-gray-800 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pt-2 px-2 sm:px-6 rounded-t-3xl sm:rounded-none select-none ${isVisible ? 'translate-y-0' : 'translate-y-[150%] transition-transform duration-300 ease-in-out'}`}
       style={{ paddingBottom: "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))" }}
     >
       {/* max-w-lg keeps spacing tight on tablets; a single justify-between flex wrapper */}
@@ -62,11 +62,16 @@ export const BottomNav = () => {
         {navItems.slice(0, 2).map((item) => {
           const isActive = pathname === item.route || (item.route !== '/' && pathname.startsWith(item.route));
           return (
-            <Link key={item.name} href={item.route} onClick={(e) => handleHomeClick(e, item.route)} aria-current={isActive ? 'page' : undefined} className="flex flex-col items-center justify-center gap-1 w-16">
+            <Link
+              key={item.name}
+              href={item.route}
+              onClick={(e) => handleHomeClick(e, item.route)}
+              className="flex flex-col items-center justify-center gap-1 w-16 outline-none focus:outline-none focus:ring-0 active:outline-none border-0 shadow-none -webkit-tap-highlight-transparent"
+            >
               <span suppressHydrationWarning className="flex items-center justify-center">
                 <IonIcon icon={isActive ? item.solid : item.outline} className={`text-[22px] transition-colors ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`} />
               </span>
-              <span className={`text-[10px] font-black uppercase tracking-wider ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`}>{item.name}</span>
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`}>{item.name}</span>
             </Link>
           );
         })}
@@ -76,13 +81,13 @@ export const BottomNav = () => {
 
         {/* Floating Seller Button (remains absolutely centered) */}
         <div className="absolute left-1/2 -translate-x-1/2 -top-8">
-          <Link href="/seller" className="flex flex-col items-center justify-center">
+          <Link href="/seller" className="flex flex-col items-center justify-center outline-none focus:outline-none border-0 shadow-none">
             <div className={`w-14 h-14 rounded-full flex items-center justify-center shadow-xl transition-transform active:scale-95 ${pathname.includes('/seller') ? 'bg-orange-600 border-4 border-orange-200 dark:border-orange-900/30' : 'bg-orange-500 border-4 border-white dark:border-[#0f172a]'}`}>
               <span suppressHydrationWarning className="flex items-center justify-center">
                 <IonIcon icon={pathname.includes('/seller') ? storefront : storefrontOutline} className="text-white text-2xl" />
               </span>
             </div>
-            <span className={`text-[10px] font-black uppercase tracking-widest mt-1 ${pathname.includes('/seller') ? 'text-orange-500' : 'text-gray-500 dark:text-gray-400'}`}>Seller</span>
+            <span className={`text-[10px] font-bold uppercase tracking-widest mt-1 ${pathname.includes('/seller') ? 'text-orange-500' : 'text-gray-500 dark:text-gray-400'}`}>Seller</span>
           </Link>
         </div>
 
@@ -90,11 +95,16 @@ export const BottomNav = () => {
         {navItems.slice(2, 4).map((item) => {
           const isActive = pathname === item.route || (item.route !== '/' && pathname.startsWith(item.route));
           return (
-            <Link key={item.name} href={item.route} onClick={(e) => handleProtectedClick(e, item.route)} aria-current={isActive ? 'page' : undefined} className="flex flex-col items-center justify-center gap-1 w-16">
+            <Link
+              key={item.name}
+              href={item.route}
+              onClick={(e) => handleProtectedClick(e, item.route)}
+              className="flex flex-col items-center justify-center gap-1 w-16 outline-none focus:outline-none focus:ring-0 active:outline-none border-0 shadow-none -webkit-tap-highlight-transparent"
+            >
               <span suppressHydrationWarning className="flex items-center justify-center">
                 <IonIcon icon={isActive ? item.solid : item.outline} className={`text-[22px] transition-colors ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`} />
               </span>
-              <span className={`text-[10px] font-black uppercase tracking-wider ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`}>{item.name}</span>
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`}>{item.name}</span>
             </Link>
           );
         })}

@@ -208,6 +208,13 @@ export default function EditProfilePage() {
         setModalConfig({ isOpen: true, title: 'Database Error', message: dbError.message, type: 'error' });
       } else {
         originalUsername.current = formData.username;
+        // Notify AppShell & Header to update avatar immediately
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('refresh-profile'));
+        }
+        void supabase.auth.updateUser({
+          data: { avatar_url: formData.avatar_url, full_name: formData.full_name }
+        });
         setModalConfig({ isOpen: true, title: 'Success', message: 'Profile updated successfully!', type: 'success' });
         setPasswords({ newPassword: '', confirmPassword: '' });
       }

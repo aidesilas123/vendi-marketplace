@@ -1,13 +1,54 @@
 @import "tailwindcss";
 @custom-variant dark (&:is(.dark *));
+
+/* ==========================================================================
+   Plus Jakarta Sans — Local Offline Embedded Web Font
+   ========================================================================== */
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/PlusJakartaSans-Regular.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/PlusJakartaSans-Medium.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/PlusJakartaSans-SemiBold.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/PlusJakartaSans-Bold.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url('/fonts/PlusJakartaSans-ExtraBold.ttf') format('truetype');
+}
+
 @theme {
   --color-background: #f9fafb;
+  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
 }
 .dark {
   --color-background: #0b1120;
 }
 
-/* Hide scrollbar for the horizontal category chips */
+/* Hide scrollbar for horizontal category chips */
 .scrollbar-hide::-webkit-scrollbar {
     display: none;
 }
@@ -33,11 +74,10 @@ html ion-tab-bar {
 
 /* BULLETPROOF APP SCROLL LOCK
    `overflow: hidden` only hides the scrollbar. Code (Next's post-navigation
-   scrollIntoView, focus(), etc.) can still scroll a hidden element, which is what
-   pushed the whole app up after /buy. `overflow: clip` cannot be scrolled at all.
-   The `hidden` line stays first as a fallback: a WebView that doesn't understand
-   `clip` drops the second line and keeps `hidden`. */
+   scrollIntoView, focus(), etc.) can still scroll a hidden element.
+   `overflow: clip` cannot be scrolled at all. */
 html, body {
+  font-family: var(--font-sans);
   height: 100% !important;
   overflow: hidden !important;
   overflow: clip !important;
@@ -52,53 +92,60 @@ html, body {
 }
 
 * {
-  -ms-overflow-style: none;  /* Hides scrollbar in IE and Edge */
-  scrollbar-width: none;  /* Hides scrollbar in Firefox */
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
-/* SAFE AREA — reads Capacitor's injected --safe-area-inset-* first (correct
-   even on older Android WebView builds where raw env() has a known bug),
+/* SAFE AREA — reads Capacitor's injected --safe-area-inset-* first,
    falling back to native env() on iOS, newer Android, and web. */
 :root {
-  --sat: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
-  --sab: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+  --sat: max(var(--safe-area-inset-top, 0px), env(safe-area-inset-top, 0px));
+  --sab: max(var(--safe-area-inset-bottom, 0px), env(safe-area-inset-bottom, 0px));
 }
 
 .pt-safe { padding-top: var(--sat); }
 .pb-safe { padding-bottom: var(--sab); }
 
 @layer base {
-  /* 1. Kills the orange/blue tap highlight on Android WebViews */
+  /* 1. Kills tap highlight and enforces clean native typography */
   html, body {
-    -webkit-tap-highlight-color: transparent; 
+    -webkit-tap-highlight-color: transparent !important; 
     -webkit-text-size-adjust: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Plus Jakarta Sans", "SF Pro Display", "Inter", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   }
 
-  /* 2. Forces buttery-smooth native momentum scrolling for your feed */
+  /* 2. Forces buttery-smooth native momentum scrolling */
   #main-scroll-container {
     -webkit-overflow-scrolling: touch;
   }
 
-  /* 3. Force Tailwind to take back control of buttons from Ionic/Capacitor */
-  button {
+  /* 3. Global tap / focus outline reset — removes orange rectangular box on active bottom nav tabs and buttons */
+  a, button {
     height: auto !important;
     line-height: inherit !important;
     -webkit-appearance: none !important;
     appearance: none !important;
+    outline: none !important;
+    -webkit-tap-highlight-color: transparent !important;
+  }
+
+  a:focus, a:active, a:focus-visible,
+  button:focus, button:active, button:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+    -webkit-tap-highlight-color: transparent !important;
   }
 }
 
-/* SMALLER TEXT ON MOBILE — only the text-size classes shrink on screens under
-   768px. Spacing and desktop are untouched, and text-xs stays as is so the
-   pills match everywhere. Tweak or delete these to taste. */
+/* Refined typography scales for mobile */
 @media (max-width: 767px) {
   :root {
-    --text-sm: 0.8125rem;   /* 13px (was 14) */
-    --text-base: 0.9375rem; /* 15px (was 16) */
-    --text-lg: 1rem;        /* 16px (was 18) */
-    --text-xl: 1.125rem;    /* 18px (was 20) */
-    --text-2xl: 1.25rem;    /* 20px (was 24) */
-    --text-3xl: 1.5rem;     /* 24px (was 30) */
-    --text-4xl: 1.75rem;    /* 28px (was 36) */
+    --text-sm: 0.8125rem;
+    --text-base: 0.875rem;
+    --text-lg: 1rem;
+    --text-xl: 1.125rem;
+    --text-2xl: 1.25rem;
+    --text-3xl: 1.375rem;
+    --text-4xl: 1.625rem;
   }
 }

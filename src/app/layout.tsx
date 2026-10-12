@@ -6,17 +6,9 @@ import { StatusBarManager } from "@/shared/StatusBarManager";
 import { HardwareBackButton } from "@/shared/HardwareBackButton";
 import { PageTransition } from "@/shared/PageTransition";
 import { GlobalToastHost } from "@/shared/Toast/Toast";
-// 1. IONIC CSS MUST BE IMPORTED FIRST
+// 1. Core Ionic styles for web components (optional typography.css removed to prevent overriding Tailwind utility classes)
 import '@ionic/react/css/core.css';
-
 import '@ionic/react/css/structure.css';
-import '@ionic/react/css/typography.css';
-import '@ionic/react/css/padding.css';
-import '@ionic/react/css/float-elements.css';
-import '@ionic/react/css/text-alignment.css';
-import '@ionic/react/css/text-transformation.css';
-import '@ionic/react/css/flex-utils.css';
-import '@ionic/react/css/display.css';
 
 import "./globals.css";
 import type { Viewport } from "next";
@@ -37,6 +29,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <link rel="preload" href="/fonts/PlusJakartaSans-Regular.ttf" as="font" type="font/ttf" crossOrigin="anonymous" />
+        <link rel="preload" href="/fonts/PlusJakartaSans-SemiBold.ttf" as="font" type="font/ttf" crossOrigin="anonymous" />
+      </head>
       {/* antialiased makes the font incredibly smooth on all devices */}
       <body className="font-sans antialiased">
         <HardwareBackButton />

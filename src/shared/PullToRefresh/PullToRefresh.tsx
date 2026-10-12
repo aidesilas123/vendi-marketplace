@@ -252,10 +252,12 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
   }, [applyBounce, applyPull, runRefresh]);
 
   const progress = Math.min(1, pull / HOLD);
+  const topStretch = refreshing ? 24 : (pull > 0 ? pull * 0.42 : 0);
+  const contentOffset = bounce !== 0 ? bounce : topStretch;
 
   return (
     <div className={`relative overflow-hidden ${bgClassName} ${className}`}>
-      {/* The spinner badge: the only thing that moves while you pull */}
+      {/* The spinner badge */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center"
@@ -278,8 +280,8 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
         onScroll={onScroll}
         className={`h-full overflow-y-auto ${bgClassName} ${contentClassName}`}
         style={{
-          // Only the bottom bounce ever moves the page. `none` at rest so fixed descendants behave.
-          transform: bounce !== 0 ? `translate3d(0, ${bounce}px, 0)` : 'none',
+          // Elastic rubber-band stretch at top and bottom. 'none' at rest so fixed descendants behave.
+          transform: contentOffset !== 0 ? `translate3d(0, ${contentOffset}px, 0)` : 'none',
           transition: dragging ? 'none' : `transform ${SETTLE_MS}ms ${EASE}`,
           overscrollBehaviorY: 'contain',
           WebkitOverflowScrolling: 'touch',

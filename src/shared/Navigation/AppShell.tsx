@@ -20,15 +20,36 @@ export const AppShell = ({ children }: AppShellProps) => {
     const fetchUser = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
+        // Query users table for live profile avatar & name
+        const { data: profile } = await supabase
+          .from('users')
+          .select('id, full_name, avatar_url')
+          .eq('id', session.user.id)
+          .maybeSingle();
+
         setUser({
           id: session.user.id,
-          name: session.user.user_metadata?.full_name || "Campus Student",
+          name: profile?.full_name || session.user.user_metadata?.full_name || "Campus Student",
           email: session.user.email || "",
-          avatarUrl: session.user.user_metadata?.avatar_url,
+          avatarUrl: profile?.avatar_url || session.user.user_metadata?.avatar_url,
         });
       }
     };
+
     fetchUser();
+
+    // Listen to custom refresh-profile event (e.g. from /profile/edit)
+    const handleProfileRefresh = () => { void fetchUser(); };
+    window.addEventListener('refresh-profile', handleProfileRefresh);
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(() => {
+      void fetchUser();
+    });
+
+    return () => {
+      window.removeEventListener('refresh-profile', handleProfileRefresh);
+      authListener?.subscription?.unsubscribe();
+    };
   }, []);
 
   useEffect(() => setIsSidebarOpen(false), [pathname]);

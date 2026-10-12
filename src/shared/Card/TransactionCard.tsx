@@ -60,15 +60,15 @@ export const TransactionCard: React.FC<TransactionCardProps> = ({ tx, onClick })
     <button 
       type="button"
       onClick={handleClick}
-      className="w-full bg-transparent px-4 py-4 flex items-center gap-4 transition-colors hover:bg-black/5 dark:hover:bg-white/5 active:bg-black/10 cursor-pointer text-left border-0 shadow-none rounded-none"
+      className="w-full bg-transparent px-4 py-2.5 flex items-center gap-3 transition-colors hover:bg-black/5 dark:hover:bg-white/5 active:bg-black/10 cursor-pointer text-left border-0 shadow-none rounded-none"
     >
-      <div style={{ borderRadius: '9999px' }} className={`w-11 h-11 flex items-center justify-center flex-shrink-0 ${getTxColors(tx.type, tx.status)}`}>
-        <ClientIcon icon={getTxIcon(tx.type)} className="text-[20px]" />
+      <div style={{ borderRadius: '9999px' }} className={`w-9 h-9 flex items-center justify-center flex-shrink-0 ${getTxColors(tx.type, tx.status)}`}>
+        <ClientIcon icon={getTxIcon(tx.type)} className="text-[17px]" />
       </div>
       
       <div className="flex-1 min-w-0">
-        <h4 className="font-bold text-[13px] text-gray-900 dark:text-white truncate">{tx.title}</h4>
-        <div className="flex items-center gap-1.5 mt-1 text-gray-500 dark:text-gray-400">
+        <h4 className="font-semibold text-[13px] text-gray-900 dark:text-white truncate">{tx.title}</h4>
+        <div className="flex items-center gap-1.5 mt-0.5 text-gray-500 dark:text-gray-400">
           <p className="text-[11px] font-medium">{new Date(tx.created_at).toLocaleDateString()}</p>
           <span className="w-1 h-1 rounded-full bg-gray-300 dark:bg-gray-600"></span>
           <p className="text-[11px] font-medium">{new Date(tx.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
@@ -76,32 +76,32 @@ export const TransactionCard: React.FC<TransactionCardProps> = ({ tx, onClick })
       </div>
 
       <div className="text-right flex-shrink-0">
-        <p className={`font-black text-[13px] tabular-nums ${tx.type === 'credit' || tx.type === 'escrow_release' || tx.type === 'refund' ? 'text-green-600 dark:text-green-400' : 'text-gray-900 dark:text-white'}`}>
+        <p className={`font-bold text-[13px] tabular-nums ${tx.type === 'credit' || tx.type === 'escrow_release' || tx.type === 'refund' ? 'text-green-600 dark:text-green-400' : 'text-gray-900 dark:text-white'}`}>
           {tx.type === 'credit' || tx.type === 'escrow_release' || tx.type === 'refund' ? '+' : '-'}₦{Math.abs(Number(tx.amount || 0)).toLocaleString()}
         </p>
         
         {tx.status === 'pending' && (
-          <div className="flex items-center justify-end gap-1 mt-1 text-yellow-600 dark:text-yellow-500">
+          <div className="flex items-center justify-end gap-1 mt-0.5 text-yellow-600 dark:text-yellow-500">
             <ClientIcon icon={timeOutline} className="text-[12px]" />
             <p className="text-[11px] font-medium">Pending</p>
           </div>
         )}
 
         {isDisputed && (
-          <div className="flex items-center justify-end gap-1 mt-1 text-orange-500">
+          <div className="flex items-center justify-end gap-1 mt-0.5 text-orange-500">
             <ClientIcon icon={warningOutline} className="text-[12px]" />
             <p className="text-[11px] font-medium">Disputed</p>
           </div>
         )}
         
         {(tx.status === 'completed' || tx.status === 'successful' || tx.status === 'success') && (
-          <div className="flex items-center justify-end gap-1 mt-1 text-gray-400">
+          <div className="flex items-center justify-end gap-1 mt-0.5 text-gray-400">
             <p className="text-[11px] font-medium">Completed</p>
           </div>
         )}
         
         {(tx.status === 'failed' || tx.status === 'cancelled') && (
-          <div className="flex items-center justify-end gap-1 mt-1 text-red-500">
+          <div className="flex items-center justify-end gap-1 mt-0.5 text-red-500">
             <ClientIcon icon={closeCircleOutline} className="text-[12px]" />
             <p className="text-[11px] font-medium capitalize">{tx.status}</p>
           </div>
