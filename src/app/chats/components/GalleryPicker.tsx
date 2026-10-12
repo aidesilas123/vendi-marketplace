@@ -99,8 +99,8 @@ export function GalleryPicker({ onSelect, onClose }: Props) {
   if (!loading && assets.length === 0 && !denied) return null;
 
   return (
-    <div className="fixed inset-0 z-[1001] bg-background flex flex-col">
-      <div className="flex items-center gap-3 px-4 pb-3" style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}>
+    <div className="fixed inset-0 z-[1002] bg-white dark:bg-[#0b1120] flex flex-col shadow-2xl overflow-hidden">
+      <div className="sticky top-0 z-20 flex items-center gap-3 px-4 pb-3 pt-safe bg-white dark:bg-[#0b1120] border-b border-gray-100 dark:border-gray-800 shadow-sm">
         <button
           onClick={onClose}
           type="button"

@@ -104,6 +104,8 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
     closing: false,
   });
 
+  const rafRef = useRef<number | null>(null);
+
   /* ───────────────────────── geometry ───────────────────────── */
 
   const size = () => ({
@@ -170,6 +172,20 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
       img.style.transition = tf;
       img.style.transform = `translate3d(${s.x}px, ${s.y}px, 0) scale(${s.scale})`;
     }
+  };
+
+  const scheduleRender = (animated = false) => {
+    if (animated) {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      render(true);
+      return;
+    }
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      render(false);
+    });
   };
 
   /** Return zoom to a valid resting state (clamp scale + pan) and clear drag offsets */
@@ -412,7 +428,7 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
       s.scale = Math.max(soft, 0.5);
       s.x = mid.x - cx - s.scale * s.pinch.ux;
       s.y = mid.y - cy - s.scale * s.pinch.uy;
-      render(false);
+      scheduleRender(false);
       return;
     }
 
@@ -443,10 +459,10 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
     if (s.mode === 'swipe') {
       const atEdge = (dx > 0 && s.index === 0) || (dx < 0 && s.index === last);
       s.dragX = atEdge ? dx * 0.3 : dx;
-      render(false);
+      scheduleRender(false);
     } else if (s.mode === 'dismiss') {
       s.dragY = dy;
-      render(false);
+      scheduleRender(false);
     } else if (s.mode === 'pan') {
       const b = bounds(s.scale);
       const rawX = s.panStart.x + dx;
@@ -457,7 +473,7 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
       if ((excess > 0 && s.index === 0) || (excess < 0 && s.index === last)) excess *= 0.3;
       s.dragX = excess;
       s.y = rubber(rawY, b.y);
-      render(false);
+      scheduleRender(false);
     }
   };
 
@@ -597,7 +613,7 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
       role="dialog"
       aria-modal="true"
       aria-label="Image viewer"
-      className="fixed inset-0 z-[200] overflow-hidden select-none animate-in fade-in duration-200"
+      className="fixed inset-0 z-[2000] overflow-hidden select-none animate-in fade-in duration-200"
       style={{ touchAction: 'none', overscrollBehavior: 'contain', WebkitTouchCallout: 'none' }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

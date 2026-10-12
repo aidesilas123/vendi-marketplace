@@ -25,6 +25,7 @@ import {
 import { Avatar } from '@/shared/Avatar';
 import { Modal } from '@/shared/Modal/Modal';
 import { Button } from '@/shared/Button';
+import { showGlobalToast } from '@/shared/Toast/Toast';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -112,7 +113,11 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
     await supabase.auth.signOut();
     setShowSignOutModal(false);
     onClose();
-    window.location.href = '/'; 
+    showGlobalToast('Logged out');
+    // Let the toast be seen before the hard navigation wipes it
+    setTimeout(() => {
+      window.location.href = '/';
+    }, 1200);
   };
 
   // --- Swipe Gestures ---
@@ -205,7 +210,7 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
               onClick={onClose} 
               className="!p-2 text-gray-400 hover:text-gray-900 dark:text-gray-500 dark:hover:text-white transition-colors active:scale-95 !rounded-full"
             >
-              {isMounted ? <IonIcon icon={closeOutline} className="text-3xl" /> : <div className="w-[30px] h-[30px]" />}
+              {isMounted ? <IonIcon icon={closeOutline} className="text-2xl" /> : <div className="w-[30px] h-[30px]" />}
             </button>
           </div>
 
@@ -227,7 +232,7 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
               <>
                 <Avatar src={realAvatar} name={realName || "User"} size="xl" />
                 <div className="flex flex-col mt-2">
-                  <h3 className="font-black text-xl text-gray-900 dark:text-white mb-0.5 tracking-tight">
+                  <h3 className="font-black text-lg text-gray-900 dark:text-white mb-0.5 tracking-tight">
                     {realName || "Campus Student"}
                   </h3>
                   <p className="text-sm text-gray-500 dark:text-gray-400 font-medium truncate pr-4">
@@ -253,11 +258,11 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
                 >
                   <div className="flex items-center gap-6">
                     {isMounted ? (
-                      <IonIcon icon={link.icon} className="text-[24px] text-orange-500 transition-colors" />
+                      <IonIcon icon={link.icon} className="text-[22px] text-orange-500 transition-colors" />
                     ) : (
                       <div className="w-[24px] h-[24px]" /> // Placeholder prevents layout shift
                     )}
-                    <span className="text-[16px] font-bold text-gray-800 dark:text-gray-100">{link.name}</span>
+                    <span className="text-[15px] font-bold text-gray-800 dark:text-gray-100">{link.name}</span>
                   </div>
                   {isMounted ? (
                     <IonIcon icon={chevronForwardOutline} className="text-gray-300 dark:text-gray-600 text-sm" />
@@ -280,11 +285,11 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
                 >
                   <div className="flex items-center gap-6">
                     {isMounted ? (
-                      <IonIcon icon={link.icon} className="text-[24px] text-orange-500 transition-colors" />
+                      <IonIcon icon={link.icon} className="text-[22px] text-orange-500 transition-colors" />
                     ) : (
                       <div className="w-[24px] h-[24px]" /> // Placeholder prevents layout shift
                     )}
-                    <span className="text-[16px] font-bold text-gray-800 dark:text-gray-100">{link.name}</span>
+                    <span className="text-[15px] font-bold text-gray-800 dark:text-gray-100">{link.name}</span>
                   </div>
                   {isMounted ? (
                     <IonIcon icon={chevronForwardOutline} className="text-gray-300 dark:text-gray-600 text-sm" />
@@ -302,7 +307,7 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
             <button 
               type="button"
               onClick={() => setShowSignOutModal(true)}
-              className="w-full flex items-center justify-center gap-3 px-4 py-5 !rounded-full bg-red-50 dark:bg-red-500/10 border border-transparent dark:border-red-500/20 text-red-600 dark:text-red-500 hover:bg-red-100 dark:hover:bg-red-500/20 active:scale-[0.98] transition-all font-black text-lg"
+              className="w-full flex items-center justify-center gap-3 px-4 py-5 !rounded-full bg-red-50 dark:bg-red-500/10 border border-transparent dark:border-red-500/20 text-red-600 dark:text-red-500 hover:bg-red-100 dark:hover:bg-red-500/20 active:scale-[0.98] transition-all font-black text-base"
             >
               {isMounted ? <IonIcon icon={logOutOutline} className="text-2xl" /> : <div className="w-[24px] h-[24px]" />}
               <span>Sign Out</span>

@@ -96,6 +96,8 @@ import {
 import { Capacitor } from '@capacitor/core';
 import { VoiceRecorder } from 'capacitor-voice-recorder';
 import { registerBackHandler } from '@/shared/HardwareBackButton';
+import { playChatSound } from '@/shared/audio/sounds';
+import { compressImagePreflight } from '@/shared/image/compressor';
 
 type RecordState = 'idle' | 'holding' | 'locked' | 'paused';
 type SelectedMedia = { url: string; type: 'image' | 'video' };
@@ -275,16 +277,48 @@ export default function DealRoomChat() {
     isNativeRef.current = Capacitor.isNativePlatform();
   }, []);
 
+  const [reactions, setReactions] = useState<Record<string, string[]>>({});
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const lastTapRef = useRef<{ id: string; time: number }>({ id: '', time: 0 });
+  const lastTypingBroadcastTime = useRef(0);
+  const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+
+  const handleToggleReaction = useCallback((msgId: string, emoji: string) => {
+    setReactions((prev) => {
+      const existing = prev[msgId] || [];
+      const next = existing.includes(emoji)
+        ? existing.filter((e) => e !== emoji)
+        : [...existing, emoji];
+      return { ...prev, [msgId]: next };
+    });
+    hapticImpact(ImpactStyle.Light);
+    chatChannelRef.current?.send({
+      type: 'broadcast',
+      event: 'message_reaction',
+      payload: { messageId: msgId, emoji, userId: currentUserRef.current?.id }
+    });
+  }, []);
+
   // --- Presence: broadcast my activity ('typing' | 'recording' | null) ---
   const broadcastActivity = useCallback((activity: PartnerActivity) => {
-    if (!chatChannelRef.current || !currentUser) return;
+    if (!currentUser) return;
     myActivityRef.current = activity;
-    chatChannelRef.current.send({
-      type: 'broadcast',
-      event: 'activity',
-      payload: { userId: currentUser.id, activity }
-    });
-  }, [currentUser]);
+    if (chatChannelRef.current) {
+      chatChannelRef.current.send({
+        type: 'broadcast',
+        event: 'activity',
+        payload: { userId: currentUser.id, activity }
+      });
+    }
+    // Also notify partner's inbox activity channel so /messages shows live status
+    if (partnerId) {
+      supabase.channel(`inbox_activity_${partnerId}`).send({
+        type: 'broadcast',
+        event: 'user_activity',
+        payload: { txRef, userId: currentUser.id, activity }
+      }).catch(() => {});
+    }
+  }, [currentUser, partnerId, txRef]);
 
   // 1. INITIALIZATION & WEBSOCKET
   useEffect(() => {
@@ -359,6 +393,7 @@ export default function DealRoomChat() {
             });
             const meNow = currentUserRef.current;
             if (meNow && payload.new.receiver_id === meNow.id) {
+              playChatSound('received');
               chatChannel.send({ type: 'broadcast', event: 'messages_read', payload: { ids: [payload.new.id] } });
               supabase.from('messages').update({ status: 'read' }).eq('id', payload.new.id);
             }
@@ -383,6 +418,7 @@ export default function DealRoomChat() {
             });
             const meNow = currentUserRef.current;
             if (meNow && newMsg.receiver_id === meNow.id) {
+              playChatSound('received');
               chatChannel.send({ type: 'broadcast', event: 'messages_read', payload: { ids: [newMsg.id] } });
               supabase.from('messages').update({ status: 'read' }).eq('id', newMsg.id);
             }
@@ -406,6 +442,21 @@ export default function DealRoomChat() {
             if (Array.isArray(ids)) {
               updateMessages((prev) => prev.map((m) => ids.includes(m.id) && m.status !== 'read' ? { ...m, status: 'delivered' } : m));
             }
+          }
+        ).on(
+          // Reactions broadcast
+          'broadcast',
+          { event: 'message_reaction' },
+          (payload: any) => {
+            const { messageId, emoji } = payload?.payload || {};
+            if (!messageId || !emoji) return;
+            setReactions((prev) => {
+              const existing = prev[messageId] || [];
+              const next = existing.includes(emoji)
+                ? existing.filter((e) => e !== emoji)
+                : [...existing, emoji];
+              return { ...prev, [messageId]: next };
+            });
           }
         ).on(
           // Presence: partner's typing/recording activity broadcast.
@@ -518,6 +569,7 @@ export default function DealRoomChat() {
     if (unread.length === 0) return;
     const ids = unread.map((m) => m.id);
     updateMessages((prev) => prev.map((m) => (ids.includes(m.id) ? { ...m, status: 'read' } : m)));
+    chatChannelRef.current?.send({ type: 'broadcast', event: 'messages_read', payload: { ids } });
     supabase.from('messages').update({ status: 'read' }).in('id', ids).then(({ error }: any) => {
       if (error) {
         console.error('[Chat] Failed to mark messages as read on the server:', error.message);
@@ -531,15 +583,25 @@ export default function DealRoomChat() {
       textareaRef.current.style.height = 'auto';
       textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
     }
-    // Broadcast typing presence, auto-clearing after a short idle window so
-    // the partner's indicator doesn't get stuck on if this tab is closed.
-    if (e.target.value.trim()) {
-      if (myActivityRef.current !== 'typing') broadcastActivity('typing');
+    const val = e.target.value.trim();
+    const now = Date.now();
+    // Broadcast typing presence with 2.2s heartbeat so it doesn't clear while continuously typing
+    if (val) {
+      if (myActivityRef.current !== 'typing' || now - lastTypingBroadcastTime.current > 2200) {
+        lastTypingBroadcastTime.current = now;
+        broadcastActivity('typing');
+      }
       if (typingStopTimeoutRef.current) clearTimeout(typingStopTimeoutRef.current);
-      typingStopTimeoutRef.current = setTimeout(() => broadcastActivity(null), TYPING_BROADCAST_IDLE_MS);
+      typingStopTimeoutRef.current = setTimeout(() => {
+        broadcastActivity(null);
+        lastTypingBroadcastTime.current = 0;
+      }, TYPING_BROADCAST_IDLE_MS);
     } else {
       if (typingStopTimeoutRef.current) clearTimeout(typingStopTimeoutRef.current);
-      if (myActivityRef.current === 'typing') broadcastActivity(null);
+      if (myActivityRef.current === 'typing') {
+        broadcastActivity(null);
+        lastTypingBroadcastTime.current = 0;
+      }
     }
   };
 
@@ -666,11 +728,38 @@ export default function DealRoomChat() {
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
     if (swipeTriggeredRef.current && !longPressFiredRef.current) {
       handleReplyMessage(msg);
+    } else if (!swipeTriggeredRef.current && !longPressFiredRef.current) {
+      // Double tap to react with ❤️
+      const now = Date.now();
+      if (lastTapRef.current.id === msg.id && now - lastTapRef.current.time < 350) {
+        handleToggleReaction(msg.id, '❤️');
+        lastTapRef.current = { id: '', time: 0 };
+      } else {
+        lastTapRef.current = { id: msg.id, time: now };
+      }
     }
     setSwipeMsgId(null);
     setSwipeX(0);
     gestureStartRef.current = null;
     swipeTriggeredRef.current = false;
+  };
+
+  const renderReactions = (msgId: string, isMe: boolean) => {
+    const msgReactions = reactions[msgId];
+    if (!msgReactions || msgReactions.length === 0) return null;
+    return (
+      <div
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpenMenuFor(msgId);
+        }}
+        className={`absolute -bottom-2.5 ${isMe ? 'right-2' : 'left-2'} z-10 flex items-center gap-0.5 px-2 py-0.5 bg-white dark:bg-[#1f2937] border border-gray-200/80 dark:border-gray-700 !rounded-full shadow-md text-xs select-none cursor-pointer active:scale-95 transition-transform`}
+      >
+        {msgReactions.map((emoji, idx) => (
+          <span key={idx} className="text-xs leading-none">{emoji}</span>
+        ))}
+      </div>
+    );
   };
 
   const handleBubbleContextMenu = (msg: any) => (e: React.MouseEvent<HTMLDivElement>) => {
@@ -755,13 +844,19 @@ export default function DealRoomChat() {
     );
   };
 
-  const buildReplyMeta = () => (replyTarget ? {
-    reply_to_id: replyTarget.id,
-    reply_to_type: replyTarget.type,
-    reply_to_content: replyTarget.content,
-    reply_to_sender_label: replyTarget.senderLabel,
-    reply_to_media_url: replyTarget.mediaUrl
-  } : {});
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const buildReplyMeta = () => {
+    if (!replyTarget) return {};
+    const meta: Record<string, any> = {
+      reply_to_type: replyTarget.type,
+      reply_to_content: replyTarget.content,
+      reply_to_sender_label: replyTarget.senderLabel,
+    };
+    if (replyTarget.id && UUID_REGEX.test(replyTarget.id)) {
+      meta.reply_to_id = replyTarget.id;
+    }
+    return meta;
+  };
 
   const handleSendText = async () => {
     if (!messageText.trim() || !currentUser || !txRef) return;
@@ -783,6 +878,9 @@ export default function DealRoomChat() {
       }
       return;
     }
+
+    playChatSound('sent');
+    requestAnimationFrame(() => scrollToBottom(true));
 
     const tempId = `temp_${Date.now()}`;
     const replyMeta = buildReplyMeta();
@@ -867,9 +965,20 @@ export default function DealRoomChat() {
     }]);
     setReplyTarget(null);
     setUploadProgress((prev) => ({ ...prev, [tempId]: 0 }));
+    playChatSound('sent');
+    requestAnimationFrame(() => scrollToBottom(true));
+
     try {
       const cleanMimeType = mimeType.split(';')[0];
-      const dataUri = `data:${cleanMimeType};base64,${base64Data}`;
+      let dataUri = `data:${cleanMimeType};base64,${base64Data}`;
+      if (msgType === 'image') {
+        try {
+          const compressed = await compressImagePreflight(dataUri);
+          dataUri = compressed.dataUrl;
+        } catch (compErr) {
+          console.warn('[Chat] Preflight image compression bypassed:', compErr);
+        }
+      }
       const formData = new FormData();
       const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || 'Campus Vendi';
       formData.append('file', dataUri);
@@ -1162,7 +1271,12 @@ export default function DealRoomChat() {
       }
       setRecordingDuration(0);
       if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
-      recordingTimerRef.current = setInterval(() => setRecordingDuration(prev => prev + 1), 1000);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingDuration(prev => {
+          if (prev > 0 && prev % 2 === 0) broadcastActivity('recording');
+          return prev + 1;
+        });
+      }, 1000);
       // Presence: let the partner know a voice note is being recorded.
       broadcastActivity('recording');
       return true;
@@ -1276,6 +1390,9 @@ export default function DealRoomChat() {
     broadcastActivity(null);
     const tempId = `temp_audio_${Date.now()}`;
     const replyMeta = buildReplyMeta();
+    playChatSound('sent');
+    requestAnimationFrame(() => scrollToBottom(true));
+
     try {
       if (isNativeRef.current) {
         const status = await VoiceRecorder.getCurrentStatus();
@@ -1328,7 +1445,7 @@ export default function DealRoomChat() {
       const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || 'Campus Vendi';
       formData.append('file', dataUri);
       formData.append('upload_preset', uploadPreset);
-      formData.append('resource_type', 'auto');
+      formData.append('resource_type', 'video');
       const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
       const uploadData = await uploadToCloudinaryWithProgress(formData, cloudName, (pct) => {
         setUploadProgress((prev) => ({ ...prev, [tempId]: pct }));
@@ -1348,7 +1465,7 @@ export default function DealRoomChat() {
       const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || 'Campus Vendi';
       formData.append('file', blob, `voicenote.${ext}`);
       formData.append('upload_preset', uploadPreset);
-      formData.append('resource_type', 'auto');
+      formData.append('resource_type', 'video');
       const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
       const uploadData = await uploadToCloudinaryWithProgress(formData, cloudName, (pct) => {
         setUploadProgress((prev) => ({ ...prev, [tempId]: pct }));
@@ -1693,6 +1810,7 @@ export default function DealRoomChat() {
                   {isMe && renderTicks(msg.status)}
                 </div>
               </div>
+              {renderReactions(msg.id, isMe)}
             </div>
           </div>
         );
@@ -1744,6 +1862,7 @@ export default function DealRoomChat() {
                   {isMe && renderTicks(msg.status)}
                 </div>
               </div>
+              {renderReactions(msg.id, isMe)}
             </div>
           </div>
         );
@@ -1782,10 +1901,8 @@ export default function DealRoomChat() {
                     className="w-full h-full object-cover rounded-xl transition-opacity duration-200"
                   />
                   {!isLoaded && !isUploading && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                      <div className="w-10 h-10 rounded-full bg-black/50 text-white flex items-center justify-center">
-                        <IonIcon icon={downloadOutline} className="text-xl" />
-                      </div>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/10 dark:bg-white/5 animate-pulse">
+                      <PullSpinner spinning size={24} />
                     </div>
                   )}
                   {isUploading && renderUploadOverlay(uploadProgress[msg.id] ?? 0)}
@@ -1800,6 +1917,7 @@ export default function DealRoomChat() {
                   {isMe && renderTicks(msg.status)}
                 </div>
               </div>
+              {renderReactions(msg.id, isMe)}
             </div>
           </div>
         );
@@ -1838,6 +1956,7 @@ export default function DealRoomChat() {
                   {isMe && renderTicks(msg.status)}
                 </div>
               </div>
+              {renderReactions(msg.id, isMe)}
             </div>
           </div>
         );
@@ -1846,7 +1965,7 @@ export default function DealRoomChat() {
       return null;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, currentUser, partnerInfo, playback, audioDurations, uploadProgress, swipeMsgId, swipeX, searchQuery, searchMatches, searchIndex, highlightedMsgId, loadedMedia]);
+  }, [messages, currentUser, partnerInfo, playback, audioDurations, uploadProgress, swipeMsgId, swipeX, searchQuery, searchMatches, searchIndex, highlightedMsgId, loadedMedia, reactions]);
 
   // Cancel-drag opacity fade: full opacity at rest, fading toward ~30% as
   // the mic button is dragged toward the cancel threshold.
@@ -1885,24 +2004,41 @@ export default function DealRoomChat() {
         </div>
       )}
 
-      {/* MESSAGE ACTION MENU: Reply / Copy / Edit / Delete */}
+      {/* MESSAGE ACTION MENU: Quick Reactions / Reply / Copy / Edit / Delete */}
       {openMenuFor && menuAnchor && (() => {
         const msg = messages.find((m) => m.id === openMenuFor);
         if (!msg) return null;
         const isMineMsg = msg.sender_id === currentUser?.id;
         const isVoice = msg.message_type === 'audio';
-        const menuWidth = 208;
+        const msgAgeMs = Date.now() - new Date(msg.created_at).getTime();
+        const canEditOrDelete = msgAgeMs <= 30 * 60 * 1000; // 30 minutes cutoff
+        const menuWidth = 240;
         const viewportW = typeof window !== 'undefined' ? window.innerWidth : 400;
         const viewportH = typeof window !== 'undefined' ? window.innerHeight : 800;
         const left = Math.min(Math.max(12, menuAnchor.x - menuWidth / 2), viewportW - menuWidth - 12);
-        const top = Math.min(menuAnchor.y + 12, viewportH - 220);
+        const top = Math.min(menuAnchor.y + 12, viewportH - 260);
         return (
           <>
             <div className="fixed inset-0 z-[900]" onClick={() => setOpenMenuFor(null)} />
             <div
-              className="fixed z-[901] min-w-[208px] bg-white dark:bg-[#1f2937] !rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-700 overflow-hidden animate-in fade-in zoom-in-95 duration-100"
+              className="fixed z-[901] min-w-[240px] bg-white dark:bg-[#1f2937] !rounded-2xl shadow-2xl border border-gray-100 dark:border-gray-700 overflow-hidden animate-in fade-in zoom-in-95 duration-100"
               style={{ left, top }}
             >
+              {/* WhatsApp Quick Reaction Bar */}
+              <div className="flex items-center justify-around px-2.5 py-2 bg-gray-50/90 dark:bg-gray-800/90 border-b border-gray-100 dark:border-gray-700/60">
+                {QUICK_REACTIONS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    onClick={() => {
+                      handleToggleReaction(msg.id, emoji);
+                      setOpenMenuFor(null);
+                    }}
+                    className="text-xl p-1 hover:scale-125 active:scale-90 transition-transform"
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
               <button
                 onClick={() => handleReplyMessage(msg)}
                 className="!w-full !text-left !px-5 !py-3 text-[14px] font-bold text-gray-800 dark:text-gray-100 hover:!bg-gray-50 dark:hover:!bg-gray-700/50 transition-colors !flex items-center gap-3"
@@ -1917,7 +2053,7 @@ export default function DealRoomChat() {
                   <IonIcon icon={copyOutline} className="text-lg" /> Copy
                 </button>
               )}
-              {isMineMsg && !isVoice && msg.message_type === 'text' && (
+              {isMineMsg && !isVoice && msg.message_type === 'text' && canEditOrDelete && (
                 <button
                   onClick={() => handleEditMessage(msg)}
                   className="!w-full !text-left !px-5 !py-3 text-[14px] font-bold text-gray-800 dark:text-gray-100 hover:!bg-gray-50 dark:hover:!bg-gray-700/50 transition-colors !flex items-center gap-3"
@@ -1925,7 +2061,7 @@ export default function DealRoomChat() {
                   <IonIcon icon={pencilOutline} className="text-lg" /> Edit
                 </button>
               )}
-              {isMineMsg && (
+              {isMineMsg && canEditOrDelete && (
                 <button
                   onClick={() => handleDeleteMessage(msg)}
                   className="!w-full !text-left !px-5 !py-3 text-[14px] font-bold text-red-500 hover:!bg-red-50 dark:hover:!bg-red-900/20 transition-colors !flex items-center gap-3"
@@ -2046,7 +2182,14 @@ export default function DealRoomChat() {
       <PullToRefresh
         ref={ptrRef}
         onRefresh={async () => { await mutate(); }}
-        onScroll={() => { if (openMenuFor) setOpenMenuFor(null); }}
+        onScroll={() => {
+          if (openMenuFor) setOpenMenuFor(null);
+          const scrollEl = ptrRef.current?.scrollEl();
+          if (scrollEl) {
+            const distFromBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+            setShowScrollBottom(distFromBottom > 240);
+          }
+        }}
         className="flex-1 min-h-0 relative z-10"
         bgClassName="bg-transparent"
         contentClassName="px-3 sm:px-4 py-6 space-y-4 scrollbar-hide relative"
@@ -2095,8 +2238,19 @@ export default function DealRoomChat() {
         <div ref={messagesEndRef} className="h-2" />
       </PullToRefresh>
 
+      {/* Floating Scroll-to-bottom Arrow Button */}
+      {showScrollBottom && (
+        <button
+          onClick={() => scrollToBottom(true)}
+          className="absolute right-4 bottom-24 z-40 !w-10 !h-10 !min-w-[40px] !min-h-[40px] !p-0 !rounded-full bg-white dark:bg-[#1f2937] shadow-lg border border-gray-200/80 dark:border-gray-700 flex items-center justify-center text-gray-700 dark:text-gray-200 active:scale-90 transition-all animate-in fade-in zoom-in-95 duration-150"
+          aria-label="Scroll to bottom"
+        >
+          <IonIcon icon={chevronDownOutline} className="text-xl pointer-events-none" />
+        </button>
+      )}
+
       {/* --- INPUT AREA --- */}
-      <div className="flex-shrink-0 p-2 pb-safe bg-transparent relative z-50">
+      <div className="flex-shrink-0 px-2.5 pt-1 pb-[max(var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)),12px)] mb-1 bg-transparent relative z-50">
         {/* Reply / Edit banner above the composer */}
         {(replyTarget || editingMessageId) && (
           <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between gap-2 bg-white dark:bg-[#1f2937] !rounded-xl px-3 py-2 shadow-md border-l-4 !border-orange-500 animate-in slide-in-from-bottom-2 duration-150">

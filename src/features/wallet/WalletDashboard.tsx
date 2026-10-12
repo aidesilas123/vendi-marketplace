@@ -42,8 +42,8 @@ const ICON_BTN = `flex h-10 min-h-10 w-10 items-center justify-center rounded-fu
 const PRIMARY_BTN =
   'h-12! min-h-12! min-w-32 rounded-full! bg-orange-500! px-8! py-0! text-sm! font-bold! text-white! border-0! shadow-none!';
 
-// Compact header padding since AppShell already provides pt-safe
-const HEADER_SPACE = 'pt-2 pb-3';
+// No safe-area padding here: the app shell already pads the status bar.
+const HEADER_SPACE = 'pb-6';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -251,14 +251,14 @@ export default function WalletDashboard() {
         <div className="mx-auto w-full max-w-md px-5 pb-40">
           {/* Header: z-10 allows the spinner to smoothly glide over it */}
           <header className={`sticky top-0 z-10 -mx-5 bg-gray-50 px-5 dark:bg-[#0b1120] ${HEADER_SPACE}`}>
-            <h1 className="text-lg font-bold">
+            <h1 className="text-xl font-black">
               My <span className="text-orange-500">Wallet</span>
             </h1>
           </header>
 
           {/* ------------------------------ Balance ------------------------------ */}
           {showSkeleton ? (
-            <div className="h-52 animate-pulse rounded-3xl bg-orange-50 dark:bg-[#141d33]" />
+            <div className="h-48 animate-pulse rounded-3xl bg-orange-50 dark:bg-[#141d33]" />
           ) : hasNothingToShow ? (
             <div className="rounded-3xl bg-orange-50 px-6 py-12 text-center dark:bg-[#141d33]">
               <p className="text-base font-bold">We couldn&apos;t load your wallet</p>
@@ -268,7 +268,7 @@ export default function WalletDashboard() {
               </button>
             </div>
           ) : (
-            <section className="relative overflow-hidden rounded-3xl bg-orange-50 p-6 dark:bg-[#141d33]">
+            <section className="relative overflow-hidden rounded-3xl bg-orange-50 p-5 dark:bg-[#141d33]">
               <div className="pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full bg-orange-500/15 blur-3xl" />
               <div className="relative">
                 <div className="flex items-center justify-between">
@@ -284,12 +284,12 @@ export default function WalletDashboard() {
                   </button>
                 </div>
 
-                <div className="mt-2 flex h-12 items-center gap-2">
-                  <div className="flex h-12 min-w-[8.5rem] items-center">
+                <div className="mt-1.5 flex h-10 items-center gap-2">
+                  <div className="flex h-10 min-w-[7rem] items-center">
                     {reloading ? (
-                      <Spinner className="h-7 w-7" />
+                      <Spinner className="h-6 w-6" />
                     ) : (
-                      <h2 className="text-[28px] font-bold leading-tight tracking-tight tabular-nums">
+                      <h2 className="text-2xl font-black leading-tight tracking-tight tabular-nums">
                         {balanceText}
                       </h2>
                     )}
@@ -304,7 +304,7 @@ export default function WalletDashboard() {
                   </button>
                 </div>
 
-                <div className="mt-8">
+                <div className="mt-5">
                   <p className="text-xs font-medium text-gray-500 dark:text-gray-400">Withdrawable</p>
                   <div className="mt-1.5 flex h-7 items-center">
                     {reloading ? (

@@ -73,7 +73,18 @@ async function fetchWalletData(userId: string): Promise<WalletData> {
   if (error) throw new Error(error.message);
 
   let wallet = data as Wallet | null;
-  if (!wallet) wallet = await createWalletOnce(userId);
+  if (!wallet) {
+    wallet = await createWalletOnce(userId);
+  } else if (!wallet.virtual_account_number) {
+    // Row exists but the virtual account was never provisioned (e.g. created
+    // before virtual accounts existed, or Monnify was down at creation).
+    // Backfill it now — but never break the dashboard if provisioning fails.
+    try {
+      wallet = await createWalletOnce(userId);
+    } catch (e) {
+      console.warn('[wallet] virtual account backfill failed, using existing row:', e);
+    }
+  }
 
   // wallet_id OR user_id: a row written without a wallet_id still shows up.
   const { data: txs, error: txError } = await supabase
@@ -146,8 +157,9 @@ function readBanksCache(): Bank[] | undefined {
     const raw = localStorage.getItem(BANKS_CACHE_KEY);
     return raw ? (JSON.parse(raw) as Bank[]) : undefined;
   } catch {
-    return undefined;
+    /* storage full / unavailable */
   }
+  return undefined;
 }
 
 export function useBanks() {
@@ -163,7 +175,6 @@ export function useBanks() {
       return banks;
     },
     {
-      // Last live list is shown instantly (copy of the live data, not hard-coded), then refreshed.
       fallbackData: readBanksCache(),
       revalidateOnFocus: false,
       dedupingInterval: 6 * 60 * 60 * 1000,

@@ -133,11 +133,12 @@ export function CameraCapture({ onCapture, onClose, onOpenGallery }: Props) {
               playsInline
               muted
               autoPlay
-              className={`absolute inset-0 w-full h-full object-cover ${facing === 'user' ? '-scale-x-100' : ''}`}
+              className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${ready ? 'opacity-100' : 'opacity-0 pointer-events-none'} ${facing === 'user' ? '-scale-x-100' : ''}`}
             />
             {!ready && (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="w-10 h-10 rounded-full border-[3px] border-white/20 border-t-white animate-spin" />
+              <div className="absolute inset-0 z-10 bg-black flex flex-col items-center justify-center gap-3">
+                <div className="w-10 h-10 rounded-full border-[3px] border-white/20 border-t-orange-500 animate-spin" />
+                <span className="text-white/60 text-xs font-medium">Starting camera...</span>
               </div>
             )}
           </>

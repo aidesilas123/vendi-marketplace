@@ -69,8 +69,10 @@ export function FullScreenPage({
       }`}
       style={{ zIndex }}
     >
-      {/* Header: no border, no shadow, safe-area clearance for the status bar */}
-      <div className="flex shrink-0 items-center gap-1 px-4 pb-4">
+      {/* Header: no border, no shadow, safe-area clearance for the status bar.
+          This page is `fixed inset-0` (viewport-relative), so the AppShell's
+          padding does NOT apply here — the header needs its own top clearance. */}
+      <div className="flex shrink-0 items-center gap-1 px-4 pb-4 pt-[max(env(safe-area-inset-top),16px)]">
         <button
           type="button"
           aria-label="Back"

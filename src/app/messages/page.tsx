@@ -44,6 +44,24 @@ async function fetchInbox([_key, userId]: [string, string]): Promise<ChatPreview
 
   if (error) throw error;
 
+  // Mark incoming messages as delivered when loaded by receiver
+  const undelivered = (msgs ?? []).filter(
+    (m) => m.receiver_id === userId && m.status === 'sent'
+  );
+  if (undelivered.length > 0) {
+    const ids = undelivered.map((m) => m.id);
+    supabase.from('messages').update({ status: 'delivered' }).in('id', ids).then(() => {
+      const refs = Array.from(new Set(undelivered.map((m) => m.transaction_ref)));
+      refs.forEach((ref) => {
+        supabase.channel(`chat_${ref}`).send({
+          type: 'broadcast',
+          event: 'messages_delivered',
+          payload: { ids }
+        }).catch(() => {});
+      });
+    });
+  }
+
   const chatMap = new Map<string, ChatPreview>();
   const unreadByRef = new Map<string, number>();
 
@@ -98,6 +116,8 @@ export default function MessagesList() {
 
   const [activeFilter, setActiveFilter] = useState<'all' | 'unread'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [activityMap, setActivityMap] = useState<Record<string, 'typing' | 'recording'>>({});
+  const activityTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
 
   // Rubber-band pull-to-refresh: ONLY the list body stretches — the sticky
   // header never moves. The strip grows in-flow above the list, pushing it
@@ -142,8 +162,39 @@ export default function MessagesList() {
           console.warn('[Inbox] Realtime channel warning:', err);
         }
       });
+
+    // Activity channel: live typing and recording status from partners
+    const actChannel = supabase
+      .channel(`inbox_activity_${userId}`)
+      .on('broadcast', { event: 'user_activity' }, (payload: any) => {
+        const { txRef, activity } = payload?.payload || {};
+        if (!txRef) return;
+        if (activityTimersRef.current[txRef]) {
+          clearTimeout(activityTimersRef.current[txRef]);
+        }
+        if (activity) {
+          setActivityMap((prev) => ({ ...prev, [txRef]: activity }));
+          activityTimersRef.current[txRef] = setTimeout(() => {
+            setActivityMap((prev) => {
+              const next = { ...prev };
+              delete next[txRef];
+              return next;
+            });
+          }, 6000);
+        } else {
+          setActivityMap((prev) => {
+            const next = { ...prev };
+            delete next[txRef];
+            return next;
+          });
+        }
+      })
+      .subscribe();
+
     return () => {
       void supabase.removeChannel(channel);
+      void supabase.removeChannel(actChannel);
+      Object.values(activityTimersRef.current).forEach(clearTimeout);
     };
   }, [userId]);
 
@@ -442,7 +493,17 @@ export default function MessagesList() {
 
                 <div className="flex items-center justify-between gap-2 mt-0.5">
                   <div className="flex-1 min-w-0">
-                    {renderMessagePreview(chat.latestMessage)}
+                    {activityMap[chat.transaction_ref] === 'typing' ? (
+                      <span className="text-[13px] font-bold text-orange-500 animate-pulse tracking-wide">
+                        typing...
+                      </span>
+                    ) : activityMap[chat.transaction_ref] === 'recording' ? (
+                      <span className="text-[13px] font-bold text-orange-500 animate-pulse flex items-center gap-1 tracking-wide">
+                        <IonIcon icon={micOutline} className="text-sm shrink-0" /> recording voice note...
+                      </span>
+                    ) : (
+                      renderMessagePreview(chat.latestMessage)
+                    )}
                   </div>
                   {chat.unreadCount > 0 && (
                     <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-orange-500 text-white text-[11px] font-bold flex items-center justify-center shadow-sm">

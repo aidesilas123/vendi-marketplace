@@ -167,7 +167,7 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
         {imageSrc && !imageFailed ? (
           <>
             {!imageLoaded && (
-              <Skeleton className="absolute inset-0 w-full h-full rounded-none" />
+              <Skeleton className="absolute inset-0 w-full h-full rounded-none border-0 bg-gray-100 dark:bg-gray-800" />
             )}
             <img
               ref={imgRef}
@@ -202,7 +202,7 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
         <h3 className="font-bold text-gray-900 dark:text-gray-200 text-[10px] mb-1 leading-tight line-clamp-2">{product.title}</h3>
 
         {settingsLoading ? (
-          <Skeleton className="w-16 h-5 rounded-full mb-2" />
+          <Skeleton className="w-16 h-5 rounded-full mb-2 border-0 bg-gray-100 dark:bg-gray-800" />
         ) : (
           <p className={`text-sm font-bold mb-2 ${product.status === 'SOLD' ? 'text-gray-400 line-through' : 'text-orange-500'}`}>
             {naira(displayPrice)}

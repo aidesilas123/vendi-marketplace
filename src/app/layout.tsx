@@ -6,7 +6,6 @@ import { StatusBarManager } from "@/shared/StatusBarManager";
 import { HardwareBackButton } from "@/shared/HardwareBackButton";
 import { PageTransition } from "@/shared/PageTransition";
 import { GlobalToastHost } from "@/shared/Toast/Toast";
-import { SplashScreen } from "@/shared/SplashScreen";
 
 // 1. Core Ionic styles for web components (optional typography.css removed to prevent overriding Tailwind utility classes)
 import '@ionic/react/css/core.css';
@@ -46,9 +45,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <PageTransition>{children}</PageTransition>
           </AppShell>
         </IonicProvider>
-        {/* Branded cold-start splash: covers the first paint so the header/nav
-            never visibly snap into place, then fades away. */}
-        <SplashScreen />
         {/* One toast host for the whole app. It portals to <body>, so it stays pinned to the
             bottom of the screen and survives route changes (e.g. toast, then navigate). */}
         <GlobalToastHost />

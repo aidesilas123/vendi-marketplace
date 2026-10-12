@@ -52,6 +52,29 @@ export const VoiceNotePlayer: React.FC<VoiceNotePlayerProps> = ({
   const waveformRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
 
+  // Audio element metadata duration (prevents waveform from rushing ahead when initial duration is 0 or estimated)
+  const [trueDuration, setTrueDuration] = useState<number>(duration);
+
+  useEffect(() => {
+    if (duration > 0) setTrueDuration(duration);
+  }, [duration]);
+
+  useEffect(() => {
+    if (url && trueDuration <= 0) {
+      const audio = new Audio();
+      audio.preload = 'metadata';
+      audio.onloadedmetadata = () => {
+        if (isFinite(audio.duration) && audio.duration > 0) {
+          setTrueDuration(audio.duration);
+        }
+      };
+      audio.src = url;
+      return () => {
+        audio.src = '';
+      };
+    }
+  }, [url, trueDuration]);
+
   // Generate a consistent pseudo-random waveform if none is provided
   const bars = waveform && waveform.length > 0 ? waveform : React.useMemo(() => {
     const list: number[] = [];
@@ -64,12 +87,12 @@ export const VoiceNotePlayer: React.FC<VoiceNotePlayerProps> = ({
     return list;
   }, [id]);
 
-  const effectiveDuration = duration > 0 ? duration : 1;
+  const effectiveDuration = trueDuration > 0 ? trueDuration : (duration > 0 ? duration : 1);
   const progress = isThisPlaying && effectiveDuration > 0
     ? Math.min(1, Math.max(0, currentTime / effectiveDuration))
     : 0;
 
-  const displayTime = isThisPlaying ? currentTime : duration;
+  const displayTime = isThisPlaying ? currentTime : effectiveDuration;
 
   const handleToggle = () => {
     hapticImpact(ImpactStyle.Light);
@@ -159,20 +182,20 @@ export const VoiceNotePlayer: React.FC<VoiceNotePlayerProps> = ({
             onClick={handleToggle}
             type="button"
             aria-label="Download voice note"
-            className="w-10 h-10 rounded-full bg-orange-500/10 text-orange-500 flex items-center justify-center active:scale-95 transition-transform"
+            className="!w-10 !h-10 !min-w-[40px] !min-h-[40px] !aspect-square !rounded-full !p-0 bg-white dark:bg-[#1f2937] text-orange-500 shadow-md border border-orange-500/20 flex items-center justify-center shrink-0 active:scale-90 transition-transform"
           >
-            <IonIcon icon={downloadOutline} className="text-xl" />
+            <IonIcon icon={downloadOutline} className="text-2xl pointer-events-none" />
           </button>
         ) : (
           <button
             onClick={handleToggle}
             type="button"
             aria-label={isThisPlaying ? 'Pause voice note' : 'Play voice note'}
-            className="w-10 h-10 rounded-full bg-orange-500 text-white flex items-center justify-center shadow-md active:scale-95 transition-transform"
+            className="!w-10 !h-10 !min-w-[40px] !min-h-[40px] !aspect-square !rounded-full !p-0 bg-orange-500 text-white shadow-lg shadow-orange-500/30 flex items-center justify-center shrink-0 active:scale-90 transition-transform"
           >
             <IonIcon
               icon={isThisPlaying ? pauseOutline : playOutline}
-              className={`text-xl ${!isThisPlaying ? 'ml-0.5' : ''}`}
+              className={`text-2xl pointer-events-none ${!isThisPlaying ? 'ml-0.5' : ''}`}
             />
           </button>
         )}

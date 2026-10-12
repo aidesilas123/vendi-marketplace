@@ -127,14 +127,28 @@ html, body {
 .pb-safe { padding-bottom: var(--sab); }
 
 @layer base {
-  /* 1. Kills tap highlight and enforces clean native typography */
+  /* 1. Global text-select suppression — eliminates long-press text selection / blue highlight */
+  *, *::before, *::after {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  /* Form inputs, textareas and editable areas retain full text selection & cursor */
+  input, textarea, [contenteditable="true"] {
+    -webkit-user-select: text !important;
+    user-select: text !important;
+    -webkit-touch-callout: default !important;
+  }
+
+  /* 2. Kills tap highlight and enforces clean native typography */
   html, body {
     -webkit-tap-highlight-color: transparent !important; 
     -webkit-text-size-adjust: 100%;
-    font-family: -apple-system, BlinkMacSystemFont, "Plus Jakarta Sans", "SF Pro Display", "Inter", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    font-family: var(--font-sans);
   }
 
-  /* 2. Forces buttery-smooth native momentum scrolling */
+  /* 3. Forces buttery-smooth native momentum scrolling */
   #main-scroll-container {
     -webkit-overflow-scrolling: touch;
   }
