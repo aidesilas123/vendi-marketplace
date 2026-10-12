@@ -16,7 +16,6 @@ import {
   checkmarkDoneOutline,
   checkmarkOutline,
   imageOutline,
-  flagOutline,
   closeOutline,
   playOutline,
   chatbubblesOutline,
@@ -328,22 +327,15 @@ export default function MessagesList() {
     );
   };
 
+  // No pt-safe on the root: the app shell already pads the status bar.
   return (
-    <div className="min-h-screen bg-background text-foreground pt-safe pb-28">
+    <div className="min-h-screen bg-background text-foreground pb-28">
       {/* HEADER — solid, same theme as the body. No blur, no transparency. */}
       <div className="sticky top-0 z-30 bg-background">
         <div className="max-w-md mx-auto px-4 pt-4 pb-2 flex items-center justify-between">
-          <h1 className="text-[22px] font-black tracking-tight text-gray-900 dark:text-white">
+          <h1 className="text-lg font-black tracking-tight text-gray-900 dark:text-white">
             Vendi Chats
           </h1>
-          {/* Report: solid orange, never transparent */}
-          <button
-            onClick={() => router.push('/support')}
-            aria-label="Report an issue"
-            className="w-10 h-10 rounded-full bg-orange-500 text-white flex items-center justify-center shadow-md shadow-orange-500/30 active:scale-95 transition-transform"
-          >
-            <IonIcon icon={flagOutline} className="text-xl" />
-          </button>
         </div>
 
         {/* SEARCH */}

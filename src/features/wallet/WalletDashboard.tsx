@@ -42,8 +42,8 @@ const ICON_BTN = `flex h-10 min-h-10 w-10 items-center justify-center rounded-fu
 const PRIMARY_BTN =
   'h-12! min-h-12! min-w-32 rounded-full! bg-orange-500! px-8! py-0! text-sm! font-bold! text-white! border-0! shadow-none!';
 
-// Stretches the header securely to the absolute top of edge-to-edge mobile screens
-const HEADER_SPACE = 'pt-[max(env(safe-area-inset-top),16px)] pb-6';
+// No safe-area padding here: the app shell already pads the status bar.
+const HEADER_SPACE = 'pb-6';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -289,7 +289,7 @@ export default function WalletDashboard() {
                     {reloading ? (
                       <Spinner className="h-7 w-7" />
                     ) : (
-                      <h2 className="text-[32px] font-black leading-tight tracking-tight tabular-nums">
+                      <h2 className="text-3xl font-black leading-tight tracking-tight tabular-nums">
                         {balanceText}
                       </h2>
                     )}

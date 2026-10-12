@@ -97,7 +97,7 @@ export default function MyReviewsPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-background flex flex-col pt-safe">
+      <div className="min-h-screen bg-background flex flex-col">
         <div className="h-[60px] w-full bg-card border-b border-border flex items-center px-4">
            <div className="w-8 h-8 rounded-full bg-muted animate-pulse" />
            <div className="w-32 h-5 rounded-md bg-muted animate-pulse ml-4" />
@@ -113,7 +113,7 @@ export default function MyReviewsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground pt-safe pb-safe selection:bg-orange-500/30">
+    <div className="min-h-screen bg-background text-foreground pb-safe selection:bg-orange-500/30">
       
       {/* HEADER */}
       <div className="flex-shrink-0 w-full bg-background/95 backdrop-blur-sm border-b border-border shadow-sm sticky top-0 z-50">

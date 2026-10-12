@@ -34,7 +34,7 @@ export const DisputeStatus: React.FC<DisputeStatusProps> = ({ transaction, produ
 
   return (
     <div className="w-full min-h-screen bg-gray-50 dark:bg-[#0b1120] text-gray-900 dark:text-white pb-32">
-      <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-[#0b1120] pt-safe">
+      <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-[#0b1120]">
         <div className="flex w-full items-center px-3 h-12 max-w-2xl mx-auto">
           <button onClick={onBack} aria-label="Back" className="p-1.5 -ml-1.5 text-gray-900 dark:text-white active:scale-95 transition-transform rounded-full">
             <IonIcon icon={chevronBackOutline} className="text-2xl block" />

@@ -50,7 +50,7 @@ export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications
       <div className="flex items-center gap-2">
         {/* Replace '/icon.png' with the actual path to your logo in the public folder */}
         <img src="/icon.png" alt="Vendi Logo" className="w-6 h-6 rounded-md object-contain shadow-sm" />
-        <h1 className="text-lg font-black text-foreground leading-none mb-0">Vendi</h1>
+        <h1 className="vendi-wordmark text-lg text-foreground leading-none mb-0">Vendi</h1>
       </div>
 
       <div className="flex items-center gap-1">

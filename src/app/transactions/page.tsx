@@ -11,7 +11,6 @@ import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { BuyerProductCard } from '@/shared/Card/BuyerProductCard';
 import { TransactionCard } from '@/shared/Card/TransactionCard';
 import { EmptyState } from '@/shared/EmptyState/EmptyState';
-import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { effectiveTxStatus } from '@/lib/txStatus';
@@ -370,8 +369,9 @@ export default function TransactionsPage() {
           className={`max-w-2xl mx-auto w-full transition-opacity duration-200 ease-out ${isSwitchingTab ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
         >
           {isLoading ? (
-            <div className="space-y-0 pt-2 px-4">
-              {[1, 2, 3, 4, 5].map(i => <Skeleton key={i} className="w-full h-16 rounded-2xl mb-3" />)}
+            <div className="flex flex-col items-center justify-center pt-24 gap-3">
+              <PullSpinner spinning size={32} />
+              <p className="text-sm font-medium text-gray-400">Loading activity…</p>
             </div>
           ) : (
             <div 

@@ -149,7 +149,7 @@ export default function ReportPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-background flex flex-col pt-safe">
+      <div className="min-h-screen bg-background flex flex-col">
         <div className="h-14 flex items-center px-4 border-b border-border animate-pulse">
            <div className="w-8 h-8 bg-muted rounded-full" />
            <div className="w-32 h-5 bg-muted rounded-md ml-4" />
@@ -163,7 +163,7 @@ export default function ReportPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground pt-safe pb-safe selection:bg-orange-500/30">
+    <div className="min-h-screen bg-background text-foreground pb-safe selection:bg-orange-500/30">
       
       <Modal isOpen={modalConfig.isOpen} onClose={modalConfig.onConfirm}>
         <div className="p-6 text-center">

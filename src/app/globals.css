@@ -2,9 +2,34 @@
 @custom-variant dark (&:is(.dark *));
 @theme {
   --color-background: #f9fafb;
+  /* Vendi's global typeface (Plus Jakarta Sans, loaded in layout.tsx).
+     --font-jakarta is set on <html> by next/font, so it resolves everywhere. */
+  --font-sans: var(--font-jakarta), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 .dark {
   --color-background: #0b1120;
+}
+
+/* Our typeface wins over any remaining unlayered library CSS (Ionic ships
+   unlayered rules that beat Tailwind v4's layered utilities in the cascade). */
+html {
+  font-family: var(--font-jakarta), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Vendi wordmark — the "Vendi" on the dashboard header and splash screen.
+   Same family as the app, extra-tight tracking for a distinctive logotype. */
+.vendi-wordmark {
+  font-family: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+/* Native apps don't draw focus rectangles. The bottom nav links kept a
+   persistent orange rounded outline after being tapped (stuck :focus), so
+   suppress it there while keeping the orange active colour. */
+.bottom-nav-link:focus,
+.bottom-nav-link:focus-visible {
+  outline: none;
 }
 
 /* Hide scrollbar for the horizontal category chips */
