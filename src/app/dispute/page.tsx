@@ -174,7 +174,7 @@ export default function DisputePage() {
       <Toast {...toast} onClose={hideToast} />
       
       {/* HEADER: Solid theme colour, flush to the top, h-12 compact size, strictly frozen */}
-      <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-[#0b1120] pt-safe">
+      <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-[#0b1120]">
         <div className="flex w-full items-center px-3 h-12 max-w-2xl mx-auto">
           <button onClick={() => router.back()} aria-label="Back" className="p-1.5 -ml-1.5 text-gray-900 dark:text-white active:scale-95 transition-transform rounded-full">
             <IonIcon icon={chevronBackOutline} className="text-2xl block" />

@@ -55,6 +55,15 @@ export function useRubberBand(
 
     const onStart = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
+      // If the touch starts inside a nested scroller (a page with its own
+      // scroll container, e.g. the transactions list or a PullToRefresh
+      // body), that scroller owns the gesture — otherwise the page would
+      // bounce twice, once per scroller.
+      let el: HTMLElement | null = e.target as HTMLElement;
+      while (el && el !== scroller) {
+        if (el.scrollHeight > el.clientHeight + 1) return;
+        el = el.parentElement;
+      }
       tracking = true;
       startX = e.touches[0].clientX;
       startY = e.touches[0].clientY;

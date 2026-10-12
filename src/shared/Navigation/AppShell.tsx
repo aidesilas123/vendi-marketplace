@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { BottomNav } from './BottomNav';
+import { useRubberBand } from '@/shared/hooks/useRubberBand';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -16,31 +17,46 @@ export const AppShell = ({ children }: AppShellProps) => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [user, setUser] = useState<{ id?: string; name: string; email: string; avatarUrl?: string } | null>(null);
 
+  const isAuthPage = pathname === '/login' || pathname === '/signup';
+  const isChatRoom = pathname === '/chats' || pathname?.startsWith('/chats');
+  const showShell = !isAuthPage && !isChatRoom;
+
+  // Bottom rubber-band bounce for every page that scrolls in the shell's main
+  // container. Top is off: pages with pull-to-refresh (feed, inbox) own that
+  // edge. The hook ignores touches inside nested scrollers (e.g. the
+  // transactions page's own container), so they never double-bounce.
+  const bounceRef = useRef<HTMLDivElement>(null);
+  useRubberBand(bounceRef, { scrollerId: 'main-scroll-container', top: false, bottom: true, ready: showShell });
+
   useEffect(() => {
     const fetchUser = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        // Query users table for live profile avatar & name
-        const { data: profile } = await supabase
-          .from('users')
-          .select('id, full_name, avatar_url')
-          .eq('id', session.user.id)
-          .maybeSingle();
-
-        setUser({
-          id: session.user.id,
-          name: profile?.full_name || session.user.user_metadata?.full_name || "Campus Student",
-          email: session.user.email || "",
-          avatarUrl: profile?.avatar_url || session.user.user_metadata?.avatar_url,
-        });
+      if (!session?.user) {
+        setUser(null);
+        return;
       }
+
+      // Query users table for live profile avatar & name
+      const { data: profile } = await supabase
+        .from('users')
+        .select('id, full_name, avatar_url')
+        .eq('id', session.user.id)
+        .maybeSingle();
+
+      setUser({
+        id: session.user.id,
+        name: profile?.full_name || session.user.user_metadata?.full_name || "Campus Student",
+        email: session.user.email || "",
+        avatarUrl: profile?.avatar_url || session.user.user_metadata?.avatar_url,
+      });
     };
 
     fetchUser();
 
-    // Listen to custom refresh-profile event (e.g. from /profile/edit)
+    // Pick up a fresh avatar after returning from the profile edit page, on focus, and on auth change
     const handleProfileRefresh = () => { void fetchUser(); };
     window.addEventListener('refresh-profile', handleProfileRefresh);
+    window.addEventListener('focus', handleProfileRefresh);
 
     const { data: authListener } = supabase.auth.onAuthStateChange(() => {
       void fetchUser();
@@ -48,15 +64,14 @@ export const AppShell = ({ children }: AppShellProps) => {
 
     return () => {
       window.removeEventListener('refresh-profile', handleProfileRefresh);
+      window.removeEventListener('focus', handleProfileRefresh);
       authListener?.subscription?.unsubscribe();
     };
   }, []);
 
   useEffect(() => setIsSidebarOpen(false), [pathname]);
 
-  const isAuthPage = pathname === '/login' || pathname === '/signup';
-  const isChatRoom = pathname === '/chats' || pathname?.startsWith('/chats');
-  if (isAuthPage || isChatRoom) return <>{children}</>;
+  if (!showShell) return <>{children}</>;
 
   const isDashboard = pathname === '/';
 
@@ -79,8 +94,13 @@ export const AppShell = ({ children }: AppShellProps) => {
       <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} user={user} />
 
       <main id="main-scroll-container" className="flex-1 w-full overflow-y-auto overscroll-y-contain scroll-smooth pb-24 relative">
-        <div className="max-w-[1600px] mx-auto w-full px-4 md:px-8">
-          {children}
+        {/* Bounce wrapper: the rubber-band transform applies here, around page
+            content only. Fixed elements (bottom nav, modals, toasts) live
+            outside it so a transform never breaks their positioning. */}
+        <div ref={bounceRef}>
+          <div className="max-w-[1600px] mx-auto w-full px-4 md:px-8">
+            {children}
+          </div>
         </div>
       </main>
 

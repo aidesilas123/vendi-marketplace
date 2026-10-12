@@ -182,7 +182,7 @@ export default function VerificationPage() {
 
   if (isLoading) {
     return (
-      <div className="w-full min-h-screen bg-background flex flex-col pt-safe">
+      <div className="w-full min-h-screen bg-background flex flex-col">
         <div className="h-[60px] w-full bg-card border-b border-border flex items-center px-4">
            <div className="w-8 h-8 rounded-full bg-muted animate-pulse" />
            <div className="w-32 h-5 rounded-md bg-muted animate-pulse ml-4" />
@@ -197,12 +197,12 @@ export default function VerificationPage() {
   }
 
   return (
-    <div className="w-full min-h-screen bg-background text-foreground pt-safe pb-safe selection:bg-orange-500/30">
+    <div className="w-full min-h-screen bg-background text-foreground pb-safe selection:bg-orange-500/30">
       
       {/* Lightbox Overlay */}
       {lightboxImg && (
         <div className="fixed inset-0 z-[1000] bg-background/95 backdrop-blur-xl flex flex-col animate-in fade-in zoom-in-95 duration-200">
-          <div className="absolute top-0 left-0 right-0 p-4 pt-safe flex justify-end z-10">
+          <div className="absolute top-0 left-0 right-0 p-4 flex justify-end z-10">
             <button onClick={() => setLightboxImg(null)} className="!p-2 text-foreground/80 hover:text-foreground active:scale-95 transition-transform !rounded-full">
               <IonIcon icon={closeOutline} className="text-4xl drop-shadow-md" />
             </button>

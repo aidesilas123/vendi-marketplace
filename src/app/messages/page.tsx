@@ -16,7 +16,6 @@ import {
   checkmarkDoneOutline,
   checkmarkOutline,
   imageOutline,
-  flagOutline,
   closeOutline,
   playOutline,
   chatbubblesOutline,
@@ -328,6 +327,7 @@ export default function MessagesList() {
     );
   };
 
+  // No pt-safe on the root: the app shell already pads the status bar.
   return (
     <div className="min-h-screen bg-background text-foreground pb-24">
       {/* HEADER — solid, same theme as the body. Clean tight status bar spacing. */}

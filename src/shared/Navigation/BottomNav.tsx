@@ -66,7 +66,7 @@ export const BottomNav = () => {
               key={item.name}
               href={item.route}
               onClick={(e) => handleHomeClick(e, item.route)}
-              className="flex flex-col items-center justify-center gap-1 w-16 outline-none focus:outline-none focus:ring-0 active:outline-none border-0 shadow-none -webkit-tap-highlight-transparent"
+              className="bottom-nav-link flex flex-col items-center justify-center gap-1 w-16 outline-none focus:outline-none focus:ring-0 active:outline-none border-0 shadow-none"
             >
               <span suppressHydrationWarning className="flex items-center justify-center">
                 <IonIcon icon={isActive ? item.solid : item.outline} className={`text-[22px] transition-colors ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`} />
@@ -81,7 +81,7 @@ export const BottomNav = () => {
 
         {/* Floating Seller Button (remains absolutely centered) */}
         <div className="absolute left-1/2 -translate-x-1/2 -top-8">
-          <Link href="/seller" className="flex flex-col items-center justify-center outline-none focus:outline-none border-0 shadow-none">
+          <Link href="/seller" className="bottom-nav-link flex flex-col items-center justify-center outline-none focus:outline-none border-0 shadow-none">
             <div className={`w-14 h-14 rounded-full flex items-center justify-center shadow-xl transition-transform active:scale-95 ${pathname.includes('/seller') ? 'bg-orange-600 border-4 border-orange-200 dark:border-orange-900/30' : 'bg-orange-500 border-4 border-white dark:border-[#0f172a]'}`}>
               <span suppressHydrationWarning className="flex items-center justify-center">
                 <IonIcon icon={pathname.includes('/seller') ? storefront : storefrontOutline} className="text-white text-2xl" />
@@ -99,7 +99,7 @@ export const BottomNav = () => {
               key={item.name}
               href={item.route}
               onClick={(e) => handleProtectedClick(e, item.route)}
-              className="flex flex-col items-center justify-center gap-1 w-16 outline-none focus:outline-none focus:ring-0 active:outline-none border-0 shadow-none -webkit-tap-highlight-transparent"
+              className="bottom-nav-link flex flex-col items-center justify-center gap-1 w-16 outline-none focus:outline-none focus:ring-0 active:outline-none border-0 shadow-none"
             >
               <span suppressHydrationWarning className="flex items-center justify-center">
                 <IonIcon icon={isActive ? item.solid : item.outline} className={`text-[22px] transition-colors ${isActive ? 'text-orange-500' : 'text-gray-400 dark:text-gray-500'}`} />
