@@ -194,7 +194,8 @@ export default function MessagesList() {
     mutate,
   } = useSWR(userId ? ['inbox', userId] : null, fetchInbox, {
     revalidateOnFocus: true,
-    dedupingInterval: 4000,
+    revalidateOnMount: true,
+    dedupingInterval: 500,
     shouldRetryOnError: false,
   });
 
@@ -202,6 +203,20 @@ export default function MessagesList() {
   useEffect(() => {
     if (userId === null) router.replace('/login');
   }, [userId, router]);
+
+  // Immediately refresh inbox on mount and whenever returning to this tab/window
+  useEffect(() => {
+    if (userId) void mutate();
+    const handleVisible = () => {
+      if (document.visibilityState === 'visible' && userId) void mutate();
+    };
+    document.addEventListener('visibilitychange', handleVisible);
+    window.addEventListener('focus', handleVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisible);
+      window.removeEventListener('focus', handleVisible);
+    };
+  }, [userId, mutate]);
 
   const mutateRef = useRef(mutate);
   mutateRef.current = mutate;

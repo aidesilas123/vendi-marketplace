@@ -6,7 +6,7 @@ const config: CapacitorConfig = {
   webDir: 'out',
   plugins: {
     StatusBar: {
-      overlaysWebView: false,
+      overlaysWebView: true,
     },
     SystemBars: {
       style: 'DEFAULT',

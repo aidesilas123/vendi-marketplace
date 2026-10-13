@@ -87,15 +87,18 @@ async function fetchWalletData(userId: string): Promise<WalletData> {
   }
 
   // wallet_id OR user_id: a row written without a wallet_id still shows up.
+  const txFilter = wallet?.id
+    ? `wallet_id.eq.${wallet.id},user_id.eq.${userId}`
+    : `user_id.eq.${userId}`;
   const { data: txs, error: txError } = await supabase
     .from('transactions')
     .select('*')
-    .or(`wallet_id.eq.${wallet.id},user_id.eq.${userId}`)
+    .or(txFilter)
     .order('created_at', { ascending: false })
     .limit(100);
   if (txError) throw new Error(txError.message);
 
-  return { wallet, transactions: (txs ?? []) as WalletTx[] };
+  return { wallet: wallet ?? null, transactions: (txs ?? []) as WalletTx[] };
 }
 
 export function useWallet() {
@@ -117,7 +120,7 @@ export function useWallet() {
 
   // Realtime: new deposits / status changes appear without a manual refresh.
   // Needs Realtime enabled for `wallets` and `transactions` in Supabase; harmless if it isn't.
-  const walletId = data?.wallet.id;
+  const walletId = data?.wallet?.id;
   useEffect(() => {
     if (!walletId) return;
     const channel = supabase

@@ -289,7 +289,7 @@ export default function TransactionsPage() {
   return (
     <div 
       id="tx-scroll-container"
-      className="relative flex flex-col h-[100dvh] bg-gray-50 dark:bg-[#0a1120] text-gray-900 dark:text-white pb-24 overflow-y-auto overflow-x-hidden overscroll-y-contain"
+      className="relative flex flex-col h-[100dvh] bg-gray-50 dark:bg-[#0a1120] text-gray-900 dark:text-white pb-24 -mx-4 md:-mx-8 overflow-y-auto overflow-x-hidden overscroll-y-contain"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}

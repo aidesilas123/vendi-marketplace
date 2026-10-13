@@ -7,33 +7,20 @@ import {
   SystemBarType,
 } from "@capacitor/core";
 
-import { StatusBar, Style } from "@capacitor/status-bar";
-
 export function StatusBarManager() {
   useEffect(() => {
     const applyStatusBarStyle = async () => {
       try {
         const isDark = document.documentElement.classList.contains("dark");
-        const bgColor = isDark ? "#0b1120" : "#f9fafb";
 
-        try {
-          await StatusBar.setOverlaysWebView({ overlay: false });
-          await StatusBar.setStyle({ style: isDark ? Style.Dark : Style.Light });
-          await StatusBar.setBackgroundColor({ color: bgColor });
-        } catch {
-          // StatusBar plugin fallback
-        }
-
-        try {
-          await SystemBars.setStyle({
-            bar: SystemBarType.StatusBar,
-            style: isDark ? SystemBarsStyle.Dark : SystemBarsStyle.Light
-          });
-        } catch {
-          // SystemBars plugin fallback
-        }
+        await SystemBars.setStyle({
+          bar: SystemBarType.StatusBar,
+          style: isDark
+            ? SystemBarsStyle.Dark
+            : SystemBarsStyle.Light
+        });
       } catch (e) {
-        console.log("StatusBar plugins not active on web");
+        console.log("SystemBars plugin not active on web");
       }
     };
 

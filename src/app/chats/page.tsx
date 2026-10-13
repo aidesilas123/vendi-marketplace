@@ -72,7 +72,7 @@
 */
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import useSWR from 'swr';
+import useSWR, { mutate as globalMutate } from 'swr';
 import { supabase } from '@/lib/supabase';
 import { Avatar } from '@/shared/Avatar';
 import { Badge } from '@/shared/Badge';
@@ -111,8 +111,8 @@ const LIVE_BAR_COUNT = 18;
 const SWIPE_TRIGGER_PX = 64;
 const SWIPE_MAX_PX = 90;
 const LONG_PRESS_MS = 450;
-const TYPING_BROADCAST_IDLE_MS = 2500;
-const PARTNER_ACTIVITY_WATCHDOG_MS = 6000;
+const TYPING_BROADCAST_IDLE_MS = 1200;
+const PARTNER_ACTIVITY_WATCHDOG_MS = 2500;
 const CANCEL_DRAG_PX = 100;
 const LOCK_DRAG_PX = 80;
 
@@ -231,10 +231,15 @@ export default function DealRoomChat() {
     dedupingInterval: 20000,
   });
   const [optimisticMsgs, setOptimisticMsgs] = useState<any[]>([]);
-  const messages = useMemo(
-    () => [...(serverMessages ?? []), ...optimisticMsgs],
-    [serverMessages, optimisticMsgs]
-  );
+  const messages = useMemo(() => {
+    const server = serverMessages ?? [];
+    const pendingOptimistic = optimisticMsgs.filter((opt) => {
+      if (opt.media_url && server.some((s) => s.media_url === opt.media_url)) return false;
+      if (opt.id && server.some((s) => s.id === opt.id)) return false;
+      return true;
+    });
+    return [...server, ...pendingOptimistic];
+  }, [serverMessages, optimisticMsgs]);
   /** setMessages replacement: writes through the SWR cache, no refetch. */
   const updateMessages = useCallback(
     (fn: (prev: any[]) => any[]) => {
@@ -423,19 +428,31 @@ export default function DealRoomChat() {
 
         // History is loaded by SWR (see fetchHistory above) — no manual fetch here.
 
+        // 1. Chat Room Channel
         chatChannel.on(
           'postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'messages', filter: `transaction_ref=eq.${txRef}` },
           (payload: any) => {
+            const newMsg = payload?.new;
+            if (!newMsg) return;
+            if (newMsg.sender_id === currentUserRef.current?.id) {
+              setOptimisticMsgs((prev) => prev.filter((m) => {
+                if (newMsg.media_url && m.media_url === newMsg.media_url) return false;
+                if (newMsg.message_type === 'audio' && m.message_type === 'audio') return false;
+                if (newMsg.message_type === 'image' && m.message_type === 'image') return false;
+                if (newMsg.message_type === 'text' && m.content === newMsg.content) return false;
+                return true;
+              }));
+            }
             updateMessages((prev) => {
-               if (prev.find(m => m.id === payload.new.id)) return prev;
-               return [...prev, payload.new];
+               if (prev.find(m => m.id === newMsg.id)) return prev;
+               return [...prev, newMsg];
             });
             const meNow = currentUserRef.current;
-            if (meNow && payload.new.receiver_id === meNow.id) {
+            if (meNow && newMsg.receiver_id === meNow.id) {
               playChatSound('received');
-              chatChannel.send({ type: 'broadcast', event: 'messages_read', payload: { ids: [payload.new.id] } });
-              supabase.from('messages').update({ status: 'read' }).eq('id', payload.new.id);
+              chatChannel.send({ type: 'broadcast', event: 'messages_read', payload: { ids: [newMsg.id] } });
+              supabase.from('messages').update({ status: 'read' }).eq('id', newMsg.id);
             }
           }
         ).on(
@@ -452,6 +469,15 @@ export default function DealRoomChat() {
           (payload: any) => {
             const newMsg = payload?.payload;
             if (!newMsg) return;
+            if (newMsg.sender_id === currentUserRef.current?.id) {
+              setOptimisticMsgs((prev) => prev.filter((m) => {
+                if (newMsg.media_url && m.media_url === newMsg.media_url) return false;
+                if (newMsg.message_type === 'audio' && m.message_type === 'audio') return false;
+                if (newMsg.message_type === 'image' && m.message_type === 'image') return false;
+                if (newMsg.message_type === 'text' && m.content === newMsg.content) return false;
+                return true;
+              }));
+            }
             updateMessages((prev) => {
               if (prev.find(m => m.id === newMsg.id)) return prev;
               return [...prev, newMsg];
@@ -509,42 +535,48 @@ export default function DealRoomChat() {
               partnerActivityWatchdogRef.current = setTimeout(() => setPartnerActivity(null), PARTNER_ACTIVITY_WATCHDOG_MS);
             }
           }
-        ).on(
-          // Realtime Presence: track online/offline status
-          'presence',
-          { event: 'sync' },
-          () => {
-            const state = chatChannel.presenceState();
-            const isOnline = partnerId ? Object.keys(state).includes(partnerId) : false;
-            setIsPartnerOnline(isOnline);
-            if (isOnline) setPartnerLastSeen(null);
+        ).subscribe();
+
+        // 2. Global Presence Channel: track online/offline status across the entire app
+        let globalPresenceChannel: any = null;
+        globalPresenceChannel = supabase.channel('global_presence', {
+          config: { presence: { key: user.id } }
+        });
+
+        const syncGlobalPresence = () => {
+          if (!globalPresenceChannel) return;
+          const state = globalPresenceChannel.presenceState();
+          const isOnline = partnerId ? Object.keys(state).includes(partnerId) : false;
+          setIsPartnerOnline(isOnline);
+          if (isOnline) {
+            setPartnerLastSeen(null);
           }
-        ).on(
-          'presence',
-          { event: 'join' },
-          ({ key }: any) => {
+        };
+
+        globalPresenceChannel
+          .on('presence', { event: 'sync' }, syncGlobalPresence)
+          .on('presence', { event: 'join' }, ({ key }: any) => {
             if (key === partnerId) {
               setIsPartnerOnline(true);
               setPartnerLastSeen(null);
             }
-          }
-        ).on(
-          'presence',
-          { event: 'leave' },
-          ({ key }: any) => {
+          })
+          .on('presence', { event: 'leave' }, ({ key, leftPresences }: any) => {
             if (key === partnerId) {
               setIsPartnerOnline(false);
-              setPartnerLastSeen(new Date().toISOString());
+              const leftTime = leftPresences?.[0]?.online_at || new Date().toISOString();
+              setPartnerLastSeen(leftTime);
             }
-          }
-        ).subscribe(async (status: string) => {
-          if (status === 'SUBSCRIBED' && me?.id) {
-            await chatChannel.track({
-              user_id: me.id,
-              online_at: new Date().toISOString()
-            });
-          }
-        });
+          })
+          .subscribe(async (status: string) => {
+            if (status === 'SUBSCRIBED' && me?.id) {
+              await globalPresenceChannel.track({
+                user_id: me.id,
+                online_at: new Date().toISOString()
+              });
+              syncGlobalPresence();
+            }
+          });
       } catch (err: any) {
         console.error('[Chat] Initialization failed:', err);
         if (!cancelled) setInitError(err?.message || 'Could not load this chat. Please try again.');
@@ -556,9 +588,12 @@ export default function DealRoomChat() {
     return () => {
       cancelled = true;
       clearTimeout(safetyTimeout);
-      supabase.removeChannel(chatChannel);
+      if (chatChannel) {
+        try { void supabase.removeChannel(chatChannel); } catch {}
+      }
       chatChannelRef.current = null;
       if (partnerActivityWatchdogRef.current) clearTimeout(partnerActivityWatchdogRef.current);
+      void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
     };
   }, [txRef, partnerId, router, initAttempt]);
 
@@ -643,10 +678,18 @@ export default function DealRoomChat() {
     const ids = unread.map((m) => m.id);
     updateMessages((prev) => prev.map((m) => (ids.includes(m.id) ? { ...m, status: 'read' } : m)));
     chatChannelRef.current?.send({ type: 'broadcast', event: 'messages_read', payload: { ids } });
+    if (partnerId) {
+      supabase.channel(`user_inbox_${partnerId}`).send({
+        type: 'broadcast',
+        event: 'messages_read',
+        payload: { ids }
+      }).catch(() => {});
+    }
     supabase.from('messages').update({ status: 'read' }).in('id', ids).then(({ error }: any) => {
       if (error) {
         console.error('[Chat] Failed to mark messages as read on the server:', error.message);
       }
+      void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
     });
   }, [messages, currentUser, txRef]);
 
@@ -660,7 +703,7 @@ export default function DealRoomChat() {
     const now = Date.now();
     // Broadcast typing presence with 2.2s heartbeat so it doesn't clear while continuously typing
     if (val) {
-      if (myActivityRef.current !== 'typing' || now - lastTypingBroadcastTime.current > 2200) {
+      if (myActivityRef.current !== 'typing' || now - lastTypingBroadcastTime.current > 1200) {
         lastTypingBroadcastTime.current = now;
         broadcastActivity('typing');
       }
@@ -984,6 +1027,14 @@ export default function DealRoomChat() {
         event: 'new_message',
         payload: savedMsg
       });
+      if (partnerId) {
+        supabase.channel(`user_inbox_${partnerId}`).send({
+          type: 'broadcast',
+          event: 'new_message',
+          payload: savedMsg
+        }).catch(() => {});
+      }
+      void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
     }
   };
 
@@ -1081,6 +1132,14 @@ export default function DealRoomChat() {
           event: 'new_message',
           payload: savedMsg
         });
+        if (partnerId) {
+          supabase.channel(`user_inbox_${partnerId}`).send({
+            type: 'broadcast',
+            event: 'new_message',
+            payload: savedMsg
+          }).catch(() => {});
+        }
+        void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
       } else throw new Error("Database save failed");
     } catch (err: any) {
        showError('Upload Failed', err.message || `Could not send ${msgType}.`);
@@ -1593,6 +1652,14 @@ export default function DealRoomChat() {
         event: 'new_message',
         payload: savedMsg
       });
+      if (partnerId) {
+        supabase.channel(`user_inbox_${partnerId}`).send({
+          type: 'broadcast',
+          event: 'new_message',
+          payload: savedMsg
+        }).catch(() => {});
+      }
+      void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
     } else {
       failVoiceNote(tempId, new Error("Database save failed"));
     }
@@ -1895,8 +1962,8 @@ export default function DealRoomChat() {
               <div
                 {...bubbleGestureProps(msg)}
                 style={bubbleSwipeStyle(msg)}
-                className={`relative w-full min-w-0 px-3 py-2 shadow-sm flex flex-col select-none transition-shadow ${
-                  isMe ? 'bg-[#e5ddd5] dark:bg-[#1f2937] !rounded-[1.25rem] !rounded-tr-sm border border-orange-500/30' : 'bg-white dark:bg-[#111b2c] !rounded-[1.25rem] !rounded-tl-sm border border-transparent'
+                className={`relative w-full min-w-0 px-3.5 py-2.5 shadow-xs flex flex-col select-none transition-shadow ${
+                  isMe ? 'bg-[#fff1e7] dark:bg-[#231a14] !rounded-[1.25rem] !rounded-tr-sm border border-orange-500/20' : 'bg-white dark:bg-[#111b2c] !rounded-[1.25rem] !rounded-tl-sm border border-gray-100 dark:border-gray-800'
                 } ${isActiveSearchMatch ? 'ring-2 ring-orange-400 ring-offset-2 dark:ring-offset-[#0a1120]' : ''}`}
               >
                 {renderReplyQuote(msg)}
@@ -1905,7 +1972,7 @@ export default function DealRoomChat() {
                 </p>
                 <div className="flex items-center justify-end gap-1 mt-1 -mb-0.5">
                   {msg.is_edited && <span className="text-[9px] italic text-gray-400">edited</span>}
-                  <span className={`text-[9px] font-bold ${isMe ? 'text-gray-500' : 'text-gray-400'}`}>{msgTime}</span>
+                  <span className={`text-[9px] font-bold ${isMe ? 'text-orange-900/50 dark:text-orange-200/50' : 'text-gray-400'}`}>{msgTime}</span>
                   {isMe && renderTicks(msg.status)}
                 </div>
               </div>
@@ -1933,8 +2000,8 @@ export default function DealRoomChat() {
               <div
                 {...bubbleGestureProps(msg)}
                 style={bubbleSwipeStyle(msg)}
-                className={`relative max-w-full min-w-0 px-2.5 py-1.5 shadow-sm flex flex-col gap-0.5 select-none ${
-                  isMe ? 'bg-[#e5ddd5] dark:bg-[#1f2937] !rounded-2xl !rounded-tr-sm border border-orange-500/30' : 'bg-white dark:bg-[#111b2c] !rounded-2xl !rounded-tl-sm border border-transparent'
+                className={`relative max-w-full min-w-0 px-2.5 py-1.5 shadow-xs flex flex-col gap-0.5 select-none ${
+                  isMe ? 'bg-[#fff1e7] dark:bg-[#231a14] !rounded-2xl !rounded-tr-sm border border-orange-500/20' : 'bg-white dark:bg-[#111b2c] !rounded-2xl !rounded-tl-sm border border-gray-100 dark:border-gray-800'
                 }`}
               >
                 {renderReplyQuote(msg)}
@@ -1984,8 +2051,8 @@ export default function DealRoomChat() {
               <div
                 {...bubbleGestureProps(msg)}
                 style={bubbleSwipeStyle(msg)}
-                className={`relative w-full min-w-0 p-1.5 shadow-sm select-none ${
-                  isMe ? 'bg-[#e5ddd5] dark:bg-[#1f2937] !rounded-2xl !rounded-tr-sm border border-orange-500/30' : 'bg-white dark:bg-[#111b2c] !rounded-2xl !rounded-tl-sm border border-transparent'
+                className={`relative w-full min-w-0 p-1.5 shadow-xs select-none ${
+                  isMe ? 'bg-[#fff1e7] dark:bg-[#231a14] !rounded-2xl !rounded-tr-sm border border-orange-500/20' : 'bg-white dark:bg-[#111b2c] !rounded-2xl !rounded-tl-sm border border-gray-100 dark:border-gray-800'
                 }`}
               >
                 {renderReplyQuote(msg)}
@@ -2204,12 +2271,10 @@ export default function DealRoomChat() {
                   <p className="text-[11px] font-bold text-emerald-500 flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Online
                   </p>
-                ) : partnerLastSeen ? (
-                  <p className="text-[11px] font-medium text-gray-400">
-                    Last seen {formatLastSeen(partnerLastSeen)}
-                  </p>
                 ) : (
-                  <p className="text-[11px] font-medium text-gray-400">Offline</p>
+                  <p className="text-[11px] font-medium text-gray-400">
+                    Last seen {partnerLastSeen ? formatLastSeen(partnerLastSeen) : 'recently'}
+                  </p>
                 )}
               </div>
             </div>

@@ -7,12 +7,23 @@ import { Filesystem, Directory } from '@capacitor/filesystem';
 import { hapticImpact, ImpactStyle } from '@/shared/haptics';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 
+/** Viewport rect of the tapped thumbnail. Pass `e.currentTarget.getBoundingClientRect()`. */
+export interface HeroOrigin {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 interface ImageViewerProps {
   images: string[];
   isOpen: boolean;
   onClose: () => void;
   /** Which image to show first (defaults to 0) */
   initialIndex?: number;
+  /** When provided, the viewer hero-animates open from this rect and back to it on close.
+      Falls back to the plain fade/slide when absent (or unusable). */
+  originRect?: HeroOrigin | null;
 }
 
 /* ───────────────────────── tuning ───────────────────────── */
@@ -26,6 +37,7 @@ const DISMISS_VELOCITY = 0.6; // px/ms
 const SWIPE_VELOCITY = 0.35; // px/ms
 const SWIPE_FRACTION = 0.2; // of viewport width
 const DURATION = 300; // ms
+const HERO_MS = 380; // ms — hero open/close flight
 const EASE = 'cubic-bezier(0.22, 1, 0.36, 1)';
 
 /** Native gallery folder: /storage/emulated/0/Pictures/Vendi/ (shows as the "Vendi" album, like WhatsApp) */
@@ -56,6 +68,8 @@ interface GestureState {
   lastTap: { t: number; x: number; y: number };
   moved: boolean;
   closing: boolean;
+  /** a hero open/close flight is running — gestures stay parked until it lands */
+  heroing: boolean;
 }
 
 const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
@@ -66,7 +80,7 @@ const rubber = (v: number, limit: number) => {
   return a <= limit ? v : Math.sign(v) * (limit + (a - limit) * 0.35);
 };
 
-export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: ImageViewerProps) => {
+export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0, originRect = null }: ImageViewerProps) => {
   // React state is only used for things that need a re-render (dots, which images are mounted).
   // Everything that changes on every pointer move is written straight to the DOM for 60fps.
   const [index, setIndex] = useState(initialIndex);
@@ -77,6 +91,13 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
   const trackRef = useRef<HTMLDivElement>(null);
   const chromeRef = useRef<HTMLDivElement>(null);
   const imgRefs = useRef<(HTMLImageElement | null)[]>([]);
+
+  // Hero flight layer (thumbnail ↔ fullscreen morph)
+  const heroRef = useRef<HTMLDivElement>(null);
+  const heroImgRef = useRef<HTMLImageElement>(null);
+  const originRectRef = useRef<HeroOrigin | null>(null);
+  const originIndexRef = useRef(0);
+  const heroTimer = useRef<number | undefined>(undefined);
 
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -102,6 +123,7 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
     lastTap: { t: 0, x: 0, y: 0 },
     moved: false,
     closing: false,
+    heroing: false,
   });
 
   const rafRef = useRef<number | null>(null);
@@ -116,6 +138,28 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
   const center = () => {
     const r = rootRef.current?.getBoundingClientRect();
     return { cx: (r?.left ?? 0) + (r?.width ?? 0) / 2, cy: (r?.top ?? 0) + (r?.height ?? 0) / 2 };
+  };
+
+  /** Fullscreen object-contain rect for an image of natural size iw×ih */
+  const containRect = (iw: number, ih: number) => {
+    const { w, h } = size();
+    const fit = Math.min(w / iw, h / ih) || 1;
+    const rw = iw * fit;
+    const rh = ih * fit;
+    return { x: (w - rw) / 2, y: (h - rh) / 2, width: rw, height: rh };
+  };
+
+  /** Natural size of an image URL. The tapped thumbnail used the same URL, so a cached
+      probe resolves synchronously in practice; uncached → 0 and we fall back to fade. */
+  const naturalSize = (src: string | undefined) => {
+    if (!src) return { w: 0, h: 0 };
+    try {
+      const probe = new Image();
+      probe.src = src;
+      return { w: probe.naturalWidth || 0, h: probe.naturalHeight || 0 };
+    } catch {
+      return { w: 0, h: 0 };
+    }
   };
 
   /** Max pan distance (px) at a given scale, based on the *visible* (object-contain) image size */
@@ -186,6 +230,129 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
       rafRef.current = null;
       render(false);
     });
+  };
+
+  /* ───────────────────────── hero transition ───────────────────────── */
+
+  const setHeroGeometry = (r: { x: number; y: number; width: number; height: number }) => {
+    const hero = heroRef.current;
+    if (!hero) return;
+    hero.style.left = `${r.x}px`;
+    hero.style.top = `${r.y}px`;
+    hero.style.width = `${r.width}px`;
+    hero.style.height = `${r.height}px`;
+  };
+
+  /**
+   * Hero OPEN: fly the thumbnail rect → fullscreen. Returns false when there's no
+   * usable origin (then the caller keeps the plain fade-in).
+   */
+  const playHeroOpen = (): boolean => {
+    const s = g.current;
+    const origin = originRectRef.current;
+    const hero = heroRef.current;
+    const heroImg = heroImgRef.current;
+    const src = images[s.index];
+    const { w: iw, h: ih } = naturalSize(src);
+    if (!origin || !hero || !heroImg || !iw || !ih || origin.width < 2 || origin.height < 2) return false;
+
+    const t = containRect(iw, ih);
+    heroImg.src = src;
+
+    // park the hero exactly over the thumbnail (img is object-cover, like most thumbnails)
+    hero.style.transition = 'none';
+    hero.style.opacity = '1';
+    hero.style.transformOrigin = 'top left';
+    setHeroGeometry(origin);
+    hero.style.transform = 'translate3d(0,0,0) scale(1,1)';
+
+    // hide the real content / backdrop / chrome for the flight
+    const content = contentRef.current;
+    const backdrop = backdropRef.current;
+    const chrome = chromeRef.current;
+    if (content) { content.style.transition = 'none'; content.style.opacity = '0'; }
+    if (backdrop) { backdrop.style.transition = 'none'; backdrop.style.opacity = '0'; }
+    if (chrome) { chrome.style.transition = 'none'; chrome.style.opacity = '0'; }
+
+    void hero.offsetWidth; // reflow so the start state paints before animating
+
+    // the wrapper animates rect→rect; object-cover in the target rect renders exactly
+    // like object-contain (same aspect by construction), so the handoff is seamless
+    const dx = t.x - origin.x;
+    const dy = t.y - origin.y;
+    const sx = t.width / origin.width;
+    const sy = t.height / origin.height;
+    hero.style.transition = `transform ${HERO_MS}ms ${EASE}`;
+    hero.style.transform = `translate3d(${dx}px, ${dy}px, 0) scale(${sx}, ${sy})`;
+    if (backdrop) { backdrop.style.transition = `opacity ${HERO_MS}ms ${EASE}`; backdrop.style.opacity = '1'; }
+
+    s.heroing = true;
+    try { hapticImpact(ImpactStyle.Light); } catch { /* noop */ }
+    heroTimer.current = window.setTimeout(() => {
+      hero.style.transition = 'none';
+      hero.style.opacity = '0';
+      if (content) { content.style.transition = 'none'; content.style.opacity = '1'; }
+      if (chrome) { chrome.style.transition = `opacity 220ms ${EASE}`; chrome.style.opacity = '1'; }
+      s.heroing = false;
+      render(false);
+    }, HERO_MS);
+    return true;
+  };
+
+  /**
+   * Hero CLOSE: fly the current on-screen rect back to the thumbnail. Returns false
+   * when the hero can't be used (no origin, user swiped to another image, or zoomed) —
+   * the caller then keeps the legacy slide-down dismiss.
+   */
+  const playHeroClose = (): boolean => {
+    const s = g.current;
+    const origin = originRectRef.current;
+    const hero = heroRef.current;
+    const heroImg = heroImgRef.current;
+    const src = images[s.index];
+    const { w: iw, h: ih } = naturalSize(src);
+    if (!origin || !hero || !heroImg || !iw || !ih) return false;
+    if (s.index !== originIndexRef.current || s.scale > 1.01 || Math.abs(s.dragX) > 1) return false;
+
+    const t = containRect(iw, ih);
+    const { h } = size();
+    // fold in an in-progress swipe-to-dismiss drag: content is translated by dragY and
+    // scaled by (1 - p*0.15) around the viewport center
+    const p = Math.min(Math.abs(s.dragY) / ((h || 1) * 0.5), 1);
+    const cs = 1 - p * 0.15;
+    const cur = {
+      x: t.x + (t.width * (1 - cs)) / 2,
+      y: t.y + s.dragY + (t.height * (1 - cs)) / 2,
+      width: t.width * cs,
+      height: t.height * cs,
+    };
+    heroImg.src = src;
+
+    hero.style.transition = 'none';
+    hero.style.opacity = '1';
+    hero.style.transformOrigin = 'top left';
+    setHeroGeometry(cur);
+    hero.style.transform = 'translate3d(0,0,0) scale(1,1)';
+
+    const content = contentRef.current;
+    const backdrop = backdropRef.current;
+    const chrome = chromeRef.current;
+    if (content) { content.style.transition = 'none'; content.style.opacity = '0'; }
+    if (chrome) { chrome.style.transition = `opacity 180ms ${EASE}`; chrome.style.opacity = '0'; }
+
+    void hero.offsetWidth;
+
+    const dx = origin.x - cur.x;
+    const dy = origin.y - cur.y;
+    const sx = origin.width / cur.width;
+    const sy = origin.height / cur.height;
+    hero.style.transition = `transform ${HERO_MS}ms ${EASE}`;
+    hero.style.transform = `translate3d(${dx}px, ${dy}px, 0) scale(${sx}, ${sy})`;
+    if (backdrop) { backdrop.style.transition = `opacity ${HERO_MS}ms ${EASE}`; backdrop.style.opacity = '0'; }
+
+    s.heroing = true;
+    heroTimer.current = window.setTimeout(() => onCloseRef.current(), HERO_MS - 40);
+    return true;
   };
 
   /** Return zoom to a valid resting state (clamp scale + pan) and clear drag offsets */
@@ -264,10 +431,11 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
   /** Animate out, then tell the parent to close. Used by every close path. */
   const dismiss = (dir: 1 | -1 = 1) => {
     const s = g.current;
-    if (s.closing) return;
+    if (s.closing || s.heroing) return;
     s.closing = true;
     s.mode = 'idle';
     s.pointers.clear();
+    if (playHeroClose()) return; // hero flight calls onClose itself when it lands
     s.dragY = dir * size().h * 0.5;
     render(true);
     closeTimer.current = window.setTimeout(() => onCloseRef.current(), DURATION - 60);
@@ -280,6 +448,8 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
     if (!isOpen) return;
     const start = clamp(initialIndex, 0, Math.max(images.length - 1, 0));
     const s = g.current;
+    originRectRef.current = originRect ?? null;
+    originIndexRef.current = start;
     Object.assign(s, {
       index: start,
       scale: 1,
@@ -290,11 +460,16 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
       mode: 'idle' as Mode,
       moved: false,
       closing: false,
+      heroing: false,
     });
     s.pointers.clear();
     setIndex(start);
     render(false);
-    return () => window.clearTimeout(closeTimer.current);
+    playHeroOpen(); // no-op (plain fade) when there's no usable origin rect
+    return () => {
+      window.clearTimeout(closeTimer.current);
+      window.clearTimeout(heroTimer.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, initialIndex]);
 
@@ -369,7 +544,7 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const s = g.current;
-    if (s.closing) return;
+    if (s.closing || s.heroing) return;
     if ((e.target as HTMLElement).closest('[data-no-gesture]')) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
 
@@ -411,7 +586,7 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const s = g.current;
     const p = s.pointers.get(e.pointerId);
-    if (!p || s.closing) return;
+    if (!p || s.closing || s.heroing) return;
     p.x = e.clientX;
     p.y = e.clientY;
 
@@ -649,6 +824,22 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
         </div>
       </div>
 
+      {/* Hero flight layer: morphs the tapped thumbnail ↔ fullscreen during open/close.
+          Hidden otherwise; the real content takes over the moment the flight lands. */}
+      <div
+        ref={heroRef}
+        aria-hidden
+        className="absolute z-10 overflow-hidden opacity-0 pointer-events-none will-change-transform"
+        style={{ transformOrigin: 'top left' }}
+      >
+        <img
+          ref={heroImgRef}
+          alt=""
+          draggable={false}
+          className="h-full w-full object-cover select-none pointer-events-none"
+        />
+      </div>
+
       {/* Close button, save to device button + dots (fade while dragging) */}
       <div ref={chromeRef}>
         <div
@@ -699,7 +890,7 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0 }: Image
           </div>
         )}
       </div>
-      
+
     </div>
   );
 };
