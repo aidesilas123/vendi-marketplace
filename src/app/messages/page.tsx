@@ -10,6 +10,8 @@ import IonIcon from '@/shared/Icon/Icon';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 import { useSessionUserId } from '@/features/wallet/useWallet';
+import { Badge } from '@/shared/Badge/Badge';
+import { ImageViewer } from '@/shared/ImageViewer/ImageViewer';
 import {
   searchOutline,
   micOutline,
@@ -19,13 +21,28 @@ import {
   closeOutline,
   playOutline,
   chatbubblesOutline,
+  bagOutline,
 } from 'ionicons/icons';
+
+const parseImages = (raw: unknown): string[] => {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [raw];
+    } catch {
+      return [raw];
+    }
+  }
+  return [];
+};
 
 type ChatPreview = {
   transaction_ref: string;
   partner: any;
   latestMessage: any;
   unreadCount: number;
+  product?: { id: string; title: string; image: string };
 };
 
 /* ------------------------------------------------------------------ */
@@ -36,8 +53,8 @@ async function fetchInbox([_key, userId]: [string, string]): Promise<ChatPreview
     .from('messages')
     .select(
       `*,
-       sender:sender_id(id, full_name, avatar_url),
-       receiver:receiver_id(id, full_name, avatar_url)`
+       sender:sender_id(id, full_name, avatar_url, is_verified),
+       receiver:receiver_id(id, full_name, avatar_url, is_verified)`
     )
     .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
     .order('created_at', { ascending: false });
@@ -62,6 +79,44 @@ async function fetchInbox([_key, userId]: [string, string]): Promise<ChatPreview
     });
   }
 
+  // Fetch product for each transaction reference so we show the purchased/inquired item
+  const allRefs = Array.from(new Set((msgs ?? []).map((m: any) => m.transaction_ref).filter(Boolean)));
+  const productByRef = new Map<string, { id: string; title: string; image: string }>();
+
+  if (allRefs.length > 0) {
+    try {
+      const { data: txs } = await supabase
+        .from('transactions')
+        .select('reference, product_id')
+        .in('reference', allRefs);
+
+      const productIds = Array.from(new Set((txs ?? []).map((t: any) => t.product_id).filter(Boolean)));
+      if (productIds.length > 0) {
+        const { data: prods } = await supabase
+          .from('products')
+          .select('id, title, images')
+          .in('id', productIds);
+
+        const prodMap = new Map<string, any>();
+        (prods ?? []).forEach((p: any) => prodMap.set(p.id, p));
+
+        (txs ?? []).forEach((t: any) => {
+          const p = prodMap.get(t.product_id);
+          if (p) {
+            const imgs = parseImages(p.images);
+            productByRef.set(t.reference, {
+              id: p.id,
+              title: p.title || 'Product',
+              image: imgs[0] || '',
+            });
+          }
+        });
+      }
+    } catch (e) {
+      console.warn('[messages] failed to fetch products for inbox items:', e);
+    }
+  }
+
   const chatMap = new Map<string, ChatPreview>();
   const unreadByRef = new Map<string, number>();
 
@@ -75,6 +130,7 @@ async function fetchInbox([_key, userId]: [string, string]): Promise<ChatPreview
         partner: msg.sender_id === userId ? msg.receiver : msg.sender,
         latestMessage: msg,
         unreadCount: 0,
+        product: productByRef.get(msg.transaction_ref),
       });
     }
   }
@@ -117,6 +173,7 @@ export default function MessagesList() {
   const [activeFilter, setActiveFilter] = useState<'all' | 'unread'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [activityMap, setActivityMap] = useState<Record<string, 'typing' | 'recording'>>({});
+  const [viewingImages, setViewingImages] = useState<string[]>([]);
   const activityTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
 
   // Rubber-band pull-to-refresh: ONLY the list body stretches — the sticky
@@ -380,9 +437,9 @@ export default function MessagesList() {
 
   // No pt-safe on the root: the app shell already pads the status bar.
   return (
-    <div className="min-h-screen bg-background text-foreground pb-24">
-      {/* HEADER — solid, same theme as the body. Clean tight status bar spacing. */}
-      <div className="sticky top-0 z-30 bg-background">
+    <div className="min-h-screen bg-gray-50 dark:bg-[#0b1120] text-gray-900 dark:text-white pb-24 -mx-4 md:-mx-8">
+      {/* HEADER — solid, opaque background matching the body color so it blends seamlessly and covers scrolling items */}
+      <div className="sticky top-0 z-40 bg-gray-50 dark:bg-[#0b1120]">
         <div className="max-w-md mx-auto px-4 pt-2 pb-1.5 flex items-center justify-between">
           <h1 className="text-lg font-bold tracking-tight text-gray-900 dark:text-white">
             Vendi Chats
@@ -391,7 +448,7 @@ export default function MessagesList() {
 
         {/* SEARCH */}
         <div className="max-w-md mx-auto px-4 pb-2">
-          <div className="bg-gray-100 dark:bg-white/5 rounded-full flex items-center px-3.5 py-2">
+          <div className="bg-white dark:bg-white/5 border border-gray-200/80 dark:border-white/10 rounded-full flex items-center px-3.5 py-2 shadow-xs">
             <IonIcon icon={searchOutline} className="text-gray-400 text-lg mr-2.5 shrink-0" />
             <input
               type="text"
@@ -462,24 +519,44 @@ export default function MessagesList() {
           </div>
         ) : filteredChats.length > 0 ? (
           filteredChats.map((chat) => (
-            <button
+            <div
               key={chat.transaction_ref}
               onClick={() =>
                 router.push(`/chats?seller=${chat.partner?.id}&ref=${chat.transaction_ref}`)
               }
-              className="w-full flex items-center gap-3 px-4 py-2.5 text-left active:bg-gray-100 dark:active:bg-white/5 transition-colors"
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-left active:bg-gray-100 dark:active:bg-white/5 transition-colors cursor-pointer"
             >
-              <Avatar
-                src={chat.partner?.avatar_url}
-                name={chat.partner?.full_name || 'User'}
-                size="md"
-              />
+              {/* Product Thumbnail — click opens ImageViewer, shows product image instead of user avatar */}
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (chat.product?.image) {
+                    setViewingImages([chat.product.image]);
+                  }
+                }}
+                className="w-12 h-12 rounded-2xl overflow-hidden bg-gray-100 dark:bg-gray-800 flex-shrink-0 cursor-pointer active:scale-95 transition-transform border border-gray-200 dark:border-gray-700/60 shadow-sm relative flex items-center justify-center"
+              >
+                {chat.product?.image ? (
+                  <img
+                    src={chat.product.image}
+                    alt={chat.product.title || "Product"}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center bg-orange-500/10 dark:bg-orange-500/20 text-orange-500">
+                    <IonIcon icon={bagOutline} className="text-xl" />
+                  </div>
+                )}
+              </div>
 
               <div className="flex-1 min-w-0 border-b border-gray-100 dark:border-white/5 pb-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-[15px] font-semibold text-gray-900 dark:text-white truncate">
-                    {chat.partner?.full_name || 'Vendi User'}
-                  </h3>
+                  <div className="flex items-center gap-1.5 min-w-0 truncate">
+                    <h3 className="text-[15px] font-semibold text-gray-900 dark:text-white truncate">
+                      {chat.partner?.full_name || 'Vendi User'}
+                    </h3>
+                    <Badge isVerified={!!chat.partner?.is_verified} size={15} className="shrink-0" />
+                  </div>
                   <span
                     className={`text-[12px] shrink-0 ${
                       chat.unreadCount > 0
@@ -512,7 +589,7 @@ export default function MessagesList() {
                   )}
                 </div>
               </div>
-            </button>
+            </div>
           ))
         ) : (
           <div className="flex flex-col items-center justify-center pt-24 px-6 text-center">
@@ -530,6 +607,14 @@ export default function MessagesList() {
           </div>
         )}
       </div>
+
+      {/* Fullscreen Image Viewer for tapped product pictures */}
+      <ImageViewer
+        images={viewingImages}
+        isOpen={viewingImages.length > 0}
+        onClose={() => setViewingImages([])}
+        initialIndex={0}
+      />
     </div>
   );
 }

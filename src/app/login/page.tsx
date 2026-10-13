@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useEffect, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { Button } from '@/shared/Button';
@@ -16,7 +16,7 @@ import {
   chevronBackOutline
 } from 'ionicons/icons';
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -24,24 +24,27 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
-// Where to go after login. Only same-app paths are allowed (no open redirects).
-const getSafeRedirect = () => {
-  if (typeof window === 'undefined') return '/';
-  const redirect = new URLSearchParams(window.location.search).get('redirect');
-  return redirect && redirect.startsWith('/') && !redirect.startsWith('//')
-    ? redirect
-    : '/';
-};
+  const searchParams = useSearchParams();
 
+  // Where to go after login. Only same-app paths are allowed (no open redirects).
+  const getSafeRedirect = () => {
+    const redirect = searchParams.get('redirect');
+    return redirect && redirect.startsWith('/') && !redirect.startsWith('//')
+      ? redirect
+      : '/';
+  };
 
   // Auto-redirect if already logged in
   useEffect(() => {
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (session) router.replace(getSafeRedirect());
+      if (session) {
+        window.dispatchEvent(new Event('refresh-profile'));
+        router.replace(getSafeRedirect());
+      }
     };
     checkSession();
-  }, [router]);
+  }, [router, searchParams]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,7 +57,9 @@ const getSafeRedirect = () => {
       setError(signInError.message);
       setIsLoading(false);
     } else {
-      window.location.href = getSafeRedirect();
+      window.dispatchEvent(new Event('refresh-profile'));
+      const target = getSafeRedirect();
+      router.replace(target);
     }
   };
 
@@ -121,5 +126,13 @@ const getSafeRedirect = () => {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
   );
 }

@@ -69,14 +69,19 @@ export const AppShell = ({ children }: AppShellProps) => {
     };
   }, []);
 
-  useEffect(() => setIsSidebarOpen(false), [pathname]);
+  useEffect(() => {
+    setIsSidebarOpen(false);
+    if (typeof window !== 'undefined') {
+      window.scrollTo(0, 0);
+    }
+  }, [pathname]);
 
   if (!showShell) return <>{children}</>;
 
-  const isDashboard = pathname === '/';
+  const isDashboard = pathname === '/' || pathname === '' || pathname === '/index';
 
   return (
-    <div className="h-[100dvh] w-full bg-gray-50 dark:bg-[#0a1120] text-gray-900 dark:text-white flex flex-col font-sans antialiased overflow-clip relative pt-safe">
+    <div className="fixed inset-0 w-full h-full bg-gray-50 dark:bg-[#0a1120] text-gray-900 dark:text-white flex flex-col font-sans antialiased overflow-hidden pt-safe">
       
       {isDashboard && (
         <div className="flex-shrink-0 z-40">

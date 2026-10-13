@@ -98,6 +98,7 @@ import { VoiceRecorder } from 'capacitor-voice-recorder';
 import { registerBackHandler } from '@/shared/HardwareBackButton';
 import { playChatSound } from '@/shared/audio/sounds';
 import { compressImagePreflight } from '@/shared/image/compressor';
+import { effectiveTxStatus } from '@/lib/txStatus';
 
 type RecordState = 'idle' | 'holding' | 'locked' | 'paused';
 type SelectedMedia = { url: string; type: 'image' | 'video' };
@@ -106,7 +107,7 @@ type MenuAnchor = { x: number; y: number };
 type PartnerActivity = 'typing' | 'recording' | null;
 
 const MAX_RECORDING_SECONDS = 600;
-const LIVE_BAR_COUNT = 28;
+const LIVE_BAR_COUNT = 18;
 const SWIPE_TRIGGER_PX = 64;
 const SWIPE_MAX_PX = 90;
 const LONG_PRESS_MS = 450;
@@ -114,6 +115,26 @@ const TYPING_BROADCAST_IDLE_MS = 2500;
 const PARTNER_ACTIVITY_WATCHDOG_MS = 6000;
 const CANCEL_DRAG_PX = 100;
 const LOCK_DRAG_PX = 80;
+
+function formatLastSeen(dateString: string) {
+  try {
+    const date = new Date(dateString);
+    const now = new Date();
+    const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const diffDays = Math.round((startOfDay(now).getTime() - startOfDay(date).getTime()) / 86400000);
+    if (diffDays === 0) return `today at ${timeStr}`;
+    if (diffDays === 1) return `yesterday at ${timeStr}`;
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ` at ${timeStr}`;
+  } catch {
+    return 'recently';
+  }
+}
+
+const isMobileDevice = () => {
+  if (typeof window === 'undefined') return false;
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || ('ontouchstart' in window && window.innerWidth < 768);
+};
 
 const safePlay = (audio: HTMLAudioElement) => {
   const p = audio.play();
@@ -173,12 +194,19 @@ export default function DealRoomChat() {
 
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [partnerInfo, setPartnerInfo] = useState<any>(null);
+  const [isPartnerOnline, setIsPartnerOnline] = useState(false);
+  const [partnerLastSeen, setPartnerLastSeen] = useState<string | null>(null);
+  const [txData, setTxData] = useState<any>(null);
+  const activeSwipeElRef = useRef<HTMLDivElement | null>(null);
   // Ref mirror of currentUser for realtime handlers — the init effect must
   // NOT depend on currentUser state, or setCurrentUser() inside it loops forever.
   const currentUserRef = useRef<any>(null);
   // Init failure surfacing: never leave the user staring at a spinner forever.
   const [initError, setInitError] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
+
+  const txStatus = txData ? effectiveTxStatus(txData) : 'pending';
+  const isDealClosed = txStatus !== 'pending';
 
   /* ------------------------------------------------------------------ */
   /*  Messages via SWR. Server truth lives in the SWR cache; in-flight   */
@@ -286,9 +314,7 @@ export default function DealRoomChat() {
   const handleToggleReaction = useCallback((msgId: string, emoji: string) => {
     setReactions((prev) => {
       const existing = prev[msgId] || [];
-      const next = existing.includes(emoji)
-        ? existing.filter((e) => e !== emoji)
-        : [...existing, emoji];
+      const next = existing.includes(emoji) ? [] : [emoji];
       return { ...prev, [msgId]: next };
     });
     hapticImpact(ImpactStyle.Light);
@@ -338,15 +364,19 @@ export default function DealRoomChat() {
     // Stable channel name shared by both participants: typing/recording
     // broadcasts only reach clients subscribed to the SAME channel topic,
     // so a per-client suffix (Date.now()) would silently break presence.
-    const uniqueChannelName = `chat_${txRef}`;
-    const chatChannel = supabase.channel(uniqueChannelName);
-    chatChannelRef.current = chatChannel;
+    let chatChannel: any = null;
 
     const initializeChat = async () => {
       try {
         const { data: { user }, error: userError } = await supabase.auth.getUser();
         if (userError) throw userError;
         if (!user) { router.push('/login'); return; }
+
+        const uniqueChannelName = `chat_${txRef}`;
+        chatChannel = supabase.channel(uniqueChannelName, {
+          config: { presence: { key: user.id } }
+        });
+        chatChannelRef.current = chatChannel;
 
         const { data: userProfile, error: profileError } = await supabase
           .from('users')
@@ -367,6 +397,16 @@ export default function DealRoomChat() {
         currentUserRef.current = me;
         setCurrentUser(me);
         setInitError(null);
+
+        // Fetch transaction status to enforce read-only chat on completed/closed deals
+        if (txRef) {
+          const { data: txRecord } = await supabase
+            .from('transactions')
+            .select('*')
+            .eq('reference', txRef)
+            .maybeSingle();
+          if (!cancelled && txRecord) setTxData(txRecord);
+        }
 
         if (partnerId) {
           const { data: partnerData, error: partnerError } = await supabase
@@ -444,7 +484,7 @@ export default function DealRoomChat() {
             }
           }
         ).on(
-          // Reactions broadcast
+          // Reactions broadcast — enforce 1 reaction at a time
           'broadcast',
           { event: 'message_reaction' },
           (payload: any) => {
@@ -452,9 +492,7 @@ export default function DealRoomChat() {
             if (!messageId || !emoji) return;
             setReactions((prev) => {
               const existing = prev[messageId] || [];
-              const next = existing.includes(emoji)
-                ? existing.filter((e) => e !== emoji)
-                : [...existing, emoji];
+              const next = existing.includes(emoji) ? [] : [emoji];
               return { ...prev, [messageId]: next };
             });
           }
@@ -471,7 +509,42 @@ export default function DealRoomChat() {
               partnerActivityWatchdogRef.current = setTimeout(() => setPartnerActivity(null), PARTNER_ACTIVITY_WATCHDOG_MS);
             }
           }
-        ).subscribe();
+        ).on(
+          // Realtime Presence: track online/offline status
+          'presence',
+          { event: 'sync' },
+          () => {
+            const state = chatChannel.presenceState();
+            const isOnline = partnerId ? Object.keys(state).includes(partnerId) : false;
+            setIsPartnerOnline(isOnline);
+            if (isOnline) setPartnerLastSeen(null);
+          }
+        ).on(
+          'presence',
+          { event: 'join' },
+          ({ key }: any) => {
+            if (key === partnerId) {
+              setIsPartnerOnline(true);
+              setPartnerLastSeen(null);
+            }
+          }
+        ).on(
+          'presence',
+          { event: 'leave' },
+          ({ key }: any) => {
+            if (key === partnerId) {
+              setIsPartnerOnline(false);
+              setPartnerLastSeen(new Date().toISOString());
+            }
+          }
+        ).subscribe(async (status: string) => {
+          if (status === 'SUBSCRIBED' && me?.id) {
+            await chatChannel.track({
+              user_id: me.id,
+              online_at: new Date().toISOString()
+            });
+          }
+        });
       } catch (err: any) {
         console.error('[Chat] Initialization failed:', err);
         if (!cancelled) setInitError(err?.message || 'Could not load this chat. Please try again.');
@@ -692,8 +765,7 @@ export default function DealRoomChat() {
     gestureStartRef.current = { x: e.clientX, y: e.clientY };
     longPressFiredRef.current = false;
     swipeTriggeredRef.current = false;
-    setSwipeMsgId(msg.id);
-    setSwipeX(0);
+    activeSwipeElRef.current = e.currentTarget;
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
     clearLongPress();
     longPressTimerRef.current = setTimeout(() => {
@@ -711,7 +783,10 @@ export default function DealRoomChat() {
     if (dx > 0 && Math.abs(dx) > Math.abs(dy)) {
       e.stopPropagation();
       const clamped = Math.min(dx, SWIPE_MAX_PX);
-      setSwipeX(clamped);
+      if (activeSwipeElRef.current) {
+        activeSwipeElRef.current.style.transform = `translateX(${clamped}px)`;
+        activeSwipeElRef.current.style.transition = 'none';
+      }
       const isPastTrigger = clamped >= SWIPE_TRIGGER_PX;
       if (!swipeTriggeredRef.current && isPastTrigger) {
         hapticImpact(ImpactStyle.Light);
@@ -723,9 +798,12 @@ export default function DealRoomChat() {
   const handleBubblePointerUp = (msg: any) => (e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation();
     clearLongPress();
-    // hasPointerCapture() itself throws NotFoundError for a dead pointer id,
-    // so just attempt the release directly inside try/catch.
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+    if (activeSwipeElRef.current) {
+      activeSwipeElRef.current.style.transition = 'transform 200ms cubic-bezier(0.2, 0, 0, 1)';
+      activeSwipeElRef.current.style.transform = 'translateX(0px)';
+      activeSwipeElRef.current = null;
+    }
     if (swipeTriggeredRef.current && !longPressFiredRef.current) {
       handleReplyMessage(msg);
     } else if (!swipeTriggeredRef.current && !longPressFiredRef.current) {
@@ -738,8 +816,6 @@ export default function DealRoomChat() {
         lastTapRef.current = { id: msg.id, time: now };
       }
     }
-    setSwipeMsgId(null);
-    setSwipeX(0);
     gestureStartRef.current = null;
     swipeTriggeredRef.current = false;
   };
@@ -776,8 +852,6 @@ export default function DealRoomChat() {
   });
 
   const bubbleSwipeStyle = (msg: any): React.CSSProperties => ({
-    transform: `translateX(${swipeMsgId === msg.id ? swipeX : 0}px)`,
-    transition: swipeMsgId === msg.id ? 'none' : 'transform 150ms ease-out',
     touchAction: 'pan-y'
   });
 
@@ -859,7 +933,7 @@ export default function DealRoomChat() {
   };
 
   const handleSendText = async () => {
-    if (!messageText.trim() || !currentUser || !txRef) return;
+    if (isDealClosed || !messageText.trim() || !currentUser || !txRef) return;
     const textToSend = messageText.trim();
 
     // Sending clears any in-flight typing presence immediately.
@@ -918,11 +992,13 @@ export default function DealRoomChat() {
   const uploadToCloudinaryWithProgress = (
     formData: FormData,
     cloudName: string | undefined,
-    onProgress: (pct: number) => void
+    onProgress: (pct: number) => void,
+    resourceType: 'auto' | 'video' | 'image' = 'auto'
   ): Promise<any> => {
     return new Promise((resolve, reject) => {
+      const finalCloud = cloudName || process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || 'gjgbyrjf';
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`);
+      xhr.open('POST', `https://api.cloudinary.com/v1_1/${finalCloud}/${resourceType}/upload`);
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
       };
@@ -956,6 +1032,10 @@ export default function DealRoomChat() {
     localPreviewUrl?: string,
     caption?: string
   ) => {
+    if (isDealClosed) {
+      showError('Transaction Closed', 'Messages can only be sent when the deal is pending.');
+      return;
+    }
     const tempId = `temp_${msgType}_${Date.now()}`;
     const replyMeta = buildReplyMeta();
     const finalContent = caption ? caption : (msgType === 'video' ? "Video message" : "Photo");
@@ -1147,6 +1227,7 @@ export default function DealRoomChat() {
 
   const handleCameraClick = (e?: React.MouseEvent) => {
     e?.stopPropagation();
+    if (isDealClosed) return;
     if (isDesktopBrowser()) {
       openImageFilePicker((url) => handleGallerySelect(url));
       return;
@@ -1157,6 +1238,7 @@ export default function DealRoomChat() {
   // --- Attach → in-app gallery grid, pictures only (GalleryPicker overlay) ---
   const handleAttachmentClick = (e?: React.MouseEvent) => {
     e?.stopPropagation();
+    if (isDealClosed) return;
     openGallery();
   };
 
@@ -1290,7 +1372,7 @@ export default function DealRoomChat() {
 
   const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     e.stopPropagation();
-    if (messageText.trim()) return;
+    if (isDealClosed || messageText.trim()) return;
     if (!currentUser) {
       showError('Hold On', 'Still loading your session — try again in a moment.');
       return;
@@ -1377,7 +1459,7 @@ export default function DealRoomChat() {
 
   // --- VOICE NOTE SEND (optimistic: bubble shows instantly, upload runs in background) ---
   const stopAndSendAction = async () => {
-    if (!currentUser || !txRef) return;
+    if (isDealClosed || !currentUser || !txRef) return;
     if (recordingReadyRef.current) {
       const started = await recordingReadyRef.current.catch(() => false);
       if (!started) return;
@@ -1443,13 +1525,29 @@ export default function DealRoomChat() {
     try {
       const formData = new FormData();
       const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || 'Campus Vendi';
-      formData.append('file', dataUri);
+      const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || 'gjgbyrjf';
+
+      // Convert base64 dataUri to Blob for robust Android APK uploads
+      try {
+        const [header, base64] = dataUri.split(',');
+        const mime = header.match(/:(.*?);/)?.[1] || 'audio/aac';
+        const byteCharacters = atob(base64);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: mime });
+        formData.append('file', blob, 'voicenote.m4a');
+      } catch {
+        formData.append('file', dataUri);
+      }
+
       formData.append('upload_preset', uploadPreset);
       formData.append('resource_type', 'video');
-      const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
       const uploadData = await uploadToCloudinaryWithProgress(formData, cloudName, (pct) => {
         setUploadProgress((prev) => ({ ...prev, [tempId]: pct }));
-      });
+      }, 'video');
       await finalizeVoiceNote(uploadData.secure_url, tempId, duration, replyMeta);
     } catch (error: any) {
       failVoiceNote(tempId, error);
@@ -1463,13 +1561,13 @@ export default function DealRoomChat() {
       const ext = mimeType.includes('mp4') ? 'm4a' : mimeType.includes('ogg') ? 'ogg' : 'webm';
       const formData = new FormData();
       const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || 'Campus Vendi';
+      const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || 'gjgbyrjf';
       formData.append('file', blob, `voicenote.${ext}`);
       formData.append('upload_preset', uploadPreset);
       formData.append('resource_type', 'video');
-      const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
       const uploadData = await uploadToCloudinaryWithProgress(formData, cloudName, (pct) => {
         setUploadProgress((prev) => ({ ...prev, [tempId]: pct }));
-      });
+      }, 'video');
       await finalizeVoiceNote(uploadData.secure_url, tempId, duration, replyMeta);
     } catch (error: any) {
       failVoiceNote(tempId, error);
@@ -1661,7 +1759,8 @@ export default function DealRoomChat() {
 
   const renderWaveform = (opts: { live?: boolean; levels?: number[]; progress?: number; msgId?: string; url?: string }) => {
     const { live, levels, progress, msgId, url } = opts;
-    const bars = levels ?? Array.from({ length: 25 }, () => 50);
+    const rawBars = levels ?? Array.from({ length: 25 }, () => 50);
+    const bars = live ? rawBars.slice(-18) : rawBars;
     const isSeekable = !live && !!msgId && !!url;
     return (
       <div
@@ -1669,14 +1768,14 @@ export default function DealRoomChat() {
         onPointerMove={isSeekable ? handleWaveformPointerMove(msgId!, url!) : undefined}
         onPointerUp={isSeekable ? handleWaveformPointerUp() : undefined}
         onPointerCancel={isSeekable ? handleWaveformPointerUp() : undefined}
-        className={`flex-1 flex gap-[3px] items-center h-8 overflow-hidden mx-2 opacity-80 touch-none ${isSeekable ? 'cursor-pointer' : ''}`}
+        className={`flex-1 min-w-0 flex gap-[3px] items-center h-8 overflow-hidden mx-1.5 opacity-80 touch-none ${isSeekable ? 'cursor-pointer' : ''}`}
       >
         {bars.map((h, i) => {
           const played = progress !== undefined && i / bars.length <= progress;
           return (
             <div
               key={i}
-              className={`w-[2px] !rounded-full transition-all ${live ? '!bg-red-400 animate-pulse' : (played ? '!bg-orange-500' : '!bg-gray-400 dark:!bg-gray-500')}`}
+              className={`w-[2px] !rounded-full transition-all flex-shrink-0 ${live ? '!bg-red-400 animate-pulse' : (played ? '!bg-orange-500' : '!bg-gray-400 dark:!bg-gray-500')}`}
               style={{ height: `${Math.max(15, h)}%` }}
             />
           );
@@ -1965,7 +2064,7 @@ export default function DealRoomChat() {
       return null;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, currentUser, partnerInfo, playback, audioDurations, uploadProgress, swipeMsgId, swipeX, searchQuery, searchMatches, searchIndex, highlightedMsgId, loadedMedia, reactions]);
+  }, [messages, currentUser, partnerInfo, playback, audioDurations, uploadProgress, searchQuery, searchMatches, searchIndex, highlightedMsgId, loadedMedia, reactions]);
 
   // Cancel-drag opacity fade: full opacity at rest, fading toward ~30% as
   // the mic button is dragged toward the cancel threshold.
@@ -2101,8 +2200,16 @@ export default function DealRoomChat() {
                   <p className="text-[11px] font-black !text-orange-500 tracking-wide flex items-center gap-1">
                     <IonIcon icon={micOutline} className="text-xs animate-pulse" /> recording voice note...
                   </p>
+                ) : isPartnerOnline ? (
+                  <p className="text-[11px] font-bold text-emerald-500 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Online
+                  </p>
+                ) : partnerLastSeen ? (
+                  <p className="text-[11px] font-medium text-gray-400">
+                    Last seen {formatLastSeen(partnerLastSeen)}
+                  </p>
                 ) : (
-                  <p className="text-[11px] font-bold text-gray-500">Secure Deal Room</p>
+                  <p className="text-[11px] font-medium text-gray-400">Offline</p>
                 )}
               </div>
             </div>
@@ -2285,111 +2392,129 @@ export default function DealRoomChat() {
             </button>
           </div>
         )}
-        <div className="max-w-2xl mx-auto flex items-end gap-2 relative">
-          {(recordState === 'locked' || recordState === 'paused') ? (
-            <>
-              <div className="flex-1 bg-white dark:bg-[#1f2937] !rounded-[24px] min-h-[48px] flex items-center justify-between px-2 shadow-md border border-gray-200 dark:border-gray-700 transition-all">
+        {isDealClosed ? (
+          <div className="max-w-2xl mx-auto w-full min-w-0 bg-gray-100 dark:bg-gray-800/90 border border-gray-200 dark:border-gray-700/80 !rounded-2xl p-3.5 text-center shadow-sm">
+            <div className="flex items-center justify-center gap-2 text-gray-500 dark:text-gray-400">
+              <IonIcon icon={lockClosedOutline} className="text-base flex-shrink-0" />
+              <p className="text-xs sm:text-sm font-semibold">
+                This transaction is {txStatus}. Messages can no longer be sent.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="max-w-2xl mx-auto w-full min-w-0 flex items-end gap-2 relative">
+            {(recordState === 'locked' || recordState === 'paused') ? (
+              <>
+                <div className="flex-1 min-w-0 overflow-hidden bg-white dark:bg-[#1f2937] !rounded-[24px] min-h-[48px] flex items-center justify-between px-2 shadow-md border border-gray-200 dark:border-gray-700 transition-all">
+                  <button
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); cancelRecordingAction(); }}
+                    className="!w-9 !h-9 !min-w-[36px] !min-h-[36px] !aspect-square !rounded-full flex items-center justify-center text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex-shrink-0 z-10"
+                  >
+                    <IonIcon icon={trashOutline} className="text-xl pointer-events-none" />
+                  </button>
+                  <div className="flex-1 min-w-0 flex items-center justify-center gap-1.5 overflow-hidden px-1">
+                    <span className="text-red-500 animate-pulse text-xs font-black flex-shrink-0">●</span>
+                    <span className="text-gray-900 dark:text-white font-mono text-sm tracking-wider font-medium flex-shrink-0 min-w-[36px]">
+                      {formatDuration(recordingDuration)}
+                    </span>
+                    {renderWaveform({ live: recordState === 'locked', levels: liveLevels })}
+                  </div>
+                  <button onClick={togglePauseAction} className="!w-9 !h-9 !min-w-[36px] !min-h-[36px] !aspect-square !rounded-full bg-gray-100 dark:bg-gray-700 flex items-center justify-center text-gray-900 dark:text-white active:scale-95 transition-transform flex-shrink-0 z-10">
+                    <IonIcon icon={recordState === 'locked' ? pauseOutline : playOutline} className="text-sm" />
+                  </button>
+                </div>
                 <button
-                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); cancelRecordingAction(); }}
-                  className="!w-10 !h-10 !rounded-full flex items-center justify-center text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors z-10"
+                  onClick={stopAndSendAction}
+                  className="!w-12 !h-12 !min-w-[48px] !min-h-[48px] !p-0 !rounded-full flex-shrink-0 !aspect-square !bg-orange-500 text-white !flex items-center justify-center shadow-lg active:scale-90 transition-transform"
                 >
-                  <IonIcon icon={trashOutline} className="text-xl pointer-events-none" />
+                  <IonIcon icon={sendOutline} className="text-xl ml-1" />
                 </button>
-                <div className="flex-1 flex items-center justify-center gap-2 overflow-hidden px-2">
-                  <span className="text-red-500 animate-pulse text-xs font-black">●</span>
-                  <span className="text-gray-900 dark:text-white font-mono text-sm tracking-wider font-medium min-w-[40px]">
-                    {formatDuration(recordingDuration)}
-                  </span>
-                  {renderWaveform({ live: recordState === 'locked', levels: liveLevels })}
-                </div>
-                <button onClick={togglePauseAction} className="!w-8 !h-8 !rounded-full bg-gray-100 dark:bg-gray-700 flex items-center justify-center text-gray-900 dark:text-white active:scale-95 transition-transform z-10">
-                  <IonIcon icon={recordState === 'locked' ? pauseOutline : playOutline} className="text-sm" />
-                </button>
-              </div>
-              <button
-                onClick={stopAndSendAction}
-                className="!w-12 !h-12 !min-w-[48px] !min-h-[48px] !p-0 !rounded-full flex-shrink-0 !aspect-square !bg-orange-500 text-white !flex items-center justify-center shadow-lg active:scale-90 transition-transform"
-              >
-                <IonIcon icon={sendOutline} className="text-xl ml-1" />
-              </button>
-            </>
-          ) : (
-            <>
-              {recordState === 'holding' && (
-                <div className="absolute left-0 right-[56px] top-0 bottom-0 z-10 flex items-center justify-between pl-4 pr-6 bg-white dark:bg-[#1f2937] !rounded-[24px] shadow-sm pointer-events-none">
-                  <div className="flex items-center gap-2">
-                    <IonIcon icon={micOutline} className="text-red-500 text-xl animate-pulse" />
-                    <span className="text-gray-900 dark:text-white font-mono text-base">{formatDuration(recordingDuration)}</span>
-                  </div>
-                  <div className="flex items-center gap-1 text-gray-400" style={{ opacity: micDragOpacity }}>
-                    <IonIcon icon={chevronBackOutline} className="text-lg animate-[bounce_1s_infinite]" style={{ animationDirection: 'reverse' }} />
-                    <span className="text-xs font-bold uppercase tracking-widest">Slide to cancel</span>
-                  </div>
-                </div>
-              )}
-              <div className="flex-1 bg-white dark:bg-[#1f2937] !rounded-[24px] min-h-[48px] flex items-end px-1 shadow-md border border-gray-200 dark:border-gray-700 py-1 z-0">
-                <div className="flex items-center self-end mb-[3px]">
-                  <button onClick={handleAttachmentClick} className="!p-2 text-gray-500 dark:text-gray-400 active:scale-95 transition-transform !rounded-full">
-                    <IonIcon icon={attachOutline} className="text-[22px] pointer-events-none" />
-                  </button>
-                </div>
-                <textarea
-                  ref={textareaRef}
-                  value={messageText}
-                  onChange={handleInput}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendText(); } }}
-                  placeholder={editingMessageId ? 'Edit message' : 'Message'}
-                  className="flex-1 max-h-32 min-h-[40px] bg-transparent outline-none border-none resize-none px-2 py-2.5 text-[15px] text-gray-900 dark:text-white placeholder-gray-400 scrollbar-hide leading-tight"
-                  rows={1}
-                />
-                <div className="flex items-center self-end mb-[3px] pr-1">
-                  <button onClick={handleCameraClick} className="!p-2 text-gray-500 dark:text-gray-400 active:scale-95 transition-transform !rounded-full">
-                    <IonIcon icon={cameraOutline} className="text-[22px] pointer-events-none" />
-                  </button>
-                </div>
-              </div>
-              <div className="relative z-20 flex items-end">
+              </>
+            ) : (
+              <>
                 {recordState === 'holding' && (
-                  <div
-                    className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-none transition-transform duration-75"
-                    style={{ bottom: `${64 + Math.min(80, Math.max(0, -dragOffset.y))}px` }}
-                  >
-                     <div className={`!rounded-full p-3 shadow-xl mb-1 border transition-colors ${
-                       dragOffset.y < -60
-                         ? 'bg-orange-500 border-orange-500 text-white'
-                         : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 text-gray-500'
-                     }`}>
-                       <IonIcon icon={lockClosedOutline} className="text-xl" />
-                     </div>
-                     <IonIcon icon={chevronBackOutline} className="text-gray-400 text-xl rotate-90 animate-bounce" />
+                  <div className="absolute left-0 right-[56px] top-0 bottom-0 z-10 flex items-center justify-between pl-4 pr-6 bg-white dark:bg-[#1f2937] !rounded-[24px] shadow-sm pointer-events-none">
+                    <div className="flex items-center gap-2">
+                      <IonIcon icon={micOutline} className="text-red-500 text-xl animate-pulse" />
+                      <span className="text-gray-900 dark:text-white font-mono text-base">{formatDuration(recordingDuration)}</span>
+                    </div>
+                    <div className="flex items-center gap-1 text-gray-400" style={{ opacity: micDragOpacity }}>
+                      <IonIcon icon={chevronBackOutline} className="text-lg animate-[bounce_1s_infinite]" style={{ animationDirection: 'reverse' }} />
+                      <span className="text-xs font-bold uppercase tracking-widest">Slide to cancel</span>
+                    </div>
                   </div>
                 )}
-                {messageText.trim() ? (
-                  <button
-                    onClick={handleSendText}
-                    className="!w-12 !h-12 !min-w-[48px] !min-h-[48px] !p-0 !rounded-full flex-shrink-0 !aspect-square !bg-orange-500 text-white !flex items-center justify-center shadow-lg active:scale-90 transition-transform"
-                  >
-                    <IonIcon icon={sendOutline} className="text-xl ml-1" />
-                  </button>
-                ) : (
-                  <button
-                    onPointerDown={handlePointerDown}
-                    onPointerMove={handlePointerMove}
-                    onPointerUp={handlePointerUp}
-                    onPointerCancel={handlePointerUp}
-                    style={{
-                      transform: `translate(${dragOffset.x}px, ${dragOffset.y}px) ${recordState === 'holding' ? 'scale(1.3)' : 'scale(1)'}`,
-                      opacity: micDragOpacity
+                <div className="flex-1 min-w-0 overflow-hidden bg-white dark:bg-[#1f2937] !rounded-[24px] min-h-[48px] flex items-end px-1 shadow-md border border-gray-200 dark:border-gray-700 py-1 z-0">
+                  <div className="flex items-center self-end mb-[3px] flex-shrink-0">
+                    <button onClick={handleAttachmentClick} className="!p-2 text-gray-500 dark:text-gray-400 active:scale-95 transition-transform !rounded-full">
+                      <IonIcon icon={attachOutline} className="text-[22px] pointer-events-none" />
+                    </button>
+                  </div>
+                  <textarea
+                    ref={textareaRef}
+                    value={messageText}
+                    onChange={handleInput}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        if (!isMobileDevice()) {
+                          e.preventDefault();
+                          handleSendText();
+                        }
+                      }
                     }}
-                    className={`!w-12 !h-12 !min-w-[48px] !min-h-[48px] !rounded-full flex-shrink-0 !aspect-square !flex items-center justify-center shadow-lg transition-transform touch-none select-none ${!currentUser ? 'opacity-50' : ''} ${recordState === 'holding' ? '!bg-orange-500 text-white' : '!bg-orange-500 text-white hover:!bg-orange-600'}`}
-                  >
-                    <IonIcon icon={micOutline} className="text-[22px]" />
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-        </div>
+                    placeholder={editingMessageId ? 'Edit message' : 'Message'}
+                    className="flex-1 min-w-0 max-h-32 min-h-[40px] bg-transparent outline-none border-none resize-none px-2 py-2.5 text-[15px] text-gray-900 dark:text-white placeholder-gray-400 scrollbar-hide leading-tight"
+                    rows={1}
+                  />
+                  <div className="flex items-center self-end mb-[3px] pr-1 flex-shrink-0">
+                    <button onClick={handleCameraClick} className="!p-2 text-gray-500 dark:text-gray-400 active:scale-95 transition-transform !rounded-full">
+                      <IonIcon icon={cameraOutline} className="text-[22px] pointer-events-none" />
+                    </button>
+                  </div>
+                </div>
+                <div className="relative z-20 flex items-end flex-shrink-0">
+                  {recordState === 'holding' && (
+                    <div
+                      className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-none transition-transform duration-75"
+                      style={{ bottom: `${64 + Math.min(80, Math.max(0, -dragOffset.y))}px` }}
+                    >
+                       <div className={`!rounded-full p-3 shadow-xl mb-1 border transition-colors ${
+                         dragOffset.y < -60
+                           ? 'bg-orange-500 border-orange-500 text-white'
+                           : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 text-gray-500'
+                       }`}>
+                         <IonIcon icon={lockClosedOutline} className="text-xl" />
+                       </div>
+                       <IonIcon icon={chevronBackOutline} className="text-gray-400 text-xl rotate-90 animate-bounce" />
+                    </div>
+                  )}
+                  {messageText.trim() ? (
+                    <button
+                      onClick={handleSendText}
+                      className="!w-12 !h-12 !min-w-[48px] !min-h-[48px] !p-0 !rounded-full flex-shrink-0 !aspect-square !bg-orange-500 text-white !flex items-center justify-center shadow-lg active:scale-90 transition-transform"
+                    >
+                      <IonIcon icon={sendOutline} className="text-xl ml-1" />
+                    </button>
+                  ) : (
+                    <button
+                      onPointerDown={handlePointerDown}
+                      onPointerMove={handlePointerMove}
+                      onPointerUp={handlePointerUp}
+                      onPointerCancel={handlePointerUp}
+                      style={{
+                        transform: `translate(${dragOffset.x}px, ${dragOffset.y}px) ${recordState === 'holding' ? 'scale(1.3)' : 'scale(1)'}`,
+                        opacity: micDragOpacity
+                      }}
+                      className={`!w-12 !h-12 !min-w-[48px] !min-h-[48px] !rounded-full flex-shrink-0 !aspect-square !flex items-center justify-center shadow-lg transition-transform touch-none select-none ${!currentUser ? 'opacity-50' : ''} ${recordState === 'holding' ? '!bg-orange-500 text-white' : '!bg-orange-500 text-white hover:!bg-orange-600'}`}
+                    >
+                      <IonIcon icon={micOutline} className="text-[22px]" />
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Initial loading overlay — same PullSpinner as the inbox */}
