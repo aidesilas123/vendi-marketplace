@@ -1,11 +1,22 @@
 package com.campus.marketplace;
 
+import android.os.Bundle;
 import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
 import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 public class MainActivity extends BridgeActivity {
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        // Edge-to-edge from the very first frame: the window extends under the
+        // system bars immediately, so there is never an opaque-bar "shadow" that
+        // vanishes a second later and resizes the page (the launch jerk).
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        super.onCreate(savedInstanceState);
+    }
+
     @Override
     public void onStart() {
         super.onStart();

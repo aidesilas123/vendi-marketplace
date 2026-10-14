@@ -125,11 +125,35 @@ export function PhotoPreview({ src, onClose, onSave, partnerName }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-[1002] bg-black flex flex-col">
-      {/* top bar: close | crop toggle */}
+    <div className="fixed inset-0 z-[1002] bg-black">
+      {/* image / cropper — FULL SCREEN so the crop grid has maximum room;
+          the top and bottom bars overlay it (WhatsApp style) */}
+      <div className="absolute inset-0 overflow-hidden bg-black">
+        {preparing ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+            <PullSpinner spinning size={32} />
+            <p className="text-sm font-medium text-white/70">Preparing photo…</p>
+          </div>
+        ) : cropping ? (
+          <Cropper
+            image={imgSrc}
+            crop={crop}
+            zoom={zoom}
+            aspect={4 / 3}
+            onCropChange={setCrop}
+            onCropComplete={onCropComplete}
+            onZoomChange={setZoom}
+            objectFit="contain"
+          />
+        ) : (
+          <img src={imgSrc} alt="Preview" className="w-full h-full object-contain" />
+        )}
+      </div>
+
+      {/* top bar: close | crop toggle — overlaid */}
       <div
-        className="flex items-center justify-between px-4 pb-2 z-10"
-        style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
+        className="absolute top-0 inset-x-0 flex items-center justify-between px-4 pb-2 z-10"
+        style={{ paddingTop: 'max(0.75rem, var(--sat))' }}
       >
         <button
           onClick={onClose}
@@ -153,33 +177,10 @@ export function PhotoPreview({ src, onClose, onSave, partnerName }: Props) {
         </button>
       </div>
 
-      {/* image / cropper */}
-      <div className="flex-1 relative overflow-hidden bg-black">
-        {preparing ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
-            <PullSpinner spinning size={32} />
-            <p className="text-sm font-medium text-white/70">Preparing photo…</p>
-          </div>
-        ) : cropping ? (
-          <Cropper
-            image={imgSrc}
-            crop={crop}
-            zoom={zoom}
-            aspect={4 / 3}
-            onCropChange={setCrop}
-            onCropComplete={onCropComplete}
-            onZoomChange={setZoom}
-            objectFit="contain"
-          />
-        ) : (
-          <img src={imgSrc} alt="Preview" className="w-full h-full object-contain" />
-        )}
-      </div>
-
-      {/* bottom: expandable caption input + orange send button */}
+      {/* bottom: expandable caption input + orange send button — overlaid */}
       <div
-        className="px-3 pt-2 bg-black/80 backdrop-blur-md z-10 flex flex-col gap-1.5"
-        style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
+        className="absolute bottom-0 inset-x-0 px-3 pt-2 bg-black/80 backdrop-blur-md z-10 flex flex-col gap-1.5"
+        style={{ paddingBottom: 'max(1rem, var(--sab))' }}
       >
         {partnerName && (
           <div className="px-2">

@@ -34,6 +34,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <link rel="preload" href="/fonts/PlusJakartaSans-Regular.ttf" as="font" type="font/ttf" crossOrigin="anonymous" />
         <link rel="preload" href="/fonts/PlusJakartaSans-SemiBold.ttf" as="font" type="font/ttf" crossOrigin="anonymous" />
+        {/* Cold-start splash logo: preload so it paints with the first frame, not after. */}
+        <link rel="preload" href="/logo.png" as="image" />
       </head>
       {/* antialiased makes the font incredibly smooth on all devices */}
       <body className="font-sans antialiased">

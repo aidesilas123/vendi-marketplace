@@ -79,11 +79,11 @@ export function SplashOverlay() {
         src="/logo.png"
         alt=""
         draggable={false}
-        className="w-28 h-28 object-contain"
+        className="w-28 h-28 object-contain animate-[splash-logo-in_0.45s_ease-out]"
       />
       <div className="mt-5 text-white text-2xl font-bold tracking-tight">Vendi</div>
       <div className="mt-1 text-white/40 text-[11px] tracking-[0.35em] uppercase">
-        Your Campus Marketplace
+        Your Trusted Campus Marketplace
       </div>
       <div className="mt-8 h-1 w-24 overflow-hidden rounded-full bg-white/10">
         <div className="h-full w-1/2 rounded-full bg-orange-500 animate-[splash-slide_1.1s_ease-in-out_infinite]" />

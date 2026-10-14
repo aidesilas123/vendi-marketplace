@@ -977,7 +977,6 @@ export default function DealRoomChat() {
       return;
     }
 
-    playChatSound('sent');
     requestAnimationFrame(() => scrollToBottom(true));
 
     const tempId = `temp_${Date.now()}`;
@@ -1001,6 +1000,9 @@ export default function DealRoomChat() {
     if (error || !savedMsg) {
       setOptimisticMsgs((prev) => prev.map((msg) => msg.id === tempId ? { ...msg, status: 'failed' } : msg));
     } else {
+      // Saved on the server — the clock flips to the sent mark HERE, so the
+      // sound plays exactly on send, never on a failed attempt.
+      playChatSound('sent');
       setOptimisticMsgs((prev) => prev.filter((msg) => msg.id !== tempId));
       updateMessages((prev) => (prev.find((m) => m.id === savedMsg.id) ? prev : [...prev, savedMsg]));
       chatChannelRef.current?.send({
@@ -1073,7 +1075,6 @@ export default function DealRoomChat() {
     }]);
     setReplyTarget(null);
     setUploadProgress((prev) => ({ ...prev, [tempId]: 0 }));
-    playChatSound('sent');
     requestAnimationFrame(() => scrollToBottom(true));
 
     try {
@@ -1102,6 +1103,8 @@ export default function DealRoomChat() {
         ...replyMeta
       }).select().single();
       if (!error && savedMsg) {
+        // Saved on the server — sound plays exactly on send, never on failure.
+        playChatSound('sent');
         setOptimisticMsgs((prev) => prev.filter((msg) => msg.id !== tempId));
         updateMessages((prev) => (prev.find((m) => m.id === savedMsg.id) ? prev : [...prev, savedMsg]));
         chatChannelRef.current?.send({
@@ -1504,7 +1507,6 @@ export default function DealRoomChat() {
     broadcastActivity(null);
     const tempId = `temp_audio_${Date.now()}`;
     const replyMeta = buildReplyMeta();
-    playChatSound('sent');
     requestAnimationFrame(() => scrollToBottom(true));
 
     try {
@@ -1616,6 +1618,8 @@ export default function DealRoomChat() {
       ...replyMeta
     }).select().single();
     if (!error && savedMsg) {
+      // Saved on the server — sound plays exactly on send, never on failure.
+      playChatSound('sent');
       setAudioDurations((prev) => ({ ...prev, [savedMsg.id]: duration }));
       setOptimisticMsgs((prev) => prev.filter((msg) => msg.id !== tempId));
       updateMessages((prev) => (prev.find((m) => m.id === savedMsg.id) ? prev : [...prev, savedMsg]));

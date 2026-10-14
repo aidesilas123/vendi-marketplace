@@ -43,30 +43,18 @@ export function playChatSound(type: 'sent' | 'received') {
     osc.connect(gain);
     gain.connect(ctx.destination);
 
-    if (type === 'sent') {
-      // Crisp, audible pop tone that cuts through phone bottom speakers:
-      // Uses triangle wave for harmonic warmth, frequency sweeps 680Hz -> 920Hz
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(680, now);
-      osc.frequency.exponentialRampToValueAtTime(940, now + 0.08);
+    // WhatsApp-style pop for BOTH sent and received — one recognizable sound.
+    // Crisp, audible pop tone that cuts through phone bottom speakers:
+    // Uses triangle wave for harmonic warmth, frequency sweeps 680Hz -> 940Hz
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(680, now);
+    osc.frequency.exponentialRampToValueAtTime(940, now + 0.08);
 
-      gain.gain.setValueAtTime(0.45, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+    gain.gain.setValueAtTime(0.45, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
 
-      osc.start(now);
-      osc.stop(now + 0.08);
-    } else {
-      // Pleasant double-chime note: 880Hz (A5) -> 1320Hz (E6)
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(880, now);
-      osc.frequency.setValueAtTime(1320, now + 0.07);
-
-      gain.gain.setValueAtTime(0.5, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
-
-      osc.start(now);
-      osc.stop(now + 0.18);
-    }
+    osc.start(now);
+    osc.stop(now + 0.08);
   } catch {
     // Autoplay restrictions or unavailable audio device — fail silently
   }

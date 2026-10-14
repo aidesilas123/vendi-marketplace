@@ -13,17 +13,36 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <!-- Edge-to-edge from the first frame: transparent system bars so there is
+             never an opaque "shadow" that vanishes a second later (which resizes
+             the page and makes launch jerk). Icon colors are set at runtime by
+             StatusBarManager to match light/dark mode. -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- Window background matches the splash: any gap between splash exit and
+             WebView paint is invisible (same #0B1120, never white/black flash). -->
+        <item name="android:windowBackground">@color/splash_background</item>
     </style>
 
 
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <!-- Proper AndroidX splash: solid brand background + centered app icon.
-             (The old android:background=@drawable/splash stretched a PNG over the
-             whole window, which distorted on tall phones.) Not setting
-             windowSplashScreenAnimatedIcon lets the system use the adaptive
-             launcher icon, which is already mask-safe. -->
+        <!-- Native splash: solid brand background + properly centered logo icon.
+             This is drawn by the SYSTEM in milliseconds — it's the only thing
+             that can appear with zero delay, which is why native apps (Claude
+             etc.) feel instant. Skipping the icon left a plain dark screen for
+             the ~1s WebView startup; showing it here removes that entirely.
+             The icon drawable has #0B1120 baked in (== splash_background), so
+             even if the system masks it, the edge is invisible. The in-app
+             SplashOverlay (same bg, same-size logo) then continues seamlessly. -->
         <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
         <item name="windowSplashScreenAnimationDuration">0</item>
         <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
+        <!-- Transparent from launch too: the splash itself never shows the
+             opaque system-bar shadow, so launch is edge-to-edge throughout. -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>
