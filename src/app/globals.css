@@ -42,6 +42,7 @@
 
 @theme {
   --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --color-background: #f9fafb;
 }
 .dark {
   --color-background: #0b1120;

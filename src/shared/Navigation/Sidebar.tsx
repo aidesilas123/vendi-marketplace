@@ -26,6 +26,7 @@ import { Avatar } from '@/shared/Avatar';
 import { Modal } from '@/shared/Modal/Modal';
 import { Button } from '@/shared/Button';
 import { showGlobalToast } from '@/shared/Toast/Toast';
+import { registerBackHandler } from '@/shared/HardwareBackButton';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -61,6 +62,20 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isOpen, onClose]);
+
+  // System back button: close the sign-out modal first, then the sidebar —
+  // never let it exit the app or navigate while the drawer is open.
+  useEffect(() => {
+    if (!isOpen && !showSignOutModal) return;
+    return registerBackHandler(() => {
+      if (showSignOutModal) {
+        setShowSignOutModal(false);
+      } else {
+        onClose();
+      }
+      return true;
+    });
+  }, [isOpen, showSignOutModal, onClose]);
 
   // 1. Fetch auth user to get the ID if not passed in props
   const { data: sessionUser } = useSWR('local-session', async () => {
@@ -217,7 +232,7 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
           {/* Sidebar Header & User Info (Clickable!) */}
           <div 
             onClick={() => handleNavigation(targetId ? `/profile?id=${targetId}` : '/profile')}
-            className="px-8 pt-[max(env(safe-area-inset-top),3rem)] pb-8 flex flex-col gap-5 cursor-pointer active:opacity-70 transition-opacity"
+            className="px-8 pt-[max(env(safe-area-inset-top),3rem)] pb-5 flex flex-col gap-3 cursor-pointer active:opacity-70 transition-opacity"
           >
             {isFetchingProfile && !realName ? (
               // SKELETON PREVENTS FLASHING
@@ -246,17 +261,17 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
           {/* Navigation Links */}
           <div className="flex-1 overflow-y-auto px-8 pb-12 scrollbar-hide">
             
-            <div className="flex flex-col gap-6">
-              <p className="text-[11px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-[0.2em] mb-2">
+            <div className="flex flex-col gap-1">
+              <p className="text-[11px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-[0.2em] mb-1">
                 Account
               </p>
               {ACCOUNT_LINKS.map((link) => (
                 <button 
                   key={link.name}
                   onClick={() => handleNavigation(link.path)} 
-                  className="w-full flex items-center justify-between py-3 group active:opacity-60 transition-opacity"
+                  className="w-full flex items-center justify-between py-2 group active:opacity-60 transition-opacity"
                 >
-                  <div className="flex items-center gap-6">
+                  <div className="flex items-center gap-4">
                     {isMounted ? (
                       <IonIcon icon={link.icon} className="text-[22px] text-orange-500 transition-colors" />
                     ) : (
@@ -273,17 +288,17 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
               ))}
             </div>
 
-            <div className="flex flex-col gap-6 mt-12">
-              <p className="text-[11px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-[0.2em] mb-2">
+            <div className="flex flex-col gap-1 mt-6">
+              <p className="text-[11px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-[0.2em] mb-1">
                 Legal & Support
               </p>
               {SUPPORT_LINKS.map((link) => (
                 <button 
                   key={link.name}
                   onClick={() => handleNavigation(link.path)} 
-                  className="w-full flex items-center justify-between py-3 group active:opacity-60 transition-opacity"
+                  className="w-full flex items-center justify-between py-2 group active:opacity-60 transition-opacity"
                 >
-                  <div className="flex items-center gap-6">
+                  <div className="flex items-center gap-4">
                     {isMounted ? (
                       <IonIcon icon={link.icon} className="text-[22px] text-orange-500 transition-colors" />
                     ) : (
@@ -303,13 +318,13 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
           </div>
 
           {/* Bigger Sign Out Footer */}
-          <div className="p-8 pb-[max(env(safe-area-inset-bottom),2rem)] mt-auto border-t border-gray-100 dark:border-gray-800/50">
+          <div className="p-6 pb-[max(env(safe-area-inset-bottom),1.5rem)] mt-auto border-t border-gray-100 dark:border-gray-800/50">
             <button 
               type="button"
               onClick={() => setShowSignOutModal(true)}
-              className="w-full flex items-center justify-center gap-3 px-4 py-5 !rounded-full bg-red-50 dark:bg-red-500/10 border border-transparent dark:border-red-500/20 text-red-600 dark:text-red-500 hover:bg-red-100 dark:hover:bg-red-500/20 active:scale-[0.98] transition-all font-black text-base"
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 !rounded-full bg-red-50 dark:bg-red-500/10 border border-transparent dark:border-red-500/20 text-red-600 dark:text-red-500 hover:bg-red-100 dark:hover:bg-red-500/20 active:scale-[0.98] transition-all font-black text-sm"
             >
-              {isMounted ? <IonIcon icon={logOutOutline} className="text-2xl" /> : <div className="w-[24px] h-[24px]" />}
+              {isMounted ? <IonIcon icon={logOutOutline} className="text-xl" /> : <div className="w-[24px] h-[24px]" />}
               <span>Sign Out</span>
             </button>
           </div>
