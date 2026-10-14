@@ -116,11 +116,24 @@ html, body {
   scrollbar-width: none;
 }
 
-/* SAFE AREA — reads Capacitor's injected --safe-area-inset-* first,
-   falling back to native env() on iOS, newer Android, and web. */
+/* SAFE AREA — prefers the true insets bridged from native (MainActivity sets
+   --native-sat/--native-sab from WindowInsets; exact on every Android nav mode),
+   then Capacitor's injected vars, then native env() on iOS / newer Android / web. */
 :root {
-  --sat: max(var(--safe-area-inset-top, 0px), env(safe-area-inset-top, 0px));
-  --sab: max(var(--safe-area-inset-bottom, 0px), env(safe-area-inset-bottom, 0px));
+  --sat: max(var(--native-sat, 0px), var(--safe-area-inset-top, 0px), env(safe-area-inset-top, 0px));
+  --sab: max(var(--native-sab, 0px), var(--safe-area-inset-bottom, 0px), env(safe-area-inset-bottom, 0px));
+}
+
+/* Brand background behind everything: pre-hydration first paint matches the
+   native splash + in-app SplashOverlay, so there is never a white flash. */
+html {
+  background: #0B1120;
+}
+
+/* Cold-start splash loader */
+@keyframes splash-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
 }
 
 .pt-safe { padding-top: var(--sat); }

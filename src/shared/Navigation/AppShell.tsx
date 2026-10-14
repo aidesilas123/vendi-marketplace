@@ -8,6 +8,7 @@ import { Sidebar } from './Sidebar';
 import { BottomNav } from './BottomNav';
 import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { mutate as globalMutate } from 'swr';
+import { ensurePresence, dropPresence, ensureChannel, dropChannel } from '@/lib/realtime';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -22,6 +23,16 @@ export const AppShell = ({ children }: AppShellProps) => {
   const isChatRoom = pathname === '/chats' || pathname?.startsWith('/chats');
   const showShell = !isAuthPage && !isChatRoom;
 
+  // Fired once when the shell knows the auth state — the SplashOverlay listens
+  // for this to lift (it also has its own safety timeout, so this can't trap).
+  const readyDispatched = useRef(false);
+  const dispatchAppReady = () => {
+    if (!readyDispatched.current && typeof window !== 'undefined') {
+      readyDispatched.current = true;
+      window.dispatchEvent(new Event('vendi:app-ready'));
+    }
+  };
+
   // Bottom rubber-band bounce for every page that scrolls in the shell's main
   // container. Top is off: pages with pull-to-refresh (feed, inbox) own that
   // edge. The hook ignores touches inside nested scrollers (e.g. the
@@ -34,6 +45,7 @@ export const AppShell = ({ children }: AppShellProps) => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.user) {
         setUser(null);
+        dispatchAppReady();
         return;
       }
 
@@ -50,6 +62,7 @@ export const AppShell = ({ children }: AppShellProps) => {
         email: session.user.email || "",
         avatarUrl: profile?.avatar_url || session.user.user_metadata?.avatar_url,
       });
+      dispatchAppReady();
     };
 
     fetchUser();
@@ -70,68 +83,61 @@ export const AppShell = ({ children }: AppShellProps) => {
     };
   }, []);
 
-  // Global Presence & WhatsApp-style Delivery on App Open
+  // Global Presence & WhatsApp-style Delivery on App Open.
+  //
+  // Two rules (violating either silently breaks realtime):
+  //  1. ONE owner per channel topic — `supabase.channel(topic)` returns the same object
+  //     everywhere, and `.on()` after `.subscribe()` throws. All channels go through
+  //     src/lib/realtime.ts, which creates + subscribes each topic exactly once.
+  //  2. Never `.send()` on a channel that was never `.subscribe()`d — the broadcast
+  //     falls back to a deprecated REST endpoint. Delivery ticks propagate through
+  //     the messages table instead: open chat rooms already listen to postgres_changes
+  //     on it, so a DB status write is enough.
   useEffect(() => {
     if (!user?.id) return;
     const userId = user.id;
 
-    // 1. Mark any pending messages as 'delivered' because the user has the app open
+    // 1. This device owns global presence: the user appears online app-wide,
+    //    from the moment the app opens (not only inside a chat room).
+    ensurePresence(userId);
+
+    // 2. Mark pending messages 'delivered' — the user has the app open.
+    //    Open chat rooms pick the status change up via their postgres_changes
+    //    subscription on the messages table, so no broadcast is needed.
     const deliverPending = async () => {
       try {
         const { data: undelivered } = await supabase
           .from('messages')
-          .select('id, transaction_ref')
+          .select('id')
           .eq('receiver_id', userId)
           .eq('status', 'sent');
 
         if (undelivered && undelivered.length > 0) {
           const ids = undelivered.map((m: any) => m.id);
           await supabase.from('messages').update({ status: 'delivered' }).in('id', ids);
-          undelivered.forEach((m: any) => {
-            supabase.channel(`chat_${m.transaction_ref}`).send({
-              type: 'broadcast',
-              event: 'messages_delivered',
-              payload: { ids: [m.id] }
-            }).catch(() => {});
-          });
         }
       } catch (err) {
         console.warn('[AppShell] deliverPending:', err);
       }
     };
-    deliverPending();
+    void deliverPending();
 
-    // 2. Global presence channel: tracks who is online across the entire app
-    const presenceChannel = supabase.channel('global_presence', {
-      config: { presence: { key: userId } }
+    // 3. Personal inbox: a live new_message for ANY chat → mark it delivered.
+    //    Never downgrade a message an open room already marked 'read'.
+    ensureChannel(`user_inbox_${userId}`, (ch: any) => {
+      ch.on('broadcast', { event: 'new_message' }, async (payload: any) => {
+        const msg = payload?.payload;
+        if (!msg?.id) return;
+        try {
+          await supabase.from('messages').update({ status: 'delivered' }).eq('id', msg.id).eq('status', 'sent');
+        } catch {}
+        void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
+      });
     });
-
-    presenceChannel.subscribe(async (status: string) => {
-      if (status === 'SUBSCRIBED') {
-        await presenceChannel.track({
-          user_id: userId,
-          online_at: new Date().toISOString()
-        });
-      }
-    });
-
-    // 3. User notification/inbox channel: delivers incoming messages when app is open
-    const userChannel = supabase.channel(`user_inbox_${userId}`);
-    userChannel.on('broadcast', { event: 'new_message' }, async (payload: any) => {
-      const msg = payload?.payload;
-      if (!msg) return;
-      await supabase.from('messages').update({ status: 'delivered' }).eq('id', msg.id);
-      supabase.channel(`chat_${msg.transaction_ref}`).send({
-        type: 'broadcast',
-        event: 'messages_delivered',
-        payload: { ids: [msg.id] }
-      }).catch(() => {});
-      void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
-    }).subscribe();
 
     return () => {
-      void supabase.removeChannel(presenceChannel);
-      void supabase.removeChannel(userChannel);
+      dropPresence();
+      dropChannel(`user_inbox_${userId}`);
     };
   }, [user?.id]);
 
@@ -164,7 +170,14 @@ export const AppShell = ({ children }: AppShellProps) => {
 
       <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} user={user} />
 
-      <main id="main-scroll-container" className="flex-1 w-full overflow-y-auto overscroll-y-contain scroll-smooth pb-24 relative">
+      {/* Content clearance = nav height + bottom inset, so the last row never
+          hides behind the bottom nav on 3-button phones (larger inset) while
+          gesture-nav phones keep the tighter spacing. */}
+      <main
+        id="main-scroll-container"
+        className="flex-1 w-full overflow-y-auto overscroll-y-contain scroll-smooth relative"
+        style={{ paddingBottom: 'calc(6rem + var(--sab))' }}
+      >
         {/* Bounce wrapper: the rubber-band transform applies here, around page
             content only. Fixed elements (bottom nav, modals, toasts) live
             outside it so a transform never breaks their positioning. */}

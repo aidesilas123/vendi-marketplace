@@ -6,6 +6,7 @@ import { StatusBarManager } from "@/shared/StatusBarManager";
 import { HardwareBackButton } from "@/shared/HardwareBackButton";
 import { PageTransition } from "@/shared/PageTransition";
 import { GlobalToastHost } from "@/shared/Toast/Toast";
+import { SplashOverlay } from "@/shared/SplashOverlay";
 
 // 1. Core Ionic styles for web components (optional typography.css removed to prevent overriding Tailwind utility classes)
 import '@ionic/react/css/core.css';
@@ -39,6 +40,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <HardwareBackButton />
         <StatusBarManager />
         <NetworkListener />
+        {/* Cold-start brand splash (native only): covers first paint until the app is ready. */}
+        <SplashOverlay />
         <IonicProvider>
           {/* We wrap the entire application in the AppShell here */}
           <AppShell>

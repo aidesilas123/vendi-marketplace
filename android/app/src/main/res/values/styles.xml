@@ -17,6 +17,13 @@
 
 
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <!-- Proper AndroidX splash: solid brand background + centered app icon.
+             (The old android:background=@drawable/splash stretched a PNG over the
+             whole window, which distorted on tall phones.) Not setting
+             windowSplashScreenAnimatedIcon lets the system use the adaptive
+             launcher icon, which is already mask-safe. -->
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimationDuration">0</item>
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
     </style>
 </resources>

@@ -49,11 +49,13 @@ export const BottomNav = () => {
     // The nav is pinned to the very bottom of the screen (fixed bottom-0), so its
     // white background extends behind the system navigation bar. The safe-area
     // inset is applied ONCE, as bottom padding below, which lifts the icons above
-    // the system buttons. Don't add a bottom offset or safe-area padding to the
-    // wrapper that renders <BottomNav />, or the gap will come back.
+    // the system buttons. --sab prefers the true native inset (bridged from
+    // MainActivity) over env(), so 3-button phones lift the icons and gesture
+    // phones stay full-screen. Don't add a bottom offset or safe-area padding to
+    // the wrapper that renders <BottomNav />, or the gap will come back.
     <div
       className={`fixed bottom-0 inset-x-0 z-50 bg-white dark:bg-[#0f172a] border-t border-gray-200 dark:border-gray-800 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pt-2 px-2 sm:px-6 rounded-t-3xl sm:rounded-none select-none ${isVisible ? 'translate-y-0' : 'translate-y-[150%] transition-transform duration-300 ease-in-out'}`}
-      style={{ paddingBottom: "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))" }}
+      style={{ paddingBottom: "var(--sab)" }}
     >
       {/* max-w-lg keeps spacing tight on tablets; a single justify-between flex wrapper */}
       <div className="max-w-lg mx-auto flex justify-between items-center relative h-14">

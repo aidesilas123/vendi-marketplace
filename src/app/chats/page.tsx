@@ -98,6 +98,7 @@ import { VoiceRecorder } from 'capacitor-voice-recorder';
 import { registerBackHandler } from '@/shared/HardwareBackButton';
 import { playChatSound } from '@/shared/audio/sounds';
 import { compressImagePreflight } from '@/shared/image/compressor';
+import { ensurePresence, subscribePresence, getPresence, broadcastTo } from '@/lib/realtime';
 import { effectiveTxStatus } from '@/lib/txStatus';
 
 type RecordState = 'idle' | 'holding' | 'locked' | 'paused';
@@ -537,46 +538,12 @@ export default function DealRoomChat() {
           }
         ).subscribe();
 
-        // 2. Global Presence Channel: track online/offline status across the entire app
-        let globalPresenceChannel: any = null;
-        globalPresenceChannel = supabase.channel('global_presence', {
-          config: { presence: { key: user.id } }
-        });
-
-        const syncGlobalPresence = () => {
-          if (!globalPresenceChannel) return;
-          const state = globalPresenceChannel.presenceState();
-          const isOnline = partnerId ? Object.keys(state).includes(partnerId) : false;
-          setIsPartnerOnline(isOnline);
-          if (isOnline) {
-            setPartnerLastSeen(null);
-          }
-        };
-
-        globalPresenceChannel
-          .on('presence', { event: 'sync' }, syncGlobalPresence)
-          .on('presence', { event: 'join' }, ({ key }: any) => {
-            if (key === partnerId) {
-              setIsPartnerOnline(true);
-              setPartnerLastSeen(null);
-            }
-          })
-          .on('presence', { event: 'leave' }, ({ key, leftPresences }: any) => {
-            if (key === partnerId) {
-              setIsPartnerOnline(false);
-              const leftTime = leftPresences?.[0]?.online_at || new Date().toISOString();
-              setPartnerLastSeen(leftTime);
-            }
-          })
-          .subscribe(async (status: string) => {
-            if (status === 'SUBSCRIBED' && me?.id) {
-              await globalPresenceChannel.track({
-                user_id: me.id,
-                online_at: new Date().toISOString()
-              });
-              syncGlobalPresence();
-            }
-          });
+        // 2. Global presence is single-owned by AppShell (src/lib/realtime.ts).
+        //    This page used to create the same 'global_presence' topic and call
+        //    .on('presence') on it — after AppShell subscribed it, that throws
+        //    "cannot add presence callbacks after subscribe()" and kills init.
+        //    ensurePresence is idempotent: a no-op when AppShell already owns it.
+        ensurePresence(user.id);
       } catch (err: any) {
         console.error('[Chat] Initialization failed:', err);
         if (!cancelled) setInitError(err?.message || 'Could not load this chat. Please try again.');
@@ -596,6 +563,24 @@ export default function DealRoomChat() {
       void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
     };
   }, [txRef, partnerId, router, initAttempt]);
+
+  // Mirror the AppShell-owned global presence into this room's online indicator.
+  // (Presence handlers live in src/lib/realtime.ts, registered exactly once —
+  // this page only reads the shared store, so it can never throw the
+  // "cannot add presence callbacks after subscribe()" error.)
+  useEffect(() => {
+    if (!partnerId) {
+      setIsPartnerOnline(false);
+      return;
+    }
+    const syncFromStore = () => {
+      const p = getPresence(partnerId);
+      setIsPartnerOnline(p.isOnline);
+      setPartnerLastSeen(p.lastSeen);
+    };
+    syncFromStore();
+    return subscribePresence(syncFromStore);
+  }, [partnerId]);
 
   const scrollToBottom = (smooth = true) =>
     messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
@@ -679,11 +664,7 @@ export default function DealRoomChat() {
     updateMessages((prev) => prev.map((m) => (ids.includes(m.id) ? { ...m, status: 'read' } : m)));
     chatChannelRef.current?.send({ type: 'broadcast', event: 'messages_read', payload: { ids } });
     if (partnerId) {
-      supabase.channel(`user_inbox_${partnerId}`).send({
-        type: 'broadcast',
-        event: 'messages_read',
-        payload: { ids }
-      }).catch(() => {});
+      void broadcastTo(`user_inbox_${partnerId}`, 'messages_read', { ids });
     }
     supabase.from('messages').update({ status: 'read' }).in('id', ids).then(({ error }: any) => {
       if (error) {
@@ -1028,11 +1009,7 @@ export default function DealRoomChat() {
         payload: savedMsg
       });
       if (partnerId) {
-        supabase.channel(`user_inbox_${partnerId}`).send({
-          type: 'broadcast',
-          event: 'new_message',
-          payload: savedMsg
-        }).catch(() => {});
+        void broadcastTo(`user_inbox_${partnerId}`, 'new_message', savedMsg);
       }
       void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
     }
@@ -1133,11 +1110,7 @@ export default function DealRoomChat() {
           payload: savedMsg
         });
         if (partnerId) {
-          supabase.channel(`user_inbox_${partnerId}`).send({
-            type: 'broadcast',
-            event: 'new_message',
-            payload: savedMsg
-          }).catch(() => {});
+          void broadcastTo(`user_inbox_${partnerId}`, 'new_message', savedMsg);
         }
         void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
       } else throw new Error("Database save failed");
@@ -1653,11 +1626,7 @@ export default function DealRoomChat() {
         payload: savedMsg
       });
       if (partnerId) {
-        supabase.channel(`user_inbox_${partnerId}`).send({
-          type: 'broadcast',
-          event: 'new_message',
-          payload: savedMsg
-        }).catch(() => {});
+        void broadcastTo(`user_inbox_${partnerId}`, 'new_message', savedMsg);
       }
       void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
     } else {
