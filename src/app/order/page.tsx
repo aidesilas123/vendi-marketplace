@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import { safeBack } from '@/shared/safeBack';
 import useSWR from 'swr';
 import { keys, fetchAuthUser } from '@/lib/swr-orders';
 import { supabase } from '@/lib/supabase';
@@ -289,7 +290,7 @@ export default function OrderDetails() {
       <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-[#0a1120]">
         <div className="flex w-full items-center justify-between px-3 py-1.5">
           <div className="flex items-center gap-1 min-w-0">
-            <button onClick={() => router.back()} aria-label="Back" className="p-1.5 -ml-1.5 text-gray-900 dark:text-white active:scale-95 transition-transform">
+            <button onClick={() => safeBack(router)} aria-label="Back" className="p-1.5 -ml-1.5 text-gray-900 dark:text-white active:scale-95 transition-transform">
               <IonIcon icon={chevronBackOutline} className="text-2xl block" />
             </button>
             <div className="min-w-0">
@@ -450,7 +451,7 @@ export default function OrderDetails() {
 
       {/* BOTTOM ACTION NAV */}
       {status === 'pending' && (
-        <div className="fixed bottom-0 left-0 right-0 z-[90] bg-gray-50 dark:bg-[#0a1120] p-4 pt-3 pb-safe">
+        <div className="fixed bottom-0 left-0 right-0 z-[90] bg-gray-50 dark:bg-[#0a1120] p-4 pt-3 pb-[max(1rem,var(--sab))]">
           <div className="max-w-2xl mx-auto space-y-3">
             <Button
               onClick={() => router.push(`/order/confirm?ref=${transaction.reference}`)}

@@ -1,7 +1,5 @@
 import { supabase } from '@/lib/supabase';
 
-// A listing stays ACTIVE for its first 7 days, then becomes APPROVED.
-const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_IMAGES = 5;
 
 type ListingStatus = 'ACTIVE' | 'APPROVED' | 'REJECTED' | 'PENDING_REVIEW';
@@ -70,12 +68,10 @@ export async function submitProductAction(
 
     /* ------------------------- ownership check when editing ---------------------- */
 
-    let existingCreatedAt: string | null = null;
-
     if (productId) {
       const { data: existing, error: existingError } = await supabase
         .from('products')
-        .select('created_at')
+        .select('id')
         .eq('id', productId)
         .eq('seller_id', userId)
         .maybeSingle();
@@ -83,7 +79,6 @@ export async function submitProductAction(
       if (existingError || !existing) {
         throw new Error("Listing not found, or you don't have permission to edit it.");
       }
-      existingCreatedAt = existing.created_at;
     }
 
     /* ------------------------------- moderation -------------------------------- */
@@ -116,12 +111,10 @@ export async function submitProductAction(
     if (aiDecision.status === 'REJECTED') {
       status = 'REJECTED';
     } else if (aiDecision.status === 'APPROVED') {
+      // Editing or duplicating is active seller intent: an APPROVED (aged-out)
+      // listing being worked on comes back ACTIVE. Passive aging to APPROVED
+      // is handled by the scheduled 30-day SQL, not here.
       status = 'ACTIVE';
-
-      // When editing an older listing, don't push it back into the 7-day Active window.
-      if (existingCreatedAt && Date.now() - new Date(existingCreatedAt).getTime() >= ACTIVE_WINDOW_MS) {
-        status = 'APPROVED';
-      }
     } else {
       status = 'PENDING_REVIEW';
     }

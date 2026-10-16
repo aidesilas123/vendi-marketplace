@@ -203,3 +203,56 @@ html {
     --text-4xl: 1.625rem;
   }
 }
+/* ---------- View Transitions: native slide-and-cover ----------
+   The browser snapshots old/new pages and animates the snapshots on the
+   compositor (GPU) — smooth even on mid-range phones, with zero main-thread
+   DOM animation cost. Applies to every same-document navigation automatically
+   (Link, router.push, router.back, hardware back). PageTransition.tsx sets
+   html[data-vt-dir] so back navigations play in reverse. Older WebViews
+   ignore all of this and fall back to the motion animation. */
+@view-transition {
+  navigation: auto;
+}
+
+::view-transition {
+  background-color: light-dark(#f9fafb, #0b1120);
+}
+
+/* Forward: new page slides in from the right, covering; old shifts left. */
+::view-transition-old(root) {
+  animation: vt-old-out 0.3s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+::view-transition-new(root) {
+  animation: vt-new-in 0.3s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+@keyframes vt-new-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+@keyframes vt-old-out {
+  from { transform: translateX(0); }
+  to { transform: translateX(-30%); }
+}
+
+/* Back: reversed — new page returns from the left, old exits right. */
+html[data-vt-dir="back"]::view-transition-old(root) {
+  animation-name: vt-old-out-back;
+}
+html[data-vt-dir="back"]::view-transition-new(root) {
+  animation-name: vt-new-in-back;
+}
+@keyframes vt-new-in-back {
+  from { transform: translateX(-30%); }
+  to { transform: translateX(0); }
+}
+@keyframes vt-old-out-back {
+  from { transform: translateX(0); }
+  to { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+  }
+}

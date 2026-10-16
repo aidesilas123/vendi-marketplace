@@ -60,7 +60,7 @@ export const PinPadModal = ({ isOpen, onClose, pinMode, pin, totalCharge, onPinP
           transition: isOpen ? SLIDE : `${SLIDE}, visibility 0s linear 300ms`,
         }}
       >
-        <div className="p-6 pb-[calc(env(safe-area-inset-bottom,0px)+2.5rem)] max-w-md mx-auto">
+        <div className="p-6 pb-[calc(2.5rem+var(--sab))] max-w-md mx-auto">
           <div className="flex justify-between items-center mb-6">
             <h3 className="text-xl font-black">
               {modalTitle}

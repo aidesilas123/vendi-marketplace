@@ -42,6 +42,11 @@ public class MainActivity extends BridgeActivity {
                 v.post(() -> webView.evaluateJavascript(js, null));
                 return insets;
             });
+            // The listener above only fires on inset CHANGES. If the system bars
+            // were already applied before it attached, it never runs and
+            // --native-sab stays unset — bottom bars then slide under the
+            // 3-button nav. Force a dispatch so the vars are set on every launch.
+            ViewCompat.requestApplyInsets(webView);
         }
     }
 }

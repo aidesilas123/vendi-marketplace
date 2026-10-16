@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import { safeBack } from '@/shared/safeBack';
 import useSWR, { useSWRConfig } from 'swr';
 import { supabase } from '@/lib/supabase';
 import { calcFees, naira } from '@/lib/pricing';
@@ -345,7 +346,7 @@ export default function BuyPage() {
         {/* FULL WIDTH HEADER (No Borders, No Shadow) */}
         <div className="sticky top-0 z-[60] -mx-4 md:-mx-8 bg-gray-50 dark:bg-[#0a1120]">
           <div className="h-12 px-4 md:px-8 flex items-center justify-between">
-            <button onClick={() => router.back()} className="-ml-2 flex h-10 w-10 items-center justify-center rounded-full text-gray-900 dark:text-white transition-colors">
+            <button onClick={() => safeBack(router)} className="-ml-2 flex h-10 w-10 items-center justify-center rounded-full text-gray-900 dark:text-white transition-colors">
               <IonIcon icon={chevronBackOutline} className="text-2xl" />
             </button>
             <h1 className="flex-1 text-center text-base font-black pr-8">Secure Checkout</h1>
@@ -490,7 +491,7 @@ export default function BuyPage() {
       {ready && (
         <>
           {/* FULL WIDTH BOTTOM ACTION BAR */}
-          <div className="fixed bottom-0 left-0 right-0 z-[100] bg-white dark:bg-[#0f172a] border-t border-gray-200 dark:border-gray-800 px-4 py-4 pb-6 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pointer-events-auto">
+          <div className="fixed bottom-0 left-0 right-0 z-[100] bg-white dark:bg-[#0f172a] border-t border-gray-200 dark:border-gray-800 px-4 pt-4 pb-[max(1.5rem,var(--sab))] shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pointer-events-auto">
             <div className="max-w-xl mx-auto relative z-[110]">
               <button
                 type="button"

@@ -11,6 +11,8 @@ import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import IonIcon from '@/shared/Icon/Icon';
 import { searchOutline, cameraOutline } from 'ionicons/icons';
 import { useHideOnScroll } from '@/shared/hooks/useHideOnScroll';
+import { useScrollRestore } from '@/shared/hooks/useScrollRestore';
+import { registerBackHandler } from '@/shared/HardwareBackButton';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
 const CATEGORIES = ['All', 'Gadgets', 'Electronics', 'Fashion', 'Books', 'Cooking Stuff', 'Hostel Stuff'];
@@ -132,6 +134,22 @@ export default function HomeFeed() {
     };
   }, [refreshFeed, mutate]);
 
+  // Scroll restoration: tapping a card saves your place; coming back restores it.
+  // A fresh visit (or a swap to another tab) starts at the top.
+  const feedRef = useRef<HTMLDivElement>(null);
+  const { saveScroll } = useScrollRestore(feedRef, 'feed', data !== undefined);
+
+  // System back on the feed: scrolled down -> jump to top + refresh (consumed,
+  // the app does NOT close); near the top -> fall through to the default (exit).
+  useEffect(() => registerBackHandler(() => {
+    const main = document.getElementById('main-scroll-container');
+    if (main && main.scrollTop > 400) {
+      main.scrollTo({ top: 0, behavior: 'smooth' });
+      window.dispatchEvent(new Event('refresh-feed'));
+      return true;
+    }
+  }), []);
+
   // Typing or changing category: show the spinner, then apply the new filters.
   // Every keystroke restarts the timer, so results land shortly after you pause.
   useEffect(() => {
@@ -230,6 +248,7 @@ export default function HomeFeed() {
 
   return (
     <div
+      ref={feedRef}
       className="relative flex flex-col min-h-full pb-24 selection:bg-orange-500/30"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
@@ -339,7 +358,7 @@ export default function HomeFeed() {
           style={{ opacity: isFiltering ? 0 : 1, transition: 'opacity 0.2s ease-out' }}
         >
           {isLoading ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-5 lg:gap-6">
+            <div onClickCapture={saveScroll} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-5 lg:gap-6">
               {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((i) => (
                 <div key={i} className="rounded-2xl border border-gray-200/70 dark:border-gray-800/70 p-2.5 flex flex-col h-full gap-2">
                   <div className="flex justify-between items-center mb-0.5">
@@ -381,7 +400,7 @@ export default function HomeFeed() {
               />
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-5 lg:gap-6">
+            <div onClickCapture={saveScroll} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-5 lg:gap-6">
               {filteredProducts.map((product) => (
                 <BuyerProductCard
                   key={product.id}

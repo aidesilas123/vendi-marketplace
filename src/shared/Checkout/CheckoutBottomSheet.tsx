@@ -115,7 +115,7 @@ export const CheckoutBottomSheet = ({
           </div>
         </div>
 
-        <div className="p-6 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+2.5rem)] max-w-xl mx-auto w-full overflow-y-auto">
+        <div className="p-6 pt-2 pb-[calc(2.5rem+var(--sab))] max-w-xl mx-auto w-full overflow-y-auto">
           
           {/* Order Summary (No Background Card) */}
           <div className="mb-8">

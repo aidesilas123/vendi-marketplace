@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import { safeBack } from '@/shared/safeBack';
 import useSWR from 'swr';
 import { keys, fetchAuthUser, refreshAfterOrderWrite } from '@/lib/swr-orders';
 import { supabase } from '@/lib/supabase';
@@ -176,7 +177,7 @@ export default function DisputePage() {
       {/* HEADER: Solid theme colour, flush to the top, h-12 compact size, strictly frozen */}
       <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-[#0b1120]">
         <div className="flex w-full items-center px-3 h-12 max-w-2xl mx-auto">
-          <button onClick={() => router.back()} aria-label="Back" className="p-1.5 -ml-1.5 text-gray-900 dark:text-white active:scale-95 transition-transform rounded-full">
+          <button onClick={() => safeBack(router)} aria-label="Back" className="p-1.5 -ml-1.5 text-gray-900 dark:text-white active:scale-95 transition-transform rounded-full">
             <IonIcon icon={chevronBackOutline} className="text-2xl block" />
           </button>
           <h1 className="text-[13px] font-black uppercase tracking-widest leading-tight text-gray-900 dark:text-white ml-2">
@@ -257,7 +258,7 @@ export default function DisputePage() {
       </div>
 
       {/* BOTTOM FIXED NAV */}
-      <div className="fixed bottom-0 left-0 right-0 z-[90] bg-gray-50/95 dark:bg-[#0b1120]/95 backdrop-blur-xl border-t border-gray-200/50 dark:border-gray-800/50 p-4 pt-3 pb-safe">
+      <div className="fixed bottom-0 left-0 right-0 z-[90] bg-gray-50/95 dark:bg-[#0b1120]/95 backdrop-blur-xl border-t border-gray-200/50 dark:border-gray-800/50 p-4 pt-3 pb-[max(1rem,var(--sab))]">
         <div className="max-w-2xl mx-auto flex gap-3">
           <Button onClick={() => router.back()} className="flex-1 !bg-gray-200 dark:!bg-gray-800 !text-gray-900 dark:!text-white !py-3.5 !rounded-full text-xs font-bold active:scale-[0.98]">
             Cancel

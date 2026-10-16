@@ -226,6 +226,7 @@ export default function VerificationPage() {
   const [showGallery, setShowGallery] = useState<UploadTarget>(null);
   const [uploading, setUploading] = useState<{ target: UploadTarget; progress: number; preview: string } | null>(null);
   const [viewerImages, setViewerImages] = useState<string[] | null>(null);
+  const [viewerIndex, setViewerIndex] = useState(0);
   const [reviewLoaded, setReviewLoaded] = useState<{ doc: boolean; selfie: boolean }>({ doc: false, selfie: false });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -311,6 +312,21 @@ export default function VerificationPage() {
     }
   };
 
+  /* Selfie: open the device camera directly (front) instead of the gallery.
+     The `capture="user"` hint makes the WebView launch the camera app;
+     on desktop browsers it falls back to the file picker. */
+  const openSelfieCamera = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.setAttribute('capture', 'user');
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (file) void handleFileUpload(file, 'selfie');
+    };
+    input.click();
+  };
+
   /* Gallery selection -> blob -> upload (works for native webPath + web blob URLs) */
   const handleGallerySelect = async (url: string) => {
     const target = showGallery;
@@ -370,6 +386,7 @@ export default function VerificationPage() {
       <ImageViewer
         images={viewerImages ?? []}
         isOpen={(viewerImages?.length ?? 0) > 0}
+        initialIndex={viewerIndex}
         onClose={() => setViewerImages(null)}
       />
 
@@ -390,8 +407,8 @@ export default function VerificationPage() {
         </div>
       </Modal>
 
-      {/* Solid header: opaque bg + hairline border so scrolled content never shows through */}
-      <div className="flex-shrink-0 w-full bg-background sticky top-0 z-50 border-b border-border/70">
+      {/* Seamless header: solid bg, no border, no shadow, no blur */}
+      <div className="flex-shrink-0 w-full bg-background sticky top-0 z-50">
         <div className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center gap-3">
             <button onClick={() => (inWizard && step > 1 ? goToStep(step - 1) : router.back())} className="!p-2 -ml-2 text-foreground active:bg-muted transition-colors !rounded-full" aria-label="Back">
@@ -444,7 +461,7 @@ export default function VerificationPage() {
             </div>
 
             {/* badge preview payoff — what buyers will see once approved */}
-            <div className="mt-4 rounded-2xl bg-card border border-border p-4">
+            <div className="mt-4 rounded-2xl p-4">
               <p className="text-[11px] font-black uppercase tracking-[0.2em] text-muted-foreground mb-3">
                 What buyers will see
               </p>
@@ -520,7 +537,7 @@ export default function VerificationPage() {
             </div>
 
             {/* what to fix */}
-            <div className="mt-6 rounded-2xl bg-card border border-border p-4">
+            <div className="mt-6 rounded-2xl p-4">
               <p className="text-[11px] font-black uppercase tracking-[0.2em] text-muted-foreground mb-2">What to fix</p>
               <p className="text-sm font-medium text-foreground leading-relaxed">{REJECTION_REASONS[rejectionCode].fix}</p>
               {rejectionDetail && (
@@ -596,7 +613,7 @@ export default function VerificationPage() {
               {/* STEP 1: Why get verified */}
               {step === 1 && (
                 <div className="flex flex-col">
-                  <div className="flex items-center gap-4 mb-10 bg-card p-4 !rounded-3xl border border-border shadow-sm">
+                  <div className="flex items-center gap-4 mb-10 p-4">
                     <Avatar src={profile?.avatar_url} name={profile?.full_name || 'User'} size="lg" />
                     <div className="flex flex-col">
                       <div className="flex items-center gap-1.5">
@@ -640,7 +657,7 @@ export default function VerificationPage() {
                       <button
                         key={t}
                         onClick={() => { setDocType(t); }}
-                        className={`flex-1 p-4 rounded-3xl border-2 transition-all flex flex-col items-center gap-2 ${docType === t ? 'border-orange-500 bg-orange-500/10 text-orange-500' : 'border-border bg-card text-muted-foreground'}`}
+                        className={`flex-1 p-4 rounded-3xl transition-all flex flex-col items-center gap-2 ${docType === t ? 'bg-orange-500/10 text-orange-500' : 'bg-card text-muted-foreground'}`}
                       >
                         <VIcon mounted={isMounted} icon={documentTextOutline} className="text-3xl" />
                         <span className="text-[13px] font-black tracking-wide uppercase text-center leading-tight">
@@ -650,8 +667,8 @@ export default function VerificationPage() {
                     ))}
                   </div>
 
-                  {/* Upload area — no dotted border, gallery-backed */}
-                  <div className="w-full rounded-[2rem] bg-card border border-border overflow-hidden mb-8">
+                  {/* Upload area — no border, gallery-backed */}
+                  <div className="w-full rounded-[2rem] overflow-hidden mb-8">
                     {uploading?.target === 'doc' ? (
                       <div className="relative h-56">
                         <img src={uploading.preview} alt="Uploading" className="absolute inset-0 w-full h-full object-cover opacity-40" />
@@ -708,7 +725,7 @@ export default function VerificationPage() {
                   <h2 className="text-2xl font-black text-foreground mb-2">Take a Selfie</h2>
                   <p className="text-muted-foreground text-[15px] mb-6 font-medium">Hold your phone up and make sure your face is clearly visible, just like below.</p>
 
-                  <div className="w-full rounded-[2rem] bg-card border border-border overflow-hidden mb-8">
+                  <div className="w-full rounded-[2rem] overflow-hidden mb-8">
                     {uploading?.target === 'selfie' ? (
                       <div className="relative h-72">
                         <img src={uploading.preview} alt="Uploading" className="absolute inset-0 w-full h-full object-cover opacity-40" />
@@ -732,7 +749,7 @@ export default function VerificationPage() {
                           <VIcon mounted={isMounted} icon={closeOutline} className="text-xl block" />
                         </button>
                         <button
-                          onClick={() => setShowGallery('selfie')}
+                          onClick={openSelfieCamera}
                           className="absolute bottom-3 right-3 px-4 py-2 rounded-full bg-black/50 text-white text-xs font-bold active:scale-95 transition-transform"
                         >
                           Retake
@@ -740,7 +757,7 @@ export default function VerificationPage() {
                       </div>
                     ) : (
                       <button
-                        onClick={() => setShowGallery('selfie')}
+                        onClick={openSelfieCamera}
                         className="w-full py-8 px-6 flex flex-col items-center gap-4 active:opacity-70 transition-opacity"
                       >
                         <SelfieAnimation />
@@ -771,8 +788,8 @@ export default function VerificationPage() {
                       <div key={item.key} className="flex flex-col gap-3">
                         <span className="text-[12px] font-black text-muted-foreground uppercase tracking-widest text-center">{item.label}</span>
                         <button
-                          onClick={() => setViewerImages([docUrl, selfieUrl])}
-                          className="relative w-full h-48 rounded-[1.5rem] overflow-hidden border border-border active:scale-95 transition-transform bg-card"
+                          onClick={() => { setViewerIndex(item.key === 'doc' ? 0 : 1); setViewerImages([docUrl, selfieUrl]); }}
+                          className="relative w-full h-48 rounded-[1.5rem] overflow-hidden active:scale-95 transition-transform bg-card"
                         >
                           {!reviewLoaded[item.key] && <Skeleton className="absolute inset-0 w-full h-full rounded-none" />}
                           <img

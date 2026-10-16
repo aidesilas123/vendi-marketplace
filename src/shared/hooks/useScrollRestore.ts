@@ -16,7 +16,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 type ElRef = { readonly current: HTMLElement | null };
 
 const BACK_WINDOW_MS = 2500; // a popstate this recent means the current page was reached by going back
-const MAX_FRAMES = 60;       // ~1s of retries while late content gives the page its height back
+const MAX_FRAMES = 600;      // ~10s of retries while late content (slow images) gives the page its height back
 const MAX_ENTRIES = 40;
 
 const positions = new Map<string, number>();
@@ -27,6 +27,16 @@ if (typeof window !== 'undefined') {
 }
 
 const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
+
+/**
+ * True when the most recent navigation was a back navigation
+ * (browser/Android back or router.back()): a popstate fired within the back window.
+ * Used by PageTransition to reverse the slide direction and skip its scroll-to-top
+ * (which would otherwise fight this hook's restore).
+ */
+export function isBackNavigation() {
+  return Date.now() - lastPopAt < BACK_WINDOW_MS;
+}
 
 // The element that actually scrolls: the nearest scrollable ancestor, or the document.
 function findScroller(from: HTMLElement | null): HTMLElement {
