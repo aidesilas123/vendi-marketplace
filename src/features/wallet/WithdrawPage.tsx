@@ -116,7 +116,7 @@ function BankPicker({
   if (typeof document === 'undefined') return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[130] flex animate-fade-in flex-col bg-gray-50 text-gray-900 dark:bg-[#0b1120] dark:text-white">
+    <div className="fixed inset-0 z-[130] flex animate-fade-in flex-col bg-gray-50 text-gray-900 dark:bg-background dark:text-white">
       <div className="flex shrink-0 items-center gap-2 px-5 pb-5 pt-[max(env(safe-area-inset-top),20px)]">
         <button
           type="button"

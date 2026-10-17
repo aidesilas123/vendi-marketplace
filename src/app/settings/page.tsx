@@ -1,14 +1,18 @@
+// src/app/settings/page.tsx
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
+import { safeBack } from '@/shared/safeBack';
 import { Button } from '@/shared/Button';
 import { Modal } from '@/shared/Modal/Modal';
 import { ToggleSwitch } from '@/shared/ToggleSwitch';
+import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { IonIcon } from '@ionic/react';
-import { 
-  chevronBackOutline, 
+import {
+  chevronBackOutline,
+  chevronForwardOutline,
   moonOutline,
   sunnyOutline,
   notificationsOutline,
@@ -17,21 +21,22 @@ import {
   bookmarkOutline,
   lockClosedOutline,
   hardwareChipOutline,
-  desktopOutline
+  desktopOutline,
+  informationCircleOutline
 } from 'ionicons/icons';
+import packageJson from '../../../package.json';
 
 export default function SettingsPage() {
   const router = useRouter();
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
-  // Notification States
+  // Notification toggles — kept as local state; wired up when push notifications land.
   const [pushEnabled, setPushEnabled] = useState(true);
   const [orderEnabled, setOrderEnabled] = useState(true);
   const [chatEnabled, setChatEnabled] = useState(true);
   const [savedEnabled, setSavedEnabled] = useState(false);
 
-  // Modal States
   const [showCacheModal, setShowCacheModal] = useState(false);
 
   // Prevent hydration mismatch for next-themes
@@ -39,155 +44,180 @@ export default function SettingsPage() {
     setMounted(true);
   }, []);
 
+  const bounceRef = useRef<HTMLDivElement>(null);
+  useRubberBand(bounceRef, { ready: mounted });
+
   const handleClearCache = () => {
+    // Preserve the auth session so the user stays signed in.
+    // Browser navigation history is untouched (no reload, no redirect).
+    const authEntries: [string, string][] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && /^sb-.*-auth-token$/.test(k)) {
+        const v = localStorage.getItem(k);
+        if (v) authEntries.push([k, v]);
+      }
+    }
     localStorage.clear();
     sessionStorage.clear();
+    authEntries.forEach(([k, v]) => localStorage.setItem(k, v));
     setShowCacheModal(true);
   };
 
   if (!mounted) return null;
 
-  const sectionHeaderClass = "text-[12px] font-black text-muted-foreground uppercase tracking-widest px-2 mb-4 mt-10 first:mt-2";
-  const cardClass = "bg-card rounded-[1.5rem] shadow-sm"; 
-  
-  // Increased vertical padding (py-5) for much better spacing
-  const rowClass = "flex items-center justify-between py-5 px-5 border-b border-border/40 last:border-b-0";
+  const sectionTitle =
+    'text-[12px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest px-2 mb-2 mt-10 first:mt-2';
+  const rowClass =
+    'w-full flex items-center justify-between py-4 px-2 active:bg-black/5 dark:active:bg-white/5 transition-colors';
+  const iconCircle =
+    'w-10 h-10 rounded-full bg-gray-100 dark:bg-[#171717] flex items-center justify-center flex-shrink-0';
+  const labelPrimary = 'text-[15px] font-bold text-gray-900 dark:text-white leading-tight';
+  const labelSecondary = 'text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 leading-tight';
+  const rowIcon = 'text-xl text-gray-900 dark:text-white';
+
+  const themes = [
+    { id: 'light', label: 'Light', icon: sunnyOutline },
+    { id: 'dark', label: 'Dark', icon: moonOutline },
+    { id: 'system', label: 'System', icon: desktopOutline },
+  ] as const;
+
+  const notifRows = [
+    { icon: notificationsOutline, title: 'Push Notifications', sub: 'Master alert toggle', value: pushEnabled, set: setPushEnabled, locked: false },
+    { icon: cartOutline, title: 'Order Updates', sub: 'Status changes', value: orderEnabled, set: setOrderEnabled, locked: !pushEnabled },
+    { icon: chatbubblesOutline, title: 'Chat Messages', sub: 'Direct messages', value: chatEnabled, set: setChatEnabled, locked: !pushEnabled },
+    { icon: bookmarkOutline, title: 'Saved Items', sub: 'Price drops or sold', value: savedEnabled, set: setSavedEnabled, locked: !pushEnabled },
+  ];
 
   return (
-    <div className="min-h-screen bg-background text-foreground pt-safe pb-safe selection:bg-orange-500/30">
-      
-      {/* HEADER */}
-      <div className="flex-shrink-0 w-full bg-background/95 backdrop-blur-sm shadow-sm sticky top-0 z-50">
-        <div className="flex items-center gap-3 px-4 py-4">
-          <button onClick={() => router.back()} className="!p-2 -ml-2 text-foreground active:bg-muted transition-colors !rounded-full">
-            <IonIcon icon={chevronBackOutline} className="text-3xl" />
+    <div className="min-h-screen bg-background text-gray-900 dark:text-white selection:bg-orange-500/30">
+
+      {/* HEADER — solid, no blur, no border, no shadow */}
+      <div className="flex-shrink-0 w-full bg-background sticky top-0 z-50">
+        <div className="flex items-center gap-3 px-4 py-3">
+          <button onClick={() => safeBack(router)} aria-label="Go back" className="!p-2 -ml-2 text-gray-900 dark:text-white active:bg-black/5 dark:active:bg-white/10 transition-colors !rounded-full">
+            <span suppressHydrationWarning className="flex items-center justify-center">
+              <IonIcon icon={chevronBackOutline} className="text-3xl" />
+            </span>
           </button>
           <h1 className="text-xl font-bold leading-tight">Settings</h1>
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto px-4 py-6 pb-24">
-        
+      <div ref={bounceRef} className="max-w-2xl mx-auto px-4 py-6 pb-24">
+
         {/* APPEARANCE */}
-        <h2 className={sectionHeaderClass}>Appearance</h2>
-        <div className={cardClass}>
-          <div className="flex p-2 gap-2">
-            {/* Added !rounded-2xl for smooth, pill-shaped active states */}
-            <button 
-              onClick={() => setTheme('light')}
-              className={`flex-1 py-3 px-2 !rounded-2xl flex flex-col items-center gap-1.5 transition-all ${theme === 'light' ? 'bg-orange-500/10 text-orange-500' : 'text-muted-foreground hover:bg-muted'}`}
+        <h2 className={sectionTitle}>Appearance</h2>
+        <div className="flex px-2 gap-2">
+          {themes.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTheme(t.id)}
+              className={`flex-1 py-3 px-2 !rounded-2xl flex flex-col items-center gap-1.5 transition-all active:scale-[0.98] ${
+                theme === t.id
+                  ? 'bg-orange-500/10 text-orange-500'
+                  : 'text-gray-500 dark:text-gray-400'
+              }`}
             >
-              <IonIcon icon={sunnyOutline} className="text-2xl" />
-              <span className="text-xs font-bold">Light</span>
+              <span suppressHydrationWarning className="flex items-center justify-center">
+                <IonIcon icon={t.icon} className="text-2xl" />
+              </span>
+              <span className="text-xs font-bold">{t.label}</span>
             </button>
-            <button 
-              onClick={() => setTheme('dark')}
-              className={`flex-1 py-3 px-2 !rounded-2xl flex flex-col items-center gap-1.5 transition-all ${theme === 'dark' ? 'bg-orange-500/10 text-orange-500' : 'text-muted-foreground hover:bg-muted'}`}
-            >
-              <IonIcon icon={moonOutline} className="text-2xl" />
-              <span className="text-xs font-bold">Dark</span>
-            </button>
-            <button 
-              onClick={() => setTheme('system')}
-              className={`flex-1 py-3 px-2 !rounded-2xl flex flex-col items-center gap-1.5 transition-all ${theme === 'system' ? 'bg-orange-500/10 text-orange-500' : 'text-muted-foreground hover:bg-muted'}`}
-            >
-              <IonIcon icon={desktopOutline} className="text-2xl" />
-              <span className="text-xs font-bold">System</span>
-            </button>
-          </div>
+          ))}
         </div>
 
         {/* NOTIFICATIONS */}
-        <h2 className={sectionHeaderClass}>Notifications</h2>
-        <div className={cardClass}>
-          <div className={rowClass}>
-            <div className="flex items-center gap-4">
-              <IonIcon icon={notificationsOutline} className="text-2xl text-muted-foreground flex-shrink-0" />
-              <div className="flex flex-col">
-                <span className="text-[15px] font-bold text-foreground">Push Notifications</span>
-                <span className="text-[13px] text-muted-foreground mt-0.5">Master alert toggle</span>
+        <h2 className={sectionTitle}>Notifications</h2>
+        <div>
+          {notifRows.map((row) => (
+            <div key={row.title} className={`${rowClass} ${row.locked ? 'opacity-50 pointer-events-none' : ''}`}>
+              <div className="flex items-center gap-4">
+                <div className={iconCircle}>
+                  <span suppressHydrationWarning className="flex items-center justify-center">
+                    <IonIcon icon={row.icon} className={rowIcon} />
+                  </span>
+                </div>
+                <div className="flex flex-col">
+                  <span className={labelPrimary}>{row.title}</span>
+                  <span className={labelSecondary}>{row.sub}</span>
+                </div>
               </div>
+              <ToggleSwitch
+                enabled={row.value}
+                onChange={row.set}
+                ariaLabel={row.title}
+              />
             </div>
-            <ToggleSwitch enabled={pushEnabled} onChange={setPushEnabled} />
-          </div>
-          
-          <div className={`${rowClass} ${!pushEnabled && 'opacity-50 pointer-events-none transition-opacity'}`}>
-            <div className="flex items-center gap-4">
-              <IonIcon icon={cartOutline} className="text-2xl text-muted-foreground flex-shrink-0" />
-              <div className="flex flex-col">
-                <span className="text-[15px] font-bold text-foreground">Order Updates</span>
-                <span className="text-[13px] text-muted-foreground mt-0.5">Status changes</span>
-              </div>
-            </div>
-            <ToggleSwitch enabled={orderEnabled} onChange={setOrderEnabled} />
-          </div>
-
-          <div className={`${rowClass} ${!pushEnabled && 'opacity-50 pointer-events-none transition-opacity'}`}>
-            <div className="flex items-center gap-4">
-              <IonIcon icon={chatbubblesOutline} className="text-2xl text-muted-foreground flex-shrink-0" />
-              <div className="flex flex-col">
-                <span className="text-[15px] font-bold text-foreground">Chat Messages</span>
-                <span className="text-[13px] text-muted-foreground mt-0.5">Direct messages</span>
-              </div>
-            </div>
-            <ToggleSwitch enabled={chatEnabled} onChange={setChatEnabled} />
-          </div>
-
-          <div className={`${rowClass} ${!pushEnabled && 'opacity-50 pointer-events-none transition-opacity'}`}>
-            <div className="flex items-center gap-4">
-              <IonIcon icon={bookmarkOutline} className="text-2xl text-muted-foreground flex-shrink-0" />
-              <div className="flex flex-col">
-                <span className="text-[15px] font-bold text-foreground">Saved Items</span>
-                <span className="text-[13px] text-muted-foreground mt-0.5">Price drops or sold</span>
-              </div>
-            </div>
-            <ToggleSwitch enabled={savedEnabled} onChange={setSavedEnabled} />
-          </div>
+          ))}
         </div>
 
         {/* SECURITY & DATA */}
-<h2 className={sectionHeaderClass}>Security & Data</h2>
-<div className={cardClass}>
+        <h2 className={sectionTitle}>Security & Data</h2>
+        <div>
+          <button onClick={() => router.push('/profile/edit')} className={`${rowClass} text-left`}>
+            <div className="flex items-center gap-4">
+              <div className={iconCircle}>
+                <span suppressHydrationWarning className="flex items-center justify-center">
+                  <IonIcon icon={lockClosedOutline} className={rowIcon} />
+                </span>
+              </div>
+              <span className={labelPrimary}>Change Password</span>
+            </div>
+            <span suppressHydrationWarning className="flex items-center justify-center">
+              <IonIcon icon={chevronForwardOutline} className="text-lg text-gray-400 dark:text-gray-500" />
+            </span>
+          </button>
 
-  <button 
-    onClick={() => router.push('/profile/edit')}
-    className="w-full text-left flex items-center justify-between py-8 px-7 border-b border-border/40 hover:bg-muted/50 transition-colors active:bg-muted"
-  >
-    <div className="flex items-center gap-4">
-      <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center flex-shrink-0">
-        <IonIcon icon={lockClosedOutline} className="text-xl text-foreground" />
-      </div>
-      <span className="text-[15px] font-bold text-foreground">Change Password</span>
-    </div>
-    <IonIcon icon={chevronBackOutline} className="text-muted-foreground rotate-180 text-lg" />
-  </button>
+          <button onClick={handleClearCache} className={`${rowClass} text-left`}>
+            <div className="flex items-center gap-4">
+              <div className={iconCircle}>
+                <span suppressHydrationWarning className="flex items-center justify-center">
+                  <IonIcon icon={hardwareChipOutline} className={rowIcon} />
+                </span>
+              </div>
+              <div className="flex flex-col">
+                <span className={labelPrimary}>Clear App Cache</span>
+                <span className={labelSecondary}>Frees up storage · keeps you signed in</span>
+              </div>
+            </div>
+          </button>
+        </div>
 
-  <button 
-    onClick={handleClearCache}
-    className="w-full text-left flex items-center justify-between py-6 px-5 hover:bg-muted/50 transition-colors active:bg-muted"
-  >
-    <div className="flex items-center gap-4">
-      <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center flex-shrink-0">
-        <IonIcon icon={hardwareChipOutline} className="text-xl text-foreground" />
-      </div>
-      <div className="flex flex-col justify-center">
-        <span className="text-[15px] font-bold text-foreground leading-tight">Clear App Cache</span>
-        <span className="text-[13px] text-muted-foreground mt-1 leading-tight">Frees up storage</span>
-      </div>
-    </div>
-  </button>
-
-</div>
+        {/* ABOUT */}
+        <h2 className={sectionTitle}>About</h2>
+        <div>
+          <button onClick={() => router.push('/about')} className={`${rowClass} text-left`}>
+            <div className="flex items-center gap-4">
+              <div className={iconCircle}>
+                <span suppressHydrationWarning className="flex items-center justify-center">
+                  <IonIcon icon={informationCircleOutline} className={rowIcon} />
+                </span>
+              </div>
+              <div className="flex flex-col">
+                <span className={labelPrimary}>About Vendi</span>
+                <span className={labelSecondary}>Version {packageJson.version}</span>
+              </div>
+            </div>
+            <span suppressHydrationWarning className="flex items-center justify-center">
+              <IonIcon icon={chevronForwardOutline} className="text-lg text-gray-400 dark:text-gray-500" />
+            </span>
+          </button>
+        </div>
 
       </div>
 
       {/* Cache Cleared Modal */}
       <Modal isOpen={showCacheModal} onClose={() => setShowCacheModal(false)}>
         <div className="p-6 text-center">
-          <IonIcon icon={hardwareChipOutline} className="text-6xl mb-4 text-orange-500" />
-          <h2 className="text-xl font-black mb-2 text-foreground">Cache Cleared</h2>
-          <p className="text-muted-foreground mb-8">Temporary files and local data have been successfully removed.</p>
-          <Button onClick={() => setShowCacheModal(false)} className="w-full !rounded-full !py-3.5 !bg-muted !text-foreground font-bold hover:!bg-muted/80">
+          <span suppressHydrationWarning className="flex items-center justify-center">
+            <IonIcon icon={hardwareChipOutline} className="text-6xl mb-4 text-orange-500" />
+          </span>
+          <h2 className="text-xl font-black mb-2 text-gray-900 dark:text-white">Cache Cleared</h2>
+          <p className="text-gray-500 dark:text-gray-400 mb-8 text-sm leading-relaxed">
+            Temporary files and cached data were removed. You're still signed in and your place in the app is unchanged.
+          </p>
+          <Button onClick={() => setShowCacheModal(false)} className="w-full !rounded-full !py-3.5 !bg-gray-100 dark:!bg-[#171717] !text-gray-900 dark:!text-white font-bold">
             Done
           </Button>
         </div>

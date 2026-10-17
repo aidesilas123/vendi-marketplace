@@ -1,10 +1,11 @@
+// src/shared/Navigation/Sidebar.tsx
 "use client";
 
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
 import { supabase } from '@/lib/supabase';
-import { IonIcon } from '@ionic/react';
+import { IonIcon } from '@/shared/Icon/Icon';
 import { 
   personOutline, 
   settingsOutline, 
@@ -36,13 +37,6 @@ interface SidebarProps {
 
 export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
   const router = useRouter();
-
-  // --- Hydration Mismatch Fix ---
-  // We wait until the component mounts on the client before rendering Ionic web components
-  const [isMounted, setIsMounted] = useState(false);
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
 
   // --- Modal State ---
   const [showSignOutModal, setShowSignOutModal] = useState(false);
@@ -215,7 +209,7 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}
           style={{ transform: panelTransform, transition: panelTransition }}
-          className="absolute top-0 right-0 h-full w-[85vw] max-w-[340px] bg-white dark:bg-[#0b1120] shadow-2xl flex flex-col rounded-l-3xl overflow-hidden"
+          className="absolute top-0 right-0 h-full w-[85vw] max-w-[340px] bg-white dark:bg-background shadow-2xl flex flex-col rounded-l-3xl overflow-hidden"
         >
           
           <div className="absolute top-[max(env(safe-area-inset-top),1.5rem)] right-6 z-10">
@@ -225,7 +219,7 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
               onClick={onClose} 
               className="!p-2 text-gray-400 hover:text-gray-900 dark:text-gray-500 dark:hover:text-white transition-colors active:scale-95 !rounded-full"
             >
-              {isMounted ? <IonIcon icon={closeOutline} className="text-2xl" /> : <div className="w-[30px] h-[30px]" />}
+              <IonIcon icon={closeOutline} className="text-2xl" />
             </button>
           </div>
 
@@ -272,18 +266,10 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
                   className="w-full flex items-center justify-between py-2 group active:opacity-60 transition-opacity"
                 >
                   <div className="flex items-center gap-4">
-                    {isMounted ? (
-                      <IonIcon icon={link.icon} className="text-[22px] text-orange-500 transition-colors" />
-                    ) : (
-                      <div className="w-[24px] h-[24px]" /> // Placeholder prevents layout shift
-                    )}
-                    <span className="text-[15px] font-bold text-gray-800 dark:text-gray-100">{link.name}</span>
+                    <IonIcon icon={link.icon} className="text-[22px] text-orange-500 transition-colors" />
+                    <span className="text-[15px] font-bold text-gray-900 dark:text-white">{link.name}</span>
                   </div>
-                  {isMounted ? (
-                    <IonIcon icon={chevronForwardOutline} className="text-gray-300 dark:text-gray-600 text-sm" />
-                  ) : (
-                    <div className="w-[14px] h-[14px]" /> // Placeholder
-                  )}
+                  <IonIcon icon={chevronForwardOutline} className="text-gray-300 dark:text-gray-600 text-sm" />
                 </button>
               ))}
             </div>
@@ -299,32 +285,24 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
                   className="w-full flex items-center justify-between py-2 group active:opacity-60 transition-opacity"
                 >
                   <div className="flex items-center gap-4">
-                    {isMounted ? (
-                      <IonIcon icon={link.icon} className="text-[22px] text-orange-500 transition-colors" />
-                    ) : (
-                      <div className="w-[24px] h-[24px]" /> // Placeholder prevents layout shift
-                    )}
-                    <span className="text-[15px] font-bold text-gray-800 dark:text-gray-100">{link.name}</span>
+                    <IonIcon icon={link.icon} className="text-[22px] text-orange-500 transition-colors" />
+                    <span className="text-[15px] font-bold text-gray-900 dark:text-white">{link.name}</span>
                   </div>
-                  {isMounted ? (
-                    <IonIcon icon={chevronForwardOutline} className="text-gray-300 dark:text-gray-600 text-sm" />
-                  ) : (
-                    <div className="w-[14px] h-[14px]" /> // Placeholder
-                  )}
+                  <IonIcon icon={chevronForwardOutline} className="text-gray-300 dark:text-gray-600 text-sm" />
                 </button>
               ))}
             </div>
 
           </div>
 
-          {/* Bigger Sign Out Footer */}
-          <div className="p-6 pb-[max(env(safe-area-inset-bottom),1.5rem)] mt-auto border-t border-gray-100 dark:border-gray-800/50">
+          {/* Sign Out Footer */}
+          <div className="p-6 pb-[max(env(safe-area-inset-bottom),1.5rem)] mt-auto">
             <button 
               type="button"
               onClick={() => setShowSignOutModal(true)}
-              className="w-full flex items-center justify-center gap-2 px-4 py-3 !rounded-full bg-red-50 dark:bg-red-500/10 border border-transparent dark:border-red-500/20 text-red-600 dark:text-red-500 hover:bg-red-100 dark:hover:bg-red-500/20 active:scale-[0.98] transition-all font-black text-sm"
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 !rounded-full bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-500 hover:bg-red-100 dark:hover:bg-red-500/20 active:scale-[0.98] transition-all font-black text-sm"
             >
-              {isMounted ? <IonIcon icon={logOutOutline} className="text-xl" /> : <div className="w-[24px] h-[24px]" />}
+              <IonIcon icon={logOutOutline} className="text-xl" />
               <span>Sign Out</span>
             </button>
           </div>
@@ -335,11 +313,7 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
       {/* Sign Out Confirmation Modal */}
       <Modal isOpen={showSignOutModal} onClose={() => setShowSignOutModal(false)}>
         <div className="p-6 text-center relative z-[999]">
-          {isMounted ? (
-            <IonIcon icon={logOutOutline} className="text-6xl mb-4 text-red-500" />
-          ) : (
-            <div className="w-[60px] h-[60px] mx-auto mb-4" />
-          )}
+          <IonIcon icon={logOutOutline} className="text-6xl mb-4 text-red-500" />
           <h2 className="text-xl font-black mb-2 text-gray-900 dark:text-white tracking-tight">Sign Out?</h2>
           <p className="text-gray-600 dark:text-gray-400 mb-8 font-medium leading-relaxed">
             Are you sure you want to sign out of your Vendi account?

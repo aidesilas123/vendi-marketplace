@@ -344,7 +344,7 @@ export default function BuyPage() {
     content = (
       <>
         {/* FULL WIDTH HEADER (No Borders, No Shadow) */}
-        <div className="sticky top-0 z-[60] -mx-4 md:-mx-8 bg-gray-50 dark:bg-[#0a1120]">
+        <div className="sticky top-0 z-[60] -mx-4 md:-mx-8 bg-gray-50 dark:bg-background">
           <div className="h-12 px-4 md:px-8 flex items-center justify-between">
             <button onClick={() => safeBack(router)} className="-ml-2 flex h-10 w-10 items-center justify-center rounded-full text-gray-900 dark:text-white transition-colors">
               <IonIcon icon={chevronBackOutline} className="text-2xl" />
@@ -484,14 +484,14 @@ export default function BuyPage() {
       )}
 
       {/* Rubber-band wrapper: stays mounted in every state so the bounce always has its element */}
-      <div ref={bounceRef} className="w-full min-h-full bg-gray-50 dark:bg-[#0a1120] text-gray-900 dark:text-white pb-24 relative">
+      <div ref={bounceRef} className="w-full min-h-full bg-gray-50 dark:bg-background text-gray-900 dark:text-white pb-24 relative">
         {content}
       </div>
 
       {ready && (
         <>
           {/* FULL WIDTH BOTTOM ACTION BAR */}
-          <div className="fixed bottom-0 left-0 right-0 z-[100] bg-white dark:bg-[#0f172a] border-t border-gray-200 dark:border-gray-800 px-4 pt-4 pb-[max(1.5rem,var(--sab))] shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pointer-events-auto">
+          <div className="fixed bottom-0 left-0 right-0 z-[100] bg-white dark:bg-black border-t border-gray-200 dark:border-gray-800 px-4 pt-4 pb-[max(1.5rem,var(--sab))] shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pointer-events-auto">
             <div className="max-w-xl mx-auto relative z-[110]">
               <button
                 type="button"

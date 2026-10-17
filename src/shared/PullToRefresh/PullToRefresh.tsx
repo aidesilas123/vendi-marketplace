@@ -73,7 +73,7 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
     children,
     className = '',
     contentClassName = '',
-    bgClassName = 'bg-gray-50 dark:bg-[#0b1120]',
+    bgClassName = 'bg-gray-50 dark:bg-background',
     threshold = HOLD,
     bottomBounce = true,
   },
@@ -268,7 +268,7 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
         }}
       >
         <div
-          className="flex items-center justify-center rounded-full bg-white shadow-lg dark:bg-[#1e293b]"
+          className="flex items-center justify-center rounded-full bg-white shadow-lg dark:bg-[#171717]"
           style={{ width: BADGE, height: BADGE }}
         >
           <PullSpinner progress={progress} spinning={refreshing} />

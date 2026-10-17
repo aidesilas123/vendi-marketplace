@@ -289,7 +289,7 @@ export default function TransactionsPage() {
   return (
     <div 
       id="tx-scroll-container"
-      className="relative flex flex-col h-[100dvh] bg-gray-50 dark:bg-[#0a1120] text-gray-900 dark:text-white pb-24 -mx-4 md:-mx-8 overflow-y-auto overflow-x-hidden overscroll-y-contain"
+      className="relative flex flex-col h-[100dvh] bg-gray-50 dark:bg-background text-gray-900 dark:text-white pb-24 -mx-4 md:-mx-8 overflow-y-auto overflow-x-hidden overscroll-y-contain"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -318,7 +318,7 @@ export default function TransactionsPage() {
             No pt-safe here: the app shell already pads the status bar, so adding it again
             pushed this header down. Solid page colour (no white, no blur, no border) so it
             matches the background. */}
-        <div className="sticky top-0 z-40 bg-gray-50 dark:bg-[#0a1120]">
+        <div className="sticky top-0 z-40 bg-gray-50 dark:bg-background">
           <div className="flex items-center h-12 px-4">
             <button onClick={() => router.back()} className="-ml-2 w-10 h-10 flex items-center justify-center rounded-full bg-transparent text-gray-900 dark:text-white transition-colors active:scale-95">
               <ClientIcon icon={chevronBackOutline} className="text-2xl" />
@@ -350,7 +350,7 @@ export default function TransactionsPage() {
 
           {/* TAB FILTER SPINNER STRIP (Slides down from under the header) */}
           <div
-            className="absolute left-0 right-0 top-full flex items-center justify-center overflow-hidden pointer-events-none bg-gray-50 dark:bg-[#0a1120]"
+            className="absolute left-0 right-0 top-full flex items-center justify-center overflow-hidden pointer-events-none bg-gray-50 dark:bg-background"
             style={{
               height: isSwitchingTab ? FILTER_STRIP_HEIGHT : 0,
               transition: 'height 0.25s ease-out',

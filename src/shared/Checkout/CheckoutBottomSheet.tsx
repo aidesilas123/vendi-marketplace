@@ -85,7 +85,7 @@ export const CheckoutBottomSheet = ({
         role="dialog"
         aria-modal="true"
         aria-label="Checkout summary"
-        className="absolute bottom-0 left-0 right-0 bg-white dark:bg-[#0f172a] rounded-t-[32px] shadow-2xl will-change-transform max-h-[90vh] flex flex-col"
+        className="absolute bottom-0 left-0 right-0 bg-white dark:bg-[#171717] rounded-t-[32px] shadow-2xl will-change-transform max-h-[90vh] flex flex-col"
         style={{
           transform: isOpen ? `translateY(${dragY > 0 ? dragY : 0}px)` : 'translateY(100%)',
           transition: dragY > 0 ? 'none' : 'transform 0.35s cubic-bezier(0.32, 0.72, 0, 1)'

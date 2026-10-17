@@ -452,9 +452,9 @@ export default function MessagesList() {
 
   // No pt-safe on the root: the app shell already pads the status bar.
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-[#0b1120] text-gray-900 dark:text-white pb-24 -mx-4 md:-mx-8">
+    <div className="min-h-screen bg-gray-50 dark:bg-background text-gray-900 dark:text-white pb-24 -mx-4 md:-mx-8">
       {/* HEADER — solid, opaque background matching the body color so it blends seamlessly and covers scrolling items */}
-      <div className="sticky top-0 z-40 bg-gray-50 dark:bg-[#0b1120]">
+      <div className="sticky top-0 z-40 bg-gray-50 dark:bg-background">
         <div className="max-w-md mx-auto px-4 pt-2 pb-1.5 flex items-center justify-between">
           <h1 className="text-lg font-bold tracking-tight text-gray-900 dark:text-white">
             Vendi Chats

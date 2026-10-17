@@ -9,7 +9,7 @@ export const Skeleton = ({ className = "" }: SkeletonProps) => {
   const hasCustomBg = className.includes('bg-');
   
   // Use the high-contrast default ONLY if no custom background is provided
-  const defaultBg = hasCustomBg ? '' : 'bg-gray-300 dark:bg-gray-700';
+  const defaultBg = hasCustomBg ? '' : 'bg-gray-300 dark:bg-gray-800';
 
   return (
     <div 

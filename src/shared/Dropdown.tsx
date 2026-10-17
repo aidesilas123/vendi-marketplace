@@ -183,7 +183,7 @@ export const Dropdown = ({
         <ul
           ref={listRef}
           role="listbox"
-          className={`absolute left-0 right-0 z-50 max-h-56 overflow-y-auto p-1 rounded-2xl border border-orange-500/40 bg-gray-50 dark:bg-[#0a1120] animate-in fade-in zoom-in-95 duration-150 ${
+          className={`absolute left-0 right-0 z-50 max-h-56 overflow-y-auto p-1 rounded-2xl border border-orange-500/40 bg-gray-50 dark:bg-background animate-in fade-in zoom-in-95 duration-150 ${
             openUp ? 'bottom-full mb-1.5 origin-bottom' : 'top-full mt-1.5 origin-top'
           }`}
         >

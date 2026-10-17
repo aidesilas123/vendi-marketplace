@@ -54,7 +54,7 @@ export const BottomNav = () => {
     // phones stay full-screen. Don't add a bottom offset or safe-area padding to
     // the wrapper that renders <BottomNav />, or the gap will come back.
     <div
-      className={`fixed bottom-0 inset-x-0 z-50 bg-white dark:bg-[#0f172a] border-t border-gray-200 dark:border-gray-800 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pt-2 px-2 sm:px-6 rounded-t-3xl sm:rounded-none select-none ${isVisible ? 'translate-y-0' : 'translate-y-[150%] transition-transform duration-300 ease-in-out'}`}
+      className={`fixed bottom-0 inset-x-0 z-50 bg-white dark:bg-black border-t border-gray-200 dark:border-gray-800 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pt-2 px-2 sm:px-6 rounded-t-3xl sm:rounded-none select-none ${isVisible ? 'translate-y-0' : 'translate-y-[150%] transition-transform duration-300 ease-in-out'}`}
       style={{ paddingBottom: "var(--sab)" }}
     >
       {/* max-w-lg keeps spacing tight on tablets; a single justify-between flex wrapper */}
@@ -84,7 +84,7 @@ export const BottomNav = () => {
         {/* Floating Seller Button (remains absolutely centered) */}
         <div className="absolute left-1/2 -translate-x-1/2 -top-8">
           <Link href="/seller" className="bottom-nav-link flex flex-col items-center justify-center outline-none focus:outline-none border-0 shadow-none">
-            <div className={`w-14 h-14 rounded-full flex items-center justify-center shadow-xl transition-transform active:scale-95 ${pathname.includes('/seller') ? 'bg-orange-600 border-4 border-orange-200 dark:border-orange-900/30' : 'bg-orange-500 border-4 border-white dark:border-[#0f172a]'}`}>
+            <div className={`w-14 h-14 rounded-full flex items-center justify-center shadow-xl transition-transform active:scale-95 ${pathname.includes('/seller') ? 'bg-orange-600 border-4 border-orange-200 dark:border-orange-900/30' : 'bg-orange-500 border-4 border-white dark:border-black'}`}>
               <span suppressHydrationWarning className="flex items-center justify-center">
                 <IonIcon icon={pathname.includes('/seller') ? storefront : storefrontOutline} className="text-white text-2xl" />
               </span>

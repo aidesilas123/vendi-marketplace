@@ -12,7 +12,7 @@ interface EmptyStateProps {
 export const EmptyState = ({ icon, title, description, actionText, onAction }: EmptyStateProps) => {
   return (
     <div className="flex flex-col items-center justify-center p-8 text-center animate-in fade-in zoom-in-95 duration-300">
-      <div className="w-20 h-20 bg-gray-50 dark:bg-[#1e293b] rounded-full flex items-center justify-center mb-6 shadow-inner">
+      <div className="w-20 h-20 bg-gray-50 dark:bg-[#171717] rounded-full flex items-center justify-center mb-6 shadow-inner">
         <IonIcon icon={icon} className="text-4xl text-gray-400 dark:text-gray-500" />
       </div>
       <h3 className="text-xl font-black text-gray-900 dark:text-white mb-2">{title}</h3>

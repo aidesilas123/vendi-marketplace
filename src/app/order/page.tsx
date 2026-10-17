@@ -140,9 +140,6 @@ export default function OrderDetails() {
   const isCompleted = status === 'successful' || status === 'completed';
   const contactLocked = isCompleted || isCancelled;
 
-  const hoursPassed = transaction ? (new Date().getTime() - new Date(transaction.created_at).getTime()) / (1000 * 60 * 60) : 0;
-  const canCancel = hoursPassed >= (2 / 60) && status === 'pending';
-
   const images: string[] = product?.images?.length > 0 ? product.images : [];
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) =>
@@ -197,11 +194,6 @@ export default function OrderDetails() {
     window.open(`https://wa.me/${formattedPhone}?text=${text}`, '_blank');
   };
 
-  // Cancelling now happens on its own page, where the buyer says why and gets the refund
-  const goToCancelPage = () => {
-    router.push(`/order/cancel?ref=${encodeURIComponent(transaction.reference)}`);
-  };
-
   const retry = () => {
     mutateAuth();
     mutateOrder();
@@ -209,9 +201,9 @@ export default function OrderDetails() {
 
   if (showSkeleton) {
     return (
-      <div className="w-full min-h-screen bg-gray-50 dark:bg-[#0a1120] pb-32 animate-pulse">
+      <div className="w-full min-h-screen bg-gray-50 dark:bg-background pb-32 animate-pulse">
         {/* No pt-safe: the app shell already pads the status bar */}
-        <div className="w-full bg-gray-50 dark:bg-[#0a1120]">
+        <div className="w-full bg-gray-50 dark:bg-background">
           <div className="flex items-center justify-between px-3 py-1.5">
             <div className="flex items-center gap-2">
               <Skeleton className="w-7 h-7 !rounded-full" />
@@ -241,7 +233,7 @@ export default function OrderDetails() {
     // A failed request with nothing cached is different from an order that doesn't exist
     const failed = !!(orderError || authError);
     return (
-      <div className="w-full h-screen flex flex-col items-center justify-center text-gray-500 pb-20 px-4 text-center bg-gray-50 dark:bg-[#0a1120]">
+      <div className="w-full h-screen flex flex-col items-center justify-center text-gray-500 pb-20 px-4 text-center bg-gray-50 dark:bg-background">
         <IonIcon icon={receiptOutline} className="text-5xl mb-4 text-gray-300 dark:text-gray-600" />
         <p className="text-base font-bold text-gray-800 dark:text-gray-200">
           {failed ? "Couldn't load this order." : 'Order Details not found.'}
@@ -271,7 +263,7 @@ export default function OrderDetails() {
   const disabledBtn = 'opacity-40 cursor-not-allowed pointer-events-none';
 
   return (
-    <div className="w-full min-h-screen bg-gray-50 dark:bg-[#0a1120] text-gray-900 dark:text-white pb-40 selection:bg-orange-500/30">
+    <div className="w-full min-h-screen bg-gray-50 dark:bg-background text-gray-900 dark:text-white pb-40 selection:bg-orange-500/30">
 
       <Toast {...toast} onClose={hideToast} />
 
@@ -287,7 +279,7 @@ export default function OrderDetails() {
       <div ref={bounceRef}>
 
       {/* HEADER: solid theme colour, flush to the top (no pt-safe, the app shell pads the status bar) */}
-      <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-[#0a1120]">
+      <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-background">
         <div className="flex w-full items-center justify-between px-3 py-1.5">
           <div className="flex items-center gap-1 min-w-0">
             <button onClick={() => safeBack(router)} aria-label="Back" className="p-1.5 -ml-1.5 text-gray-900 dark:text-white active:scale-95 transition-transform">
@@ -451,7 +443,7 @@ export default function OrderDetails() {
 
       {/* BOTTOM ACTION NAV */}
       {status === 'pending' && (
-        <div className="fixed bottom-0 left-0 right-0 z-[90] bg-gray-50 dark:bg-[#0a1120] p-4 pt-3 pb-[max(1rem,var(--sab))]">
+        <div className="fixed bottom-0 left-0 right-0 z-[90] bg-gray-50 dark:bg-background p-4 pt-3 pb-[max(1rem,var(--sab))]">
           <div className="max-w-2xl mx-auto space-y-3">
             <Button
               onClick={() => router.push(`/order/confirm?ref=${transaction.reference}`)}
@@ -464,12 +456,6 @@ export default function OrderDetails() {
               <button onClick={() => router.push(`/dispute?ref=${transaction.reference}`)} className="flex-1 !bg-gray-100 dark:!bg-gray-800/60 text-gray-600 dark:text-gray-300 font-bold !py-3 !rounded-full text-sm transition-all active:scale-[0.98]">
                 Raise Dispute
               </button>
-
-              {canCancel && (
-                <button onClick={goToCancelPage} className="flex-1 !bg-red-50 dark:!bg-red-900/20 text-red-600 dark:text-red-500 font-bold !py-3 !rounded-full text-sm transition-all active:scale-[0.98]">
-                  Cancel Order
-                </button>
-              )}
             </div>
           </div>
         </div>

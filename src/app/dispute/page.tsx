@@ -68,6 +68,19 @@ export default function DisputePage() {
   const orderKey = keys.orderDetails(currentUser?.id, txRef);
   const { data: order, error: orderError } = useSWR(orderKey, () => fetchOrderSlim(txRef!));
 
+  // 2b) SWR Dispute Fetching — reason, description, evidence for the status view
+  const { data: dispute } = useSWR(
+    txRef ? `dispute-details/${txRef}` : null,
+    async () => {
+      const { data } = await supabase
+        .from('disputes')
+        .select('reason, description, images, status, admin_notes, created_at, buyer_id')
+        .eq('transaction_ref', txRef!)
+        .maybeSingle();
+      return data;
+    }
+  );
+
   const transaction = order?.transaction ?? null;
   const product = order?.product ?? null;
 
@@ -125,8 +138,8 @@ export default function DisputePage() {
 
   if (showSkeleton) {
     return (
-      <div className="w-full min-h-screen bg-gray-50 dark:bg-[#0b1120] pb-32 animate-pulse">
-        <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-[#0b1120]">
+      <div className="w-full min-h-screen bg-gray-50 dark:bg-background pb-32 animate-pulse">
+        <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-background">
           <div className="flex w-full items-center px-3 h-12">
             <Skeleton className="w-8 h-8 !rounded-full" />
             <Skeleton className="w-32 h-3 ml-3 !rounded-md" />
@@ -148,8 +161,9 @@ export default function DisputePage() {
       <DisputeStatus 
         transaction={transaction} 
         product={product} 
+        dispute={dispute ?? null}
+        canCancel={!!dispute && (dispute.status || '').toLowerCase() === 'open' && dispute.buyer_id === currentUser?.id}
         onBack={() => router.back()} 
-        onDone={() => router.push('/transactions')} 
       />
     );
   }
@@ -157,7 +171,7 @@ export default function DisputePage() {
   // If it's not pending, it's invalid for this page
   if (!transaction || transaction.status !== 'pending') {
     return (
-      <div className="w-full h-screen flex flex-col items-center justify-center text-gray-500 pb-20 px-4 text-center bg-gray-50 dark:bg-[#0b1120]">
+      <div className="w-full h-screen flex flex-col items-center justify-center text-gray-500 pb-20 px-4 text-center bg-gray-50 dark:bg-background">
         <IonIcon icon={warningOutline} className="text-5xl mb-4 text-gray-300 dark:text-gray-600" />
         <p className="text-base font-bold text-gray-800 dark:text-gray-200">Cannot raise dispute.</p>
         <p className="text-xs text-gray-400 mt-1 max-w-[240px]">
@@ -171,11 +185,11 @@ export default function DisputePage() {
   const itemPrice = Math.abs(transaction.amount);
 
   return (
-    <div className="w-full min-h-screen bg-gray-50 dark:bg-[#0b1120] text-gray-900 dark:text-white pb-32">
+    <div className="w-full min-h-screen bg-gray-50 dark:bg-background text-gray-900 dark:text-white pb-32">
       <Toast {...toast} onClose={hideToast} />
       
       {/* HEADER: Solid theme colour, flush to the top, h-12 compact size, strictly frozen */}
-      <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-[#0b1120]">
+      <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-background">
         <div className="flex w-full items-center px-3 h-12 max-w-2xl mx-auto">
           <button onClick={() => safeBack(router)} aria-label="Back" className="p-1.5 -ml-1.5 text-gray-900 dark:text-white active:scale-95 transition-transform rounded-full">
             <IonIcon icon={chevronBackOutline} className="text-2xl block" />
@@ -258,7 +272,7 @@ export default function DisputePage() {
       </div>
 
       {/* BOTTOM FIXED NAV */}
-      <div className="fixed bottom-0 left-0 right-0 z-[90] bg-gray-50/95 dark:bg-[#0b1120]/95 backdrop-blur-xl border-t border-gray-200/50 dark:border-gray-800/50 p-4 pt-3 pb-[max(1rem,var(--sab))]">
+      <div className="fixed bottom-0 left-0 right-0 z-[90] bg-gray-50/95 dark:bg-background/95 backdrop-blur-xl border-t border-gray-200/50 dark:border-gray-800/50 p-4 pt-3 pb-[max(1rem,var(--sab))]">
         <div className="max-w-2xl mx-auto flex gap-3">
           <Button onClick={() => router.back()} className="flex-1 !bg-gray-200 dark:!bg-gray-800 !text-gray-900 dark:!text-white !py-3.5 !rounded-full text-xs font-bold active:scale-[0.98]">
             Cancel

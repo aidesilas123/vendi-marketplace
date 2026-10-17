@@ -74,11 +74,11 @@ export default function AuthScreen() {
     }
   };
 
-  const inputClasses = "w-full bg-white dark:bg-[#1a2235] border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white px-5 py-4 rounded-2xl outline-none focus:border-orange-500 transition-colors shadow-sm";
+  const inputClasses = "w-full bg-white dark:bg-[#171717] border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white px-5 py-4 rounded-2xl outline-none focus:border-orange-500 transition-colors shadow-sm";
 
   return (
-    <IonContent className="bg-gray-50 dark:bg-[#0b1120]">
-      <div className="relative flex flex-col justify-center items-center min-h-full px-6 py-12 bg-gray-50 dark:bg-[#0b1120] transition-colors duration-300">
+    <IonContent className="bg-gray-50 dark:bg-background">
+      <div className="relative flex flex-col justify-center items-center min-h-full px-6 py-12 bg-gray-50 dark:bg-background transition-colors duration-300">
         
         {/* Theme Toggle Button */}
         <button onClick={toggleTheme} className="absolute top-6 right-6 p-2 rounded-full bg-gray-200 dark:bg-gray-800 text-gray-800 dark:text-gray-200 shadow-md">

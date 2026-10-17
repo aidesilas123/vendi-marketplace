@@ -18,7 +18,7 @@ export const ToggleSwitch = ({ enabled, onChange, ariaLabel }: ToggleSwitchProps
       aria-label={ariaLabel}
       onClick={() => onChange(!enabled)}
       className={`relative inline-flex h-7 w-12 flex-shrink-0 cursor-pointer !rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 p-0.5 ${
-        enabled ? 'bg-orange-500' : 'bg-muted'
+        enabled ? 'bg-orange-500' : 'bg-gray-300 dark:bg-gray-700'
       }`}
     >
       <span

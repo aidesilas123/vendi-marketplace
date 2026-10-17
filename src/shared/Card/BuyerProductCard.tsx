@@ -58,6 +58,7 @@ interface BuyerProductCardProps {
     images: string[] | string | null;
     views_count?: number;
     seller: {
+      id: string;
       username: string;
       avatar_url?: string | null;
       is_verified: boolean;
@@ -121,7 +122,10 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
       // The global toast pops up from the bottom of the screen, not inside the card.
       // (It also does the double haptic tap itself.)
       showGlobalToast('Please log in to save items', 'error');
+    } else if (result === 'saved') {
+      showGlobalToast('Saved');
     } else if (result === 'removed') {
+      showGlobalToast('Removed from Saved');
       onUnsave?.(product.id);
     }
   };
@@ -145,11 +149,16 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
         className="absolute inset-0 z-[5]"
       />
 
-      <div className="px-1 py-2 flex items-center gap-1.5 overflow-hidden w-full">
+      <button
+        type="button"
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(`/profile?id=${product.seller.id}`); }}
+        aria-label={`View ${product.seller?.username || 'seller'}'s profile`}
+        className="relative z-10 px-1 py-2 flex items-center gap-1.5 overflow-hidden w-full text-left active:opacity-70 transition-opacity"
+      >
         <Avatar src={product.seller?.avatar_url} name={product.seller?.username || 'User'} size="sm" />
         <span className="text-[10px] font-bold text-gray-900 dark:text-white truncate">@{product.seller?.username || 'user'}</span>
         <Badge isVerified={product.seller?.is_verified} className="flex-shrink-0" />
-      </div>
+      </button>
 
       <div className="relative w-full aspect-square bg-gray-50 dark:bg-gray-900 flex items-center justify-center overflow-hidden rounded-2xl">
 

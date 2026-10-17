@@ -31,7 +31,7 @@ export const Searchbar = ({ value, onChange, placeholder = "Search for items..."
         placeholder={placeholder}
         className={`w-full bg-card text-foreground placeholder:text-muted-foreground border border-border rounded-full text-sm font-medium shadow-sm transition-all focus:outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 ${
 isSm
-            ? 'h-9 py-0 pl-10 pr-10 !bg-white dark:!bg-[#1e293b] !text-gray-900 dark:!text-white placeholder:!text-gray-400 !border-gray-200 dark:!border-gray-700'
+            ? 'h-9 py-0 pl-10 pr-10 !bg-white dark:!bg-[#171717] !text-gray-900 dark:!text-white placeholder:!text-gray-400 !border-gray-200 dark:!border-gray-700'
             : 'py-3.5 pl-12 pr-12'        }`}
       />
 

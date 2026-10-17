@@ -64,7 +64,7 @@ export function FullScreenPage({
 
   return (
     <div
-      className={`fixed inset-0 flex flex-col bg-gray-50 text-gray-900 transition-transform duration-300 ease-out dark:bg-[#0b1120] dark:text-white ${
+      className={`fixed inset-0 flex flex-col bg-gray-50 text-gray-900 transition-transform duration-300 ease-out dark:bg-background dark:text-white ${
         entered ? 'translate-x-0' : 'translate-x-full'
       }`}
       style={{ zIndex }}

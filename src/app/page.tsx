@@ -282,7 +282,7 @@ export default function HomeFeed() {
         {/* STICKY HEADER AREA: the search row slides away with a transform,
             so the grid underneath never reflows */}
         <div
-          className="sticky top-0 z-30 bg-gray-50 dark:bg-[#0a1120] shadow-sm border-b border-gray-200 dark:border-gray-800 mb-3 -mx-4 px-4 md:-mx-8 md:px-8"
+          className="sticky top-0 z-30 bg-gray-50 dark:bg-background shadow-sm border-b border-gray-200 dark:border-gray-800 mb-3 -mx-4 px-4 md:-mx-8 md:px-8"
           style={{
             transform: showSearch ? 'translateY(0)' : `translateY(-${SEARCH_ROW_HEIGHT}px)`,
             transition: 'transform 0.22s cubic-bezier(0.22, 1, 0.36, 1)',
@@ -306,7 +306,7 @@ export default function HomeFeed() {
             <label
               htmlFor="image-search-input"
               aria-label="Search with an image"
-              className="flex-shrink-0 w-9 h-9 rounded-full bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-center text-orange-500 cursor-pointer active:scale-95 transition-transform"
+              className="flex-shrink-0 w-9 h-9 rounded-full bg-white dark:bg-[#171717] border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-center text-orange-500 cursor-pointer active:scale-95 transition-transform"
             >
               <span suppressHydrationWarning className="flex items-center justify-center">
                 <IonIcon icon={cameraOutline} className="text-lg" />
@@ -360,7 +360,7 @@ export default function HomeFeed() {
           {isLoading ? (
             <div onClickCapture={saveScroll} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-5 lg:gap-6">
               {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((i) => (
-                <div key={i} className="rounded-2xl border border-gray-200/70 dark:border-gray-800/70 p-2.5 flex flex-col h-full gap-2">
+                <div key={i} className="rounded-2xl p-2.5 flex flex-col h-full gap-2">
                   <div className="flex justify-between items-center mb-0.5">
                     <div className="flex items-center gap-1.5">
                       <Skeleton className="w-6 h-6 rounded-full" />

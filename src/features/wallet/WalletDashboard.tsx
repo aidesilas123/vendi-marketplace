@@ -250,7 +250,7 @@ export default function WalletDashboard() {
       <PullToRefresh onRefresh={refresh} className="h-[100dvh]" contentClassName="text-gray-900 dark:text-white">
         <div className="mx-auto w-full max-w-md px-5 pb-40">
           {/* Header: z-10 allows the spinner to smoothly glide over it */}
-          <header className={`sticky top-0 z-10 -mx-5 bg-gray-50 px-5 dark:bg-[#0b1120] ${HEADER_SPACE}`}>
+          <header className={`sticky top-0 z-10 -mx-5 bg-gray-50 px-5 dark:bg-background ${HEADER_SPACE}`}>
             <h1 className="text-xl font-black">
               My <span className="text-orange-500">Wallet</span>
             </h1>
@@ -258,9 +258,9 @@ export default function WalletDashboard() {
 
           {/* ------------------------------ Balance ------------------------------ */}
           {showSkeleton ? (
-            <div className="h-48 animate-pulse rounded-3xl bg-orange-50 dark:bg-[#141d33]" />
+            <div className="h-48 animate-pulse rounded-3xl bg-orange-50 dark:bg-orange-500/10" />
           ) : hasNothingToShow ? (
-            <div className="rounded-3xl bg-orange-50 px-6 py-12 text-center dark:bg-[#141d33]">
+            <div className="rounded-3xl bg-orange-50 px-6 py-12 text-center dark:bg-orange-500/10">
               <p className="text-base font-bold">We couldn&apos;t load your wallet</p>
               <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Check your connection and try again.</p>
               <button type="button" onClick={() => void reload()} className={`mt-6 ${PRIMARY_BTN}`}>
@@ -268,7 +268,7 @@ export default function WalletDashboard() {
               </button>
             </div>
           ) : (
-            <section className="relative overflow-hidden rounded-3xl bg-orange-50 p-5 dark:bg-[#141d33]">
+            <section className="relative overflow-hidden rounded-3xl bg-orange-50 p-5 dark:bg-orange-500/10">
               <div className="pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full bg-orange-500/15 blur-3xl" />
               <div className="relative">
                 <div className="flex items-center justify-between">
@@ -383,7 +383,7 @@ export default function WalletDashboard() {
           transform: view === 'topup' ? `translateY(${topupDragY > 0 ? topupDragY : 0}px)` : 'translateY(100%)',
           transition: topupDragY > 0 ? 'none' : 'transform 300ms ease-out',
         }}
-        className="fixed inset-x-0 bottom-0 z-[100] rounded-t-3xl bg-white text-gray-900 dark:bg-[#0f172a] dark:text-white"
+        className="fixed inset-x-0 bottom-0 z-[100] rounded-t-3xl bg-white text-gray-900 dark:bg-[#171717] dark:text-white"
       >
         <div className="mx-auto max-w-md px-6 pb-[calc(env(safe-area-inset-bottom,0px)+40px)] pt-3">
           <div className="mx-auto mb-7 h-1.5 w-12 cursor-grab rounded-full bg-gray-300 active:cursor-grabbing dark:bg-gray-700" />

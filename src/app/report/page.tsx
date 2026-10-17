@@ -9,7 +9,7 @@ import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { Toast, useToast } from '@/shared/Toast/Toast';
 import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { safeBack } from '@/shared/safeBack';
-import { IonIcon } from '@ionic/react';
+import { IonIcon } from '@/shared/Icon/Icon';
 import {
   chevronBackOutline,
   shieldHalfOutline,
@@ -171,19 +171,19 @@ export default function ReportPage() {
       <Toast {...toast} onClose={hideToast} />
 
       {/* Rubber-band wrapper: content only — the toast stays outside */}
-      <div ref={bounceRef} className="w-full min-h-full bg-background text-foreground pb-safe relative">
+      <div ref={bounceRef} className="w-full min-h-full bg-background text-gray-900 dark:text-white pb-safe relative">
 
         {/* Solid header — no blur, no border, full-bleed */}
         <div className="sticky top-0 z-50 w-full bg-background">
           <div className="flex items-center gap-2 px-4 py-3 w-full">
-            <button onClick={() => safeBack(router)} aria-label="Back" className="!p-2 -ml-2 text-foreground active:scale-95 transition-transform !rounded-full">
+            <button onClick={() => safeBack(router)} aria-label="Back" className="!p-2 -ml-2 text-gray-900 dark:text-white active:scale-95 transition-transform !rounded-full">
               <span className="flex items-center justify-center">
                 <IonIcon icon={chevronBackOutline} className="text-3xl" />
               </span>
             </button>
             <div className="flex flex-col">
               <h1 className="text-lg font-bold leading-tight">Report User</h1>
-              <p className="text-[11px] text-muted-foreground font-medium">Secure & Confidential</p>
+              <p className="text-[11px] text-gray-500 dark:text-gray-400 font-medium">Secure & Confidential</p>
             </div>
           </div>
         </div>
@@ -205,7 +205,7 @@ export default function ReportPage() {
           {/* MANUAL TARGET INPUT (only when no user id came in — Safety Center) */}
           {!reportedUserId && (
             <div className="flex flex-col">
-              <h2 className="text-[13px] font-black uppercase tracking-widest text-muted-foreground mb-4 px-2 flex items-center gap-2">
+              <h2 className="text-[13px] font-black uppercase tracking-widest text-gray-500 dark:text-gray-400 mb-4 px-2 flex items-center gap-2">
                 <IonIcon icon={personOutline} className="text-lg" />
                 Who are you reporting?
               </h2>
@@ -214,14 +214,14 @@ export default function ReportPage() {
                 value={manualUsername}
                 onChange={(e) => setManualUsername(e.target.value)}
                 placeholder="Username, email, or Vendi Tag"
-                className="w-full bg-card border border-border !rounded-2xl p-4 text-[15px] text-foreground placeholder-muted-foreground outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-all shadow-sm"
+                className="w-full bg-background border border-orange-500/30 !rounded-2xl p-4 text-[15px] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-all"
               />
             </div>
           )}
 
           {/* REPORT REASON LIST */}
           <div className="flex flex-col">
-            <h2 className="text-[13px] font-black uppercase tracking-widest text-muted-foreground mb-4 px-2 flex items-center gap-2">
+            <h2 className="text-[13px] font-black uppercase tracking-widest text-gray-500 dark:text-gray-400 mb-4 px-2 flex items-center gap-2">
               <IonIcon icon={warningOutline} className="text-lg" />
               Reason for report
             </h2>
@@ -229,7 +229,7 @@ export default function ReportPage() {
               {REPORT_REASONS.map((reason) => (
                 <label
                   key={reason.id}
-                  className={`flex items-start gap-4 p-4 cursor-pointer !rounded-2xl transition-colors ${selectedReason === reason.id ? 'bg-orange-500/10' : 'active:bg-muted/50'}`}
+                  className={`flex items-start gap-4 p-4 cursor-pointer !rounded-2xl transition-colors ${selectedReason === reason.id ? 'bg-orange-500/10' : 'active:bg-black/5 dark:active:bg-white/5'}`}
                 >
                   <div className="relative flex items-center justify-center mt-0.5 flex-shrink-0">
                     <input
@@ -238,15 +238,15 @@ export default function ReportPage() {
                       value={reason.id}
                       checked={selectedReason === reason.id}
                       onChange={() => setSelectedReason(reason.id)}
-                      className="w-[22px] h-[22px] appearance-none border-2 border-muted-foreground/30 rounded-full checked:border-orange-500 transition-colors"
+                      className="w-[22px] h-[22px] appearance-none border-2 border-gray-300 dark:border-gray-600 rounded-full checked:border-orange-500 transition-colors"
                     />
                     {selectedReason === reason.id && (
                       <div className="absolute w-3 h-3 bg-orange-500 rounded-full pointer-events-none" />
                     )}
                   </div>
                   <div className="flex flex-col flex-1">
-                    <span className="text-[16px] font-bold text-foreground leading-tight">{reason.label}</span>
-                    <span className="text-[13px] text-muted-foreground mt-1 leading-snug">{reason.description}</span>
+                    <span className="text-[16px] font-bold text-gray-900 dark:text-white leading-tight">{reason.label}</span>
+                    <span className="text-[13px] text-gray-500 dark:text-gray-400 mt-1 leading-snug">{reason.description}</span>
                   </div>
                 </label>
               ))}
@@ -255,7 +255,7 @@ export default function ReportPage() {
 
           {/* ADDITIONAL COMMENTS */}
           <div className="flex flex-col">
-            <h2 className="text-[13px] font-black uppercase tracking-widest text-muted-foreground mb-4 px-2 flex items-center gap-2">
+            <h2 className="text-[13px] font-black uppercase tracking-widest text-gray-500 dark:text-gray-400 mb-4 px-2 flex items-center gap-2">
               <IonIcon icon={documentTextOutline} className="text-lg" />
               Additional Details (Optional)
             </h2>
@@ -263,7 +263,7 @@ export default function ReportPage() {
               value={additionalComments}
               onChange={(e) => setAdditionalComments(e.target.value)}
               placeholder="Please provide any extra context that will help us investigate this issue..."
-              className="w-full bg-card border border-border !rounded-2xl p-5 text-[15px] text-foreground placeholder-muted-foreground outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-all min-h-[140px] resize-none shadow-sm"
+              className="w-full bg-background border border-orange-500/30 !rounded-2xl p-5 text-[15px] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-all min-h-[140px] resize-none"
             />
           </div>
 

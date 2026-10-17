@@ -1,11 +1,18 @@
 "use client";
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import useSWR from 'swr';
 import { supabase } from '@/lib/supabase';
 import { EmptyState } from '@/shared/EmptyState';
 import { BuyerProductCard } from '@/shared/Card/BuyerProductCard';
 import { IonIcon } from '@ionic/react';
 import { chevronBackOutline, bookmarkOutline } from 'ionicons/icons';
+import { PullSpinner } from '@/shared/Loaders/PullSpinner';
+import { useRubberBand } from '@/shared/hooks/useRubberBand';
+import { useScrollRestore } from '@/shared/hooks/useScrollRestore';
+import { Toast, useToast } from '@/shared/Toast/Toast';
+import { useSavedIds } from '@/shared/hooks/useSavedIds';
+import { safeBack } from '@/shared/safeBack';
 
 type SavedProduct = {
   id: string;
@@ -17,7 +24,7 @@ type SavedProduct = {
   campus: string;
   created_at: string;
   images: string[] | string | null;
-  
+
   seller: {
     username: string;
     avatar_url?: string | null;
@@ -33,92 +40,105 @@ type SavedItemRow = {
   product: SavedProduct | null;
 };
 
+async function fetchSavedItems(): Promise<SavedProduct[] | null> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { data, error } = await supabase
+    .from('saved_items')
+    .select(`
+      id,
+      created_at,
+      product:product_id (
+        id,
+        title,
+        buyer_price,
+        condition,
+        status,
+        university_id,
+        campus,
+        created_at,
+        images,
+
+        seller:seller_id (
+          username,
+          avatar_url,
+          is_verified,
+          average_rating
+        )
+      )
+    `)
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+
+  const rows = (data as unknown as SavedItemRow[]) || [];
+  // A saved product may have since been deleted by its seller - drop those rows
+  return rows
+    .filter((row) => row.product !== null)
+    .map((row) => row.product as SavedProduct);
+}
+
 export default function SavedItemsPage() {
   const router = useRouter();
-  const [items, setItems] = useState<SavedProduct[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const { data, isLoading, mutate } = useSWR<SavedProduct[] | null>(
+    'saved-items',
+    fetchSavedItems,
+    { revalidateOnFocus: true }
+  );
+  const { toast, showToast, hideToast } = useToast();
+  const { toggle } = useSavedIds();
 
   useEffect(() => {
-    const fetchSavedItems = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        router.push('/login');
-        return;
-      }
-      try {
-        const { data, error } = await supabase
-          .from('saved_items')
-          .select(`
-            id,
-            created_at,
-            product:product_id (
-              id,
-              title,
-              buyer_price,
-              condition,
-              status,
-              university_id,
-              campus,
-              created_at,
-              images,
-              
-              seller:seller_id (
-                username,
-                avatar_url,
-                is_verified,
-                average_rating
-              )
-            )
-          `)
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false });
+    if (!isLoading && data === null) router.push('/login');
+  }, [isLoading, data, router]);
 
-        if (error) throw error;
+  const bounceRef = useRef<HTMLDivElement>(null);
+  useRubberBand(bounceRef, { ready: !isLoading });
 
-        const rows = (data as unknown as SavedItemRow[]) || [];
-        // A saved product may have since been deleted by its seller - drop those rows
-        const products = rows
-          .filter((row) => row.product !== null)
-          .map((row) => row.product as SavedProduct);
+  // Tapping a card saves your place; coming back restores it.
+  const listRef = useRef<HTMLDivElement>(null);
+  const { saveScroll } = useScrollRestore(listRef, 'saved', !isLoading);
 
-        setItems(products);
-      } catch (err) {
-        console.error("Error fetching saved items:", err);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    fetchSavedItems();
-  }, [router]);
+  const items = data ?? [];
+  const soldItems = items.filter((p) => p.status === 'SOLD');
 
-  // Called by BuyerProductCard when the user un-bookmarks an item from this list
+  // The card only calls this after its delete succeeded.
   const handleUnsave = (productId: string) => {
-    setItems((prev) => prev.filter((p) => p.id !== productId));
+    mutate((prev) => (prev ?? []).filter((p) => p.id !== productId), false);
+    showToast('Removed from Saved');
+  };
+
+  const handleClearSold = async () => {
+    const ids = soldItems.map((p) => p.id);
+    if (ids.length === 0) return;
+    mutate((prev) => (prev ?? []).filter((p) => p.status !== 'SOLD'), false);
+    const results = await Promise.all(ids.map((id) => toggle(id)));
+    if (results.every((r) => r === 'removed')) {
+      showToast(ids.length === 1 ? 'Cleared 1 sold item' : `Cleared ${ids.length} sold items`);
+    } else {
+      mutate(); // revalidate to restore anything that failed
+      showToast('Could not clear all sold items', 'error');
+    }
   };
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-background flex flex-col">
-        <div className="h-[60px] w-full bg-card border-b border-border flex items-center px-4">
-          <div className="w-8 h-8 rounded-full bg-muted animate-pulse" />
-          <div className="w-32 h-5 rounded-md bg-muted animate-pulse ml-4" />
-        </div>
-        <div className="max-w-5xl mx-auto w-full px-4 py-8 grid grid-cols-2 sm:grid-cols-3 gap-4">
-          {[1, 2, 3, 4, 5, 6].map((i) => (
-            <div key={i} className="w-full aspect-[3/4.2] rounded-3xl bg-muted animate-pulse" />
-          ))}
-        </div>
+      <div className="w-full min-h-screen bg-background flex flex-col items-center justify-center gap-4">
+        <PullSpinner spinning size={36} />
+        <p className="text-sm font-medium text-muted-foreground">Loading saved items…</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground pb-safe selection:bg-orange-500/30">
+    <div ref={bounceRef} className="min-h-full bg-background text-foreground pb-10 selection:bg-orange-500/30">
 
-      {/* HEADER */}
-      <div className="flex-shrink-0 w-full bg-background/95 backdrop-blur-sm border-b border-border shadow-sm sticky top-0 z-50">
+      {/* HEADER — solid, no blur, no border, no shadow */}
+      <div className="sticky top-0 z-40 bg-background">
         <div className="flex items-center gap-3 px-4 py-3">
-          <button onClick={() => router.back()} className="!p-2 -ml-2 text-foreground active:bg-muted transition-colors !rounded-full">
+          <button onClick={() => safeBack(router)} className="!p-2 -ml-2 text-foreground active:bg-muted transition-colors !rounded-full" aria-label="Go back">
             <IonIcon icon={chevronBackOutline} className="text-3xl" />
           </button>
           <div className="flex flex-col">
@@ -128,7 +148,7 @@ export default function SavedItemsPage() {
         </div>
       </div>
 
-      <div className="max-w-5xl mx-auto px-4 py-6">
+      <div ref={listRef} className="max-w-5xl mx-auto px-4 py-6">
 
         {items.length > 0 ? (
           <>
@@ -136,8 +156,16 @@ export default function SavedItemsPage() {
               <h2 className="text-[13px] font-black text-muted-foreground uppercase tracking-widest">
                 {items.length} {items.length === 1 ? 'Item' : 'Items'} Saved
               </h2>
+              {soldItems.length > 0 && (
+                <button
+                  onClick={handleClearSold}
+                  className="text-[13px] font-bold text-orange-500 active:opacity-70 transition-opacity"
+                >
+                  Clear sold ({soldItems.length})
+                </button>
+              )}
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+            <div onClickCapture={saveScroll} className="grid grid-cols-2 sm:grid-cols-3 gap-4">
               {items.map((product) => (
                 <BuyerProductCard
                   key={product.id}
@@ -155,6 +183,8 @@ export default function SavedItemsPage() {
           />
         )}
       </div>
+
+      <Toast {...toast} onClose={hideToast} />
     </div>
   );
 }

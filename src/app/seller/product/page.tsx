@@ -154,17 +154,17 @@ export default function SellerProductDetails() {
   };
 
   if (isLoading) {
-    return <div className="h-screen bg-gray-50 dark:bg-[#0a1120] flex items-center justify-center text-orange-500 font-bold animate-pulse">Loading Details...</div>;
+    return <div className="h-screen bg-gray-50 dark:bg-background flex items-center justify-center text-orange-500 font-bold animate-pulse">Loading Details...</div>;
   }
 
   if (!product) {
-    return <div className="h-screen bg-gray-50 dark:bg-[#0a1120] flex items-center justify-center text-gray-500 font-bold">Product not found.</div>;
+    return <div className="h-screen bg-gray-50 dark:bg-background flex items-center justify-center text-gray-500 font-bold">Product not found.</div>;
   }
 
   const images: string[] = product.images?.length > 0 ? product.images : [];
 
   return (
-    <div className="w-full bg-gray-50 dark:bg-[#0a1120] text-gray-900 dark:text-white pb-10">
+    <div className="w-full bg-gray-50 dark:bg-background text-gray-900 dark:text-white pb-10">
       
       {/* Dynamic Error Modal */}
       {modalConfig.isOpen && (
@@ -187,7 +187,7 @@ export default function SellerProductDetails() {
       )}
 
       {/* 1. Sticky Header */}
-      <div className="sticky top-0 z-50 bg-white/80 dark:bg-[#0f172a]/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 py-4 flex items-center justify-between shadow-sm -mx-4 px-4 md:-mx-8 md:px-8">
+      <div className="sticky top-0 z-50 bg-white/80 dark:bg-black/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 py-4 flex items-center justify-between shadow-sm -mx-4 px-4 md:-mx-8 md:px-8">
         <button onClick={() => router.push('/seller')} className="w-12 h-12 flex items-center justify-center rounded-full bg-transparent hover:bg-black/5 dark:hover:bg-white/10 transition-colors text-gray-900 dark:text-white">
           <IonIcon icon={chevronBackOutline} className="text-2xl" />
         </button>
@@ -251,7 +251,7 @@ export default function SellerProductDetails() {
               )}
             </>
           ) : (
-            <div className="w-full h-full flex flex-col items-center justify-center bg-gray-50 dark:bg-[#1e293b] text-gray-400">
+            <div className="w-full h-full flex flex-col items-center justify-center bg-gray-50 dark:bg-[#171717] text-gray-400">
               <IonIcon icon={imageOutline} className="text-5xl mb-2 opacity-50" />
               <p className="font-bold text-sm">No images</p>
             </div>
@@ -276,15 +276,15 @@ export default function SellerProductDetails() {
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <div className="bg-white dark:bg-[#0f172a] p-4 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
+            <div className="bg-white dark:bg-[#171717] p-4 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
               <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-1">Condition</p>
               <p className="font-bold">{product.condition}</p>
             </div>
-            <div className="bg-white dark:bg-[#0f172a] p-4 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
+            <div className="bg-white dark:bg-[#171717] p-4 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
               <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-1">Category</p>
               <p className="font-bold">{product.category}</p>
             </div>
-            <div className="bg-white dark:bg-[#0f172a] p-4 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm col-span-2">
+            <div className="bg-white dark:bg-[#171717] p-4 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm col-span-2">
               <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-1">Location</p>
               <p className="font-bold">{product.campus} &bull; {product.specific_location}</p>
             </div>
@@ -297,7 +297,7 @@ export default function SellerProductDetails() {
             </div>
           )}
 
-          <div className="bg-white dark:bg-[#0f172a] p-5 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
+          <div className="bg-white dark:bg-[#171717] p-5 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
             <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-3">Description</p>
             <p className="text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap">{product.description}</p>
           </div>
@@ -308,7 +308,7 @@ export default function SellerProductDetails() {
               <h3 className="text-xl font-black text-gray-900 dark:text-white border-b border-gray-200 dark:border-gray-800 pb-3">Seller Analytics</h3>
               
               {/* Performance / Views (DYNAMIC CHART) */}
-              <div className="bg-white dark:bg-[#0f172a] p-5 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
+              <div className="bg-white dark:bg-[#171717] p-5 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
                 <div className="flex justify-between items-center mb-4">
                   <p className="text-sm font-bold text-gray-500 uppercase tracking-wider">Total Views</p>
                   <p className="text-xl font-black text-orange-500">{views.length}</p>
@@ -333,7 +333,7 @@ export default function SellerProductDetails() {
               </div>
 
               {/* Product Reviews */}
-              <div className="bg-white dark:bg-[#0f172a] p-5 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
+              <div className="bg-white dark:bg-[#171717] p-5 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
                 <p className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4">Questions & Feedback</p>
                 
                 {reviews.length === 0 ? (
@@ -394,7 +394,7 @@ export default function SellerProductDetails() {
               </div>
 
               {/* Moderation Reports */}
-              <div className="bg-white dark:bg-[#0f172a] p-5 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
+              <div className="bg-white dark:bg-[#171717] p-5 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm">
                 <p className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4">Moderation Reports</p>
                 <div className="bg-green-50 dark:bg-green-900/10 border border-green-200 dark:border-green-900/50 p-4 rounded-xl flex items-center gap-3">
                   <IonIcon icon={checkmarkCircleOutline} className="text-green-500 text-2xl" />

@@ -51,7 +51,7 @@ export const PinPadModal = ({ isOpen, onClose, pinMode, pin, totalCharge, onPinP
         role="dialog"
         aria-modal="true"
         aria-label={modalTitle}
-        className={`fixed bottom-0 left-0 right-0 z-[100] bg-white dark:bg-[#0f172a] rounded-t-3xl shadow-2xl ${
+        className={`fixed bottom-0 left-0 right-0 z-[100] bg-white dark:bg-[#171717] rounded-t-3xl shadow-2xl ${
           isOpen ? 'translate-y-0 visible' : 'translate-y-full invisible pointer-events-none'
         }`}
         style={{

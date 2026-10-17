@@ -63,10 +63,10 @@ function LoginForm() {
     }
   };
 
-  const inputClasses = "w-full bg-gray-50 dark:bg-[#0f172a] border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white px-12 py-4 rounded-2xl outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-colors shadow-sm";
+  const inputClasses = "w-full bg-gray-50 dark:bg-[#171717] border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white px-12 py-4 rounded-2xl outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-colors shadow-sm";
 
   return (
-    <div className="min-h-screen bg-white dark:bg-[#0a1120] flex flex-col px-6 md:px-8 pt-safe pb-safe">
+    <div className="min-h-screen bg-white dark:bg-background flex flex-col px-6 md:px-8 pt-safe pb-safe">
       
       {error && (
         <Modal isOpen={!!error} onClose={() => setError('')}>

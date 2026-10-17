@@ -1936,8 +1936,8 @@ export default function DealRoomChat() {
                 {...bubbleGestureProps(msg)}
                 style={bubbleSwipeStyle(msg)}
                 className={`relative w-full min-w-0 px-3.5 py-2.5 shadow-xs flex flex-col select-none transition-shadow ${
-                  isMe ? 'bg-[#fff1e7] dark:bg-[#231a14] !rounded-[1.25rem] !rounded-tr-sm border border-orange-500/20' : 'bg-white dark:bg-[#111b2c] !rounded-[1.25rem] !rounded-tl-sm border border-gray-100 dark:border-gray-800'
-                } ${isActiveSearchMatch ? 'ring-2 ring-orange-400 ring-offset-2 dark:ring-offset-[#0a1120]' : ''}`}
+                  isMe ? 'bg-[#fff1e7] dark:bg-[#231a14] !rounded-[1.25rem] !rounded-tr-sm border border-orange-500/20' : 'bg-white dark:bg-[#1f1f1f] !rounded-[1.25rem] !rounded-tl-sm border border-gray-100 dark:border-gray-800'
+                } ${isActiveSearchMatch ? 'ring-2 ring-orange-400 ring-offset-2 dark:ring-offset-background' : ''}`}
               >
                 {renderReplyQuote(msg)}
                 <p className={`text-[15px] font-medium leading-relaxed ${isMe ? 'text-gray-900 dark:text-white' : 'text-gray-900 dark:text-gray-100'} whitespace-pre-wrap break-all`}>
@@ -1974,7 +1974,7 @@ export default function DealRoomChat() {
                 {...bubbleGestureProps(msg)}
                 style={bubbleSwipeStyle(msg)}
                 className={`relative max-w-full min-w-0 px-2.5 py-1.5 shadow-xs flex flex-col gap-0.5 select-none ${
-                  isMe ? 'bg-[#fff1e7] dark:bg-[#231a14] !rounded-2xl !rounded-tr-sm border border-orange-500/20' : 'bg-white dark:bg-[#111b2c] !rounded-2xl !rounded-tl-sm border border-gray-100 dark:border-gray-800'
+                  isMe ? 'bg-[#fff1e7] dark:bg-[#231a14] !rounded-2xl !rounded-tr-sm border border-orange-500/20' : 'bg-white dark:bg-[#1f1f1f] !rounded-2xl !rounded-tl-sm border border-gray-100 dark:border-gray-800'
                 }`}
               >
                 {renderReplyQuote(msg)}
@@ -2025,7 +2025,7 @@ export default function DealRoomChat() {
                 {...bubbleGestureProps(msg)}
                 style={bubbleSwipeStyle(msg)}
                 className={`relative w-full min-w-0 p-1.5 shadow-xs select-none ${
-                  isMe ? 'bg-[#fff1e7] dark:bg-[#231a14] !rounded-2xl !rounded-tr-sm border border-orange-500/20' : 'bg-white dark:bg-[#111b2c] !rounded-2xl !rounded-tl-sm border border-gray-100 dark:border-gray-800'
+                  isMe ? 'bg-[#fff1e7] dark:bg-[#231a14] !rounded-2xl !rounded-tr-sm border border-orange-500/20' : 'bg-white dark:bg-[#1f1f1f] !rounded-2xl !rounded-tl-sm border border-gray-100 dark:border-gray-800'
                 }`}
               >
                 {renderReplyQuote(msg)}
@@ -2072,7 +2072,7 @@ export default function DealRoomChat() {
                 {...bubbleGestureProps(msg)}
                 style={bubbleSwipeStyle(msg)}
                 className={`relative w-full min-w-0 p-1 shadow-sm select-none ${
-                  isMe ? 'bg-[#e5ddd5] dark:bg-[#1f2937] !rounded-2xl !rounded-tr-sm border border-orange-500/30' : 'bg-white dark:bg-[#111b2c] !rounded-2xl !rounded-tl-sm border border-transparent'
+                  isMe ? 'bg-[#e5ddd5] dark:bg-[#1f2937] !rounded-2xl !rounded-tr-sm border border-orange-500/30' : 'bg-white dark:bg-[#1f1f1f] !rounded-2xl !rounded-tl-sm border border-transparent'
                 }`}
               >
                 {renderReplyQuote(msg)}
@@ -2116,14 +2116,14 @@ export default function DealRoomChat() {
   // transformed ancestor. The portal blanked the page, so we render in place.
   // If mobile cropping returns, revisit (e.g. non-fixed flow layout).
   return (
-    <div className="fixed inset-0 z-[999] flex flex-col w-full h-[100dvh] bg-[#e5ddd5] dark:bg-[#0a1120] overflow-hidden">
+    <div className="fixed inset-0 z-[999] flex flex-col w-full h-[100dvh] bg-[#e5ddd5] dark:bg-[#121212] overflow-hidden">
       {/* Background wallpaper with faded Vendi logos pattern */}
       <div
-        className="absolute inset-0 pointer-events-none z-0 opacity-[0.035] dark:opacity-[0.02]"
+        className="absolute inset-0 pointer-events-none z-0 opacity-[0.05] dark:opacity-[0.06]"
         style={{
-          backgroundImage: "url('/icon.png')",
+          backgroundImage: "url('/logo-watermark.png')",
           backgroundRepeat: 'repeat',
-          backgroundSize: '70px 70px',
+          backgroundSize: '110px 110px',
         }}
       />
       {selectedMedia && (
@@ -2214,7 +2214,7 @@ export default function DealRoomChat() {
       })()}
 
       {/* STICKY HEADER */}
-      <div className="flex-shrink-0 w-full bg-white dark:bg-[#111b2c] border-b border-gray-200 dark:border-gray-800/60 pt-safe transition-all shadow-sm z-50">
+      <div className="flex-shrink-0 w-full bg-white dark:bg-black border-b border-gray-200 dark:border-gray-800/60 pt-safe transition-all shadow-sm z-50">
         <div className="flex items-center justify-between px-2 py-2">
           <div className="flex items-center gap-2 min-w-0">
             <button onClick={() => router.back()} className="!p-2 -ml-1 text-gray-900 dark:text-white active:scale-95 transition-transform !rounded-full flex-shrink-0">
@@ -2344,7 +2344,7 @@ export default function DealRoomChat() {
         {messages.length === 0 && !historyLoading && (
           <>
             <div className="flex justify-center mb-6">
-              <span className="px-3 py-1 bg-white/60 dark:bg-[#1f2937]/60 backdrop-blur-md !rounded-lg text-[10px] font-black uppercase tracking-widest text-gray-500 dark:text-gray-400 shadow-sm">
+              <span className="px-3 py-1 bg-white/60 dark:bg-black/60 backdrop-blur-md !rounded-lg text-[10px] font-black uppercase tracking-widest text-gray-500 dark:text-gray-400 shadow-sm">
                 Security Notice
               </span>
             </div>
@@ -2364,7 +2364,7 @@ export default function DealRoomChat() {
             left-aligned like an incoming message, never full width. */}
         {partnerActivity === 'typing' && (
           <div className="flex w-full justify-start animate-in fade-in slide-in-from-bottom-2 duration-200">
-            <div className="w-fit bg-white dark:bg-[#111b2c] !rounded-2xl !rounded-tl-sm px-4 py-3 shadow-sm flex items-center gap-1.5">
+            <div className="w-fit bg-white dark:bg-[#1f1f1f] !rounded-2xl !rounded-tl-sm px-4 py-3 shadow-sm flex items-center gap-1.5">
               <span className="w-2 h-2 !bg-gray-400 dark:!bg-gray-500 !rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
               <span className="w-2 h-2 !bg-gray-400 dark:!bg-gray-500 !rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
               <span className="w-2 h-2 !bg-gray-400 dark:!bg-gray-500 !rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
@@ -2373,7 +2373,7 @@ export default function DealRoomChat() {
         )}
         {partnerActivity === 'recording' && (
           <div className="flex w-full justify-start animate-in fade-in slide-in-from-bottom-2 duration-200">
-            <div className="w-fit bg-white dark:bg-[#111b2c] !rounded-2xl !rounded-tl-sm px-4 py-2.5 shadow-sm flex items-center gap-2">
+            <div className="w-fit bg-white dark:bg-[#1f1f1f] !rounded-2xl !rounded-tl-sm px-4 py-2.5 shadow-sm flex items-center gap-2">
               <IonIcon icon={micOutline} className="!text-orange-500 text-lg animate-pulse" />
               <span className="text-[12px] font-bold text-gray-500 dark:text-gray-400">recording...</span>
             </div>
@@ -2443,7 +2443,7 @@ export default function DealRoomChat() {
           <div className="max-w-2xl mx-auto w-full min-w-0 flex items-end gap-2 relative">
             {(recordState === 'locked' || recordState === 'paused') ? (
               <>
-                <div className="flex-1 min-w-0 overflow-hidden bg-white dark:bg-[#1f2937] !rounded-[24px] min-h-[48px] flex items-center justify-between px-2 shadow-md border border-gray-200 dark:border-gray-700 transition-all">
+                <div className="flex-1 min-w-0 overflow-hidden bg-white dark:bg-black !rounded-[24px] min-h-[48px] flex items-center justify-between px-2 shadow-md border border-gray-200 dark:border-gray-700 transition-all">
                   <button
                     onClick={(e) => { e.preventDefault(); e.stopPropagation(); cancelRecordingAction(); }}
                     className="!w-9 !h-9 !min-w-[36px] !min-h-[36px] !aspect-square !rounded-full flex items-center justify-center text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex-shrink-0 z-10"
@@ -2471,7 +2471,7 @@ export default function DealRoomChat() {
             ) : (
               <>
                 {recordState === 'holding' && (
-                  <div className="absolute left-0 right-[56px] top-0 bottom-0 z-10 flex items-center justify-between pl-4 pr-6 bg-white dark:bg-[#1f2937] !rounded-[24px] shadow-sm pointer-events-none">
+                  <div className="absolute left-0 right-[56px] top-0 bottom-0 z-10 flex items-center justify-between pl-4 pr-6 bg-white dark:bg-black !rounded-[24px] shadow-sm pointer-events-none">
                     <div className="flex items-center gap-2">
                       <IonIcon icon={micOutline} className="text-red-500 text-xl animate-pulse" />
                       <span className="text-gray-900 dark:text-white font-mono text-base">{formatDuration(recordingDuration)}</span>
@@ -2482,7 +2482,7 @@ export default function DealRoomChat() {
                     </div>
                   </div>
                 )}
-                <div className="flex-1 min-w-0 overflow-hidden bg-white dark:bg-[#1f2937] !rounded-[24px] min-h-[48px] flex items-end px-1 shadow-md border border-gray-200 dark:border-gray-700 py-1 z-0">
+                <div className="flex-1 min-w-0 overflow-hidden bg-white dark:bg-black !rounded-[24px] min-h-[48px] flex items-end px-1 shadow-md border border-gray-200 dark:border-gray-700 py-1 z-0">
                   <div className="flex items-center self-end mb-[3px] flex-shrink-0">
                     <button onClick={handleAttachmentClick} className="!p-2 text-gray-500 dark:text-gray-400 active:scale-95 transition-transform !rounded-full">
                       <IonIcon icon={attachOutline} className="text-[22px] pointer-events-none" />
@@ -2557,7 +2557,7 @@ export default function DealRoomChat() {
 
       {/* Initial loading overlay — same PullSpinner as the inbox */}
       {(!currentUser || historyLoading) && !initError && (
-        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-3 bg-[#e5ddd5] dark:bg-[#0a1120]">
+        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-3 bg-[#e5ddd5] dark:bg-[#121212]">
           <PullSpinner spinning size={36} />
           <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Loading chat…</p>
         </div>
@@ -2565,7 +2565,7 @@ export default function DealRoomChat() {
 
       {/* Init failure — never leave the user staring at a spinner forever */}
       {initError && (
-        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-3 px-8 text-center bg-[#e5ddd5] dark:bg-[#0a1120]">
+        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-3 px-8 text-center bg-[#e5ddd5] dark:bg-[#121212]">
           <p className="text-[15px] font-bold text-gray-900 dark:text-white">Couldn't open this chat</p>
           <p className="text-xs text-gray-500 dark:text-gray-400">{initError}</p>
           <button

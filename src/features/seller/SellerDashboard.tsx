@@ -960,7 +960,7 @@ export default function SellerDashboard() {
       <div ref={bounceRef}>
 
       {/* HEADER + TABS: Matched perfectly to Vendi Header using h-12 */}
-      <div className="sticky top-0 z-[60] -mx-4 md:-mx-8 bg-gray-50 dark:bg-[#0a1120]">
+      <div className="sticky top-0 z-[60] -mx-4 md:-mx-8 bg-gray-50 dark:bg-background">
 
         {/* Fixed height container matches your main app header */}
         <div className="h-12 px-4 md:px-8 flex flex-col justify-center">
@@ -1350,7 +1350,7 @@ export default function SellerDashboard() {
               </div>
             ) : products.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-center animate-in fade-in zoom-in-95">
-                <div className="w-20 h-20 bg-gray-100 dark:bg-[#1e293b] rounded-full flex items-center justify-center mb-4">
+                <div className="w-20 h-20 bg-gray-100 dark:bg-[#171717] rounded-full flex items-center justify-center mb-4">
                   <IonIcon icon={imageOutline} className="text-3xl text-gray-400" />
                 </div>
                 <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">No {activeTab} Listings</h3>

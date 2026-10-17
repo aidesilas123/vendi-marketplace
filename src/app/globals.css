@@ -45,7 +45,7 @@
   --color-background: #f9fafb;
 }
 .dark {
-  --color-background: #0b1120;
+  --color-background: #000000;
 }
 
 /* Our typeface wins over any remaining unlayered library CSS */
@@ -82,7 +82,7 @@ html {
 html.dark ion-content, 
 html.dark ion-toolbar, 
 html.dark ion-tab-bar {
-    --background: #0b1120;
+    --background: #000000;
     --border-color: #1f2937;
 }
 
@@ -128,7 +128,7 @@ html, body {
 /* Brand background behind everything: pre-hydration first paint matches the
    native splash + in-app SplashOverlay, so there is never a white flash. */
 html {
-  background: #0B1120;
+  background: #000000;
 }
 
 /* Cold-start splash loader */
@@ -215,7 +215,7 @@ html {
 }
 
 ::view-transition {
-  background-color: light-dark(#f9fafb, #0b1120);
+  background-color: light-dark(#f9fafb, #000000);
 }
 
 /* Forward: new page slides in from the right, covering; old shifts left. */

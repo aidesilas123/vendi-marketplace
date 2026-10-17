@@ -20,7 +20,7 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <!-- Window background matches the splash: any gap between splash exit and
-             WebView paint is invisible (same #0B1120, never white/black flash). -->
+             WebView paint is invisible (same #000000, never white/black flash). -->
         <item name="android:windowBackground">@color/splash_background</item>
     </style>
 
@@ -31,7 +31,7 @@
              that can appear with zero delay, which is why native apps (Claude
              etc.) feel instant. Skipping the icon left a plain dark screen for
              the ~1s WebView startup; showing it here removes that entirely.
-             The icon drawable has #0B1120 baked in (== splash_background), so
+             The icon drawable has #000000 baked in (== splash_background), so
              even if the system masks it, the edge is invisible. The in-app
              SplashOverlay (same bg, same-size logo) then continues seamlessly. -->
         <item name="windowSplashScreenBackground">@color/splash_background</item>

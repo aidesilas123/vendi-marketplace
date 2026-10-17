@@ -39,7 +39,7 @@ const SETTINGS_KEY = 'product-details-settings';
 
 const EMPTY: any[] = []; // stable reference so memo hooks don't re-run every render
 
-const SELLER_JOIN = 'seller:users(username, full_name, avatar_url, is_verified, average_rating)';
+const SELLER_JOIN = 'seller:users(id, username, full_name, avatar_url, is_verified, average_rating)';
 const REVIEW_BUYER_JOIN = 'buyer:buyer_id(full_name, avatar_url)';
 const QA_USER_JOIN = 'user:user_id(full_name, avatar_url, username)';
 
@@ -91,6 +91,7 @@ const parseImages = (raw: unknown): string[] => {
 const mapSeller = (p: any) => ({
   ...p,
   seller: {
+    id: p.seller?.id,
     username: p.seller?.username || p.seller?.full_name?.split(' ')[0] || 'User',
     avatar_url: p.seller?.avatar_url,
     is_verified: p.seller?.is_verified,
@@ -527,8 +528,8 @@ export default function ProductDetails() {
   const [isFullScreenGallery, setIsFullScreenGallery] = useState(false);
 
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
-  const [showAllReviews, setShowAllReviews] = useState(false);
-  const [showAllQA, setShowAllQA] = useState(false);
+  const [visibleReviewCount, setVisibleReviewCount] = useState(PAGE_SIZE);
+  const [visibleQACount, setVisibleQACount] = useState(PAGE_SIZE);
   const [acceptedOffer, setAcceptedOffer] = useState<number | null>(null);
 
   const openGallery = useCallback(() => setIsFullScreenGallery(true), []);
@@ -642,8 +643,8 @@ export default function ProductDetails() {
   useEffect(() => {
     setIsFullScreenGallery(false);
     setReplyingTo(null);
-    setShowAllReviews(false);
-    setShowAllQA(false);
+    setVisibleReviewCount(PAGE_SIZE);
+    setVisibleQACount(PAGE_SIZE);
     setAcceptedOffer(null);
   }, [productId]);
 
@@ -685,8 +686,8 @@ export default function ProductDetails() {
   const isNegotiable = product?.last_price !== null && product?.last_price !== undefined;
   const lastPrice = Number(product?.last_price);
 
-  const visibleReviews = showAllReviews ? reviews : reviews.slice(0, PAGE_SIZE);
-  const visibleQuestions = showAllQA ? topQuestions : topQuestions.slice(0, PAGE_SIZE);
+  const visibleReviews = reviews.slice(0, visibleReviewCount);
+  const visibleQuestions = topQuestions.slice(0, visibleQACount);
 
   // A failed first load (nothing cached) gets a retry screen instead of an endless skeleton.
   const loadError =
@@ -759,9 +760,22 @@ export default function ProductDetails() {
     try {
       const uid = await getUserId();
       if (!uid) { showToast('You must be logged in to leave a review.', 'error'); return false; }
+      if (uid === product.seller_id) { showToast("You can't review your own listing.", 'error'); return false; }
+
+      // One review per buyer per seller (the UNIQUE constraint below is the backstop)
+      const { data: existing } = await supabase
+        .from('seller_reviews')
+        .select('id')
+        .eq('buyer_id', uid)
+        .eq('seller_id', product.seller_id)
+        .maybeSingle();
+      if (existing) { showToast('You have already reviewed this seller.', 'error'); return false; }
 
       const { error } = await supabase.from('seller_reviews').insert({ seller_id: product.seller_id, buyer_id: uid, rating, review_text: text });
-      if (error) { showToast(error.message, 'error'); return false; }
+      if (error) {
+        showToast(error.code === '23505' ? 'You have already reviewed this seller.' : error.message, 'error');
+        return false;
+      }
 
       // Refetch the review list and the seller's rating/total (a trigger may update them)
       await Promise.all([
@@ -876,7 +890,7 @@ export default function ProductDetails() {
       // key = listing id: swapping to another listing starts every box (offer, reply, rating,
       // question draft) fresh, so nothing typed for one item leaks onto the next.
       <React.Fragment key={product.id}>
-        <div className="sticky top-0 z-50 -mx-4 flex items-center justify-between bg-white/90 px-4 py-3 backdrop-blur-md dark:bg-[#0f172a]/90 md:-mx-8 md:px-8">
+        <div className="sticky top-0 z-50 -mx-4 flex items-center justify-between bg-white px-4 py-3 dark:bg-black md:-mx-8 md:px-8">
           <button onClick={() => router.back()} className="flex h-10 w-10 items-center justify-center rounded-full bg-transparent text-gray-900 transition-colors hover:bg-black/5 dark:text-white dark:hover:bg-white/10">
             <IonIcon icon={chevronBackOutline} className="text-2xl" />
           </button>
@@ -1018,9 +1032,15 @@ export default function ProductDetails() {
                       ))}
                     </div>
                     {reviews.length > PAGE_SIZE && (
-                      <button onClick={() => setShowAllReviews((v) => !v)} className="mt-2 text-xs font-bold text-orange-500 hover:underline">
-                        {showAllReviews ? 'Show less' : 'Show more..'}
-                      </button>
+                      visibleReviewCount < reviews.length ? (
+                        <button onClick={() => setVisibleReviewCount((c) => c + PAGE_SIZE)} className="mt-2 text-xs font-bold text-orange-500 hover:underline">
+                          Show more..
+                        </button>
+                      ) : (
+                        <button onClick={() => setVisibleReviewCount(PAGE_SIZE)} className="mt-2 text-xs font-bold text-orange-500 hover:underline">
+                          Show less
+                        </button>
+                      )
                     )}
                   </div>
                 )}
@@ -1089,9 +1109,15 @@ export default function ProductDetails() {
               )}
 
               {topQuestions.length > PAGE_SIZE && (
-                <button onClick={() => setShowAllQA((v) => !v)} className="mb-4 mt-1 text-xs font-bold text-orange-500 hover:underline">
-                  {showAllQA ? 'Show less' : 'Show more..'}
-                </button>
+                visibleQACount < topQuestions.length ? (
+                  <button onClick={() => setVisibleQACount((c) => c + PAGE_SIZE)} className="mb-4 mt-1 text-xs font-bold text-orange-500 hover:underline">
+                    Show more..
+                  </button>
+                ) : (
+                  <button onClick={() => setVisibleQACount(PAGE_SIZE)} className="mb-4 mt-1 text-xs font-bold text-orange-500 hover:underline">
+                    Show less
+                  </button>
+                )
               )}
 
               <div className="mt-2 border-t border-gray-100 bg-transparent pt-4 dark:border-gray-800">
@@ -1178,14 +1204,14 @@ export default function ProductDetails() {
       <ImageViewer images={images} isOpen={isFullScreenGallery} onClose={() => setIsFullScreenGallery(false)} />
 
       {/* Rubber-band wrapper: stays mounted in every state so the bounce always has its element */}
-      <div ref={bounceRef} className="w-full bg-gray-50 pb-10 text-gray-900 dark:bg-[#0a1120] dark:text-white">
+      <div ref={bounceRef} className="w-full bg-gray-50 pb-10 text-gray-900 dark:bg-background dark:text-white">
         {content}
       </div>
 
       {/* "Price accepted by seller" modal */}
       {acceptedOffer !== null && product && (
         <div className="fixed inset-0 z-[250] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" onClick={() => setAcceptedOffer(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-3xl bg-white p-6 text-center shadow-2xl dark:bg-[#0f172a]">
+          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-sm rounded-3xl bg-white p-6 text-center shadow-2xl dark:bg-[#171717]">
             <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-green-500/10 text-green-500">
               <IonIcon icon={checkmarkCircleOutline} className="text-4xl" />
             </div>

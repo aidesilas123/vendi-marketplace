@@ -7,7 +7,7 @@ import { Capacitor } from "@capacitor/core";
  * Branded cold-start splash (native only).
  *
  * Sequence on app open:
- *   1. Android shows the native splash (solid #0B1120 + app icon) until first draw.
+ *   1. Android shows the native splash (solid #000000 + app icon) until first draw.
  *   2. This overlay continues seamlessly from there — same background, full logo.
  *   3. It lifts only when the app signals readiness (`vendi:app-ready`, fired by
  *      AppShell once auth state is known), with a minimum brand beat and a hard
@@ -71,7 +71,7 @@ export function SplashOverlay() {
   return (
     <div
       aria-hidden
-      className={`fixed inset-0 z-[100] flex flex-col items-center justify-center bg-[#0B1120] transition-opacity duration-500 ${
+      className={`fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black transition-opacity duration-500 ${
         fading ? "opacity-0" : "opacity-100"
       }`}
     >
