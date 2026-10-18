@@ -10,11 +10,12 @@ import { Avatar } from '@/shared/Avatar';
 interface HeaderProps {
   onOpenSidebar: () => void;
   onRefreshData?: () => Promise<void>; 
+  onOpenNotifications?: () => void;
   user: { name: string; avatarUrl?: string } | null;
   unreadNotifications?: number;
 }
 
-export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications = 0 }: HeaderProps) => {
+export const Header = ({ onOpenSidebar, onRefreshData, onOpenNotifications, user, unreadNotifications = 0 }: HeaderProps) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
@@ -71,6 +72,7 @@ export const Header = ({ onOpenSidebar, onRefreshData, user, unreadNotifications
             <button
               type="button"
               aria-label={`Notifications${unreadNotifications > 0 ? ` (${unreadNotifications} unread)` : ''}`}
+              onClick={onOpenNotifications}
               className="relative w-10 h-10 flex-shrink-0 rounded-full bg-transparent flex items-center justify-center text-muted-foreground hover:bg-muted transition-colors"
             >
               <span suppressHydrationWarning className="flex items-center justify-center">

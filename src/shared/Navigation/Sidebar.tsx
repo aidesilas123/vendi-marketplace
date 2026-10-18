@@ -16,6 +16,7 @@ import {
   chevronForwardOutline,
   starOutline,
   bookmarkOutline,
+  chatbubblesOutline,
   alertCircleOutline,
   informationCircleOutline,
   shieldHalfOutline,
@@ -28,6 +29,7 @@ import { Modal } from '@/shared/Modal/Modal';
 import { Button } from '@/shared/Button';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 import { registerBackHandler } from '@/shared/HardwareBackButton';
+import { unregisterPushToken } from '@/lib/push';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -98,6 +100,27 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
   const realName = profile?.full_name || user?.name;
   const realEmail = profile?.email || user?.email;
 
+  // 3. Badge counts: unanswered questions + new reviews (last 7 days)
+  const { data: badgeCounts } = useSWR(
+    targetId ? `sidebar-badges-${targetId}` : null,
+    async () => {
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      const [productsRes, reviewsRes] = await Promise.all([
+        supabase.from('products').select('id').eq('seller_id', targetId),
+        supabase.from('seller_reviews').select('id', { count: 'exact', head: true }).eq('seller_id', targetId).gte('created_at', sevenDaysAgo.toISOString()),
+      ]);
+      const ids = (productsRes.data ?? []).map((p: any) => p.id);
+      let unanswered = 0;
+      if (ids.length > 0) {
+        const { data: qa } = await supabase.from('product_reviews').select('id, parent_id').in('product_id', ids);
+        const repliedTo = new Set((qa ?? []).filter((q: any) => q.parent_id).map((q: any) => q.parent_id));
+        unanswered = (qa ?? []).filter((q: any) => !q.parent_id && !repliedTo.has(q.id)).length;
+      }
+      return { unanswered, newReviews: reviewsRes.count ?? 0, isSeller: ids.length > 0 };
+    }
+  );
+
   // Prevent body scroll when open
   useEffect(() => {
     if (isOpen || showSignOutModal) {
@@ -119,6 +142,7 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
   };
 
   const handleSignOut = async () => {
+    await unregisterPushToken();
     await supabase.auth.signOut();
     setShowSignOutModal(false);
     onClose();
@@ -165,10 +189,11 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
     isHorizontalSwipe.current = null;
   };
 
-  const ACCOUNT_LINKS = [
+  const ACCOUNT_LINKS: { name: string; icon: string; path: string; badge?: number; hide?: boolean }[] = [
     { name: 'My Profile', icon: personOutline, path: targetId ? `/profile?id=${targetId}` : '/profile' },
     { name: 'Verification', icon: shieldCheckmarkOutline, path: '/verification' },
-    { name: 'My Reviews', icon: starOutline, path: '/reviews' },
+    { name: 'My Reviews', icon: starOutline, path: '/reviews', badge: badgeCounts?.newReviews ?? 0 },
+    { name: 'Questions', icon: chatbubblesOutline, path: '/questions', badge: badgeCounts?.unanswered ?? 0, hide: !badgeCounts?.isSeller },
     { name: 'Saved Items', icon: bookmarkOutline, path: '/saved' },
     { name: 'Disputes & Resolutions', icon: alertCircleOutline, path: '/disputes' },
     { name: 'Settings', icon: settingsOutline, path: '/settings' },
@@ -259,7 +284,9 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
               <p className="text-[11px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-[0.2em] mb-1">
                 Account
               </p>
-              {ACCOUNT_LINKS.map((link) => (
+              {ACCOUNT_LINKS.filter((link) => !link.hide).map((link) => {
+                const badge = link.badge ?? 0;
+                return (
                 <button 
                   key={link.name}
                   onClick={() => handleNavigation(link.path)} 
@@ -269,9 +296,17 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
                     <IonIcon icon={link.icon} className="text-[22px] text-orange-500 transition-colors" />
                     <span className="text-[15px] font-bold text-gray-900 dark:text-white">{link.name}</span>
                   </div>
-                  <IonIcon icon={chevronForwardOutline} className="text-gray-300 dark:text-gray-600 text-sm" />
+                  <div className="flex items-center gap-2">
+                    {badge > 0 && (
+                      <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-orange-500 text-white text-[11px] font-black flex items-center justify-center">
+                        {badge > 99 ? '99+' : badge}
+                      </span>
+                    )}
+                    <IonIcon icon={chevronForwardOutline} className="text-gray-300 dark:text-gray-600 text-sm" />
+                  </div>
                 </button>
-              ))}
+                );
+              })}
             </div>
 
             <div className="flex flex-col gap-1 mt-6">

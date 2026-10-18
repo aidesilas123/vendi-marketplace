@@ -24,7 +24,7 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "ABU Vendi",
+  title: "Vendi",
   description: "Secure multi-campus trading platform",
 };
 

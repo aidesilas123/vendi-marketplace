@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
@@ -9,13 +9,44 @@ import { BottomNav } from './BottomNav';
 import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { mutate as globalMutate } from 'swr';
 import { ensurePresence, dropPresence, ensureChannel, dropChannel } from '@/lib/realtime';
+import { registerPushToken } from '@/lib/push';
+import { useUnreadNotifications } from '@/shared/hooks/useUnreadNotifications';
 
 interface AppShellProps {
   children: React.ReactNode;
 }
 
+const PAGE_TITLES: Record<string, string> = {
+  chats: 'Messages',
+  notifications: 'Notifications',
+  wallet: 'Wallet',
+  transactions: 'Transactions',
+  saved: 'Saved',
+  profile: 'Profile',
+  seller: 'Sell',
+  settings: 'Settings',
+  product: 'Listing',
+  buy: 'Checkout',
+  order: 'Order',
+  dispute: 'Dispute',
+  disputes: 'Disputes',
+  questions: 'Questions',
+  reviews: 'Reviews',
+  verification: 'Verification',
+  about: 'About',
+  support: 'Support',
+  safety: 'Safety',
+  terms: 'Terms',
+  'how-it-works': 'How it works',
+  report: 'Report',
+  login: 'Log in',
+  signup: 'Sign up',
+};
+
 export const AppShell = ({ children }: AppShellProps) => {
   const pathname = usePathname();
+  const router = useRouter();
+  const { unread } = useUnreadNotifications();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [user, setUser] = useState<{ id?: string; name: string; email: string; avatarUrl?: string } | null>(null);
 
@@ -39,6 +70,14 @@ export const AppShell = ({ children }: AppShellProps) => {
   // transactions page's own container), so they never double-bounce.
   const bounceRef = useRef<HTMLDivElement>(null);
   useRubberBand(bounceRef, { scrollerId: 'main-scroll-container', top: false, bottom: true, ready: showShell });
+
+  // Browser tab title follows the page. Every page is a client component,
+  // so per-page `metadata` exports aren't available — one map covers all.
+  useEffect(() => {
+    const seg = (pathname ?? '/').split('/')[1] ?? '';
+    const label = PAGE_TITLES[seg];
+    document.title = label ? `${label} | Vendi` : 'Vendi';
+  }, [pathname]);
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -96,6 +135,10 @@ export const AppShell = ({ children }: AppShellProps) => {
   useEffect(() => {
     if (!user?.id) return;
     const userId = user.id;
+
+    // 0. Push: register this device's FCM token (native only, no-op on web).
+    //    Tapping a notification deep-links via the payload's `route`.
+    void registerPushToken((route) => router.push(route));
 
     // 1. This device owns global presence: the user appears online app-wide,
     //    from the moment the app opens (not only inside a chat room).
@@ -160,7 +203,8 @@ export const AppShell = ({ children }: AppShellProps) => {
           <Header 
             onOpenSidebar={() => setIsSidebarOpen(true)} 
             user={user} 
-            unreadNotifications={2} 
+            unreadNotifications={unread} 
+            onOpenNotifications={() => router.push('/notifications')}
             onRefreshData={async () => {
               window.dispatchEvent(new Event('refresh-feed'));
             }}

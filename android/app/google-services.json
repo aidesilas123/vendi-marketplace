@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "961198973394",
+    "project_id": "abu-vendi",
+    "storage_bucket": "abu-vendi.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:961198973394:android:979b414b3bd6ccb959a80b",
+        "android_client_info": {
+          "package_name": "com.vendi.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCd4VPiRKUvfh0V084F1mJWAcVkRZavAVk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

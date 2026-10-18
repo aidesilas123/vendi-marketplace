@@ -5,6 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { safeBack } from '@/shared/safeBack';
 import useSWR, { useSWRConfig } from 'swr';
 import { supabase } from '@/lib/supabase';
+import { notify } from '@/lib/notify';
 import { calcFees, naira } from '@/lib/pricing';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { Avatar } from '@/shared/Avatar';
@@ -297,6 +298,28 @@ export default function BuyPage() {
 
       paymentDone.current = true;
       setActiveModal('none');
+
+      // New order -> seller (payment secured in escrow)
+      if (product.seller_id && product.seller_id !== userId) {
+        void notify({
+          userId: product.seller_id,
+          type: 'order',
+          title: 'New order received!',
+          body: `"${product.title}" — payment secured in escrow. Chat is now unlocked.`,
+          route: `/order?ref=${data.reference}`,
+        });
+      }
+
+      // Escrow hold -> buyer (money-movement record for the bell + push)
+      if (userId) {
+        void notify({
+          userId,
+          type: 'wallet',
+          title: 'Payment held in escrow',
+          body: `Your payment for "${product.title}" is secured until you confirm receipt.`,
+          route: `/order?ref=${data.reference}`,
+        });
+      }
 
       // The balance and the listing status just changed: refresh both in the background
       // so the wallet and the rest of the app don't show old numbers.

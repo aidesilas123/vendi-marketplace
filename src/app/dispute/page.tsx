@@ -6,6 +6,7 @@ import { safeBack } from '@/shared/safeBack';
 import useSWR from 'swr';
 import { keys, fetchAuthUser, refreshAfterOrderWrite } from '@/lib/swr-orders';
 import { supabase } from '@/lib/supabase';
+import { notify } from '@/lib/notify';
 import { Button } from '@/shared/Button';
 import { Dropdown } from '@/shared/Dropdown';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
@@ -124,6 +125,17 @@ export default function DisputePage() {
 
       // Purge cached data to reflect the new "disputed" status globally
       refreshAfterOrderWrite(txRef!);
+
+      // Dispute opened -> seller (funds frozen)
+      if (transaction?.seller_id) {
+        void notify({
+          userId: transaction.seller_id,
+          type: 'dispute',
+          title: 'A dispute was opened on your order',
+          body: `Order ${txRef} — funds are frozen until it is resolved.`,
+          route: `/dispute?ref=${txRef}`,
+        });
+      }
       
       showToast('Dispute raised successfully. Funds frozen.', 'success');
       

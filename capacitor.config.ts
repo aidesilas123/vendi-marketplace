@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.campus.marketplace',
+  appId: 'com.vendi.app',
   appName: 'Vendi',
   webDir: 'out',
   plugins: {

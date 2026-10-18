@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { notify } from '@/lib/notify';
 
 const MAX_IMAGES = 5;
 
@@ -210,6 +211,26 @@ export async function submitReviewAction(
       }]);
 
     if (error) throw new Error(error.message);
+
+    // Seller replied in a Q&A thread -> notify the question asker (unless self).
+    if (parentId) {
+      try {
+        const { data: parent } = await supabase
+          .from('product_reviews')
+          .select('user_id')
+          .eq('id', parentId)
+          .maybeSingle();
+        if (parent?.user_id && parent.user_id !== userId) {
+          void notify({
+            userId: parent.user_id,
+            type: 'question',
+            title: 'The seller replied to your question',
+            body: content.slice(0, 90),
+            route: `/product?id=${productId}`,
+          });
+        }
+      } catch { /* notification must not fail the reply */ }
+    }
 
     return { success: true };
 

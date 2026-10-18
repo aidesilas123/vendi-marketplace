@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">ABU Vendi</string>
-    <string name="title_activity_main">ABU Vendi</string>
-    <string name="package_name">com.abuvendi.app</string>
-    <string name="custom_url_scheme">com.abuvendi.app</string>
+    <string name="app_name">Vendi</string>
+    <string name="title_activity_main">Vendi</string>
+    <string name="package_name">com.vendi.app</string>
+    <string name="custom_url_scheme">com.vendi.app</string>
 </resources>

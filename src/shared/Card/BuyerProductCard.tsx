@@ -156,8 +156,17 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
         className="relative z-10 px-1 py-2 flex items-center gap-1.5 overflow-hidden w-full text-left active:opacity-70 transition-opacity"
       >
         <Avatar src={product.seller?.avatar_url} name={product.seller?.username || 'User'} size="sm" />
-        <span className="text-[10px] font-bold text-gray-900 dark:text-white truncate">@{product.seller?.username || 'user'}</span>
-        <Badge isVerified={product.seller?.is_verified} className="flex-shrink-0" />
+        <span className="flex flex-col min-w-0 leading-tight">
+          <span className="flex items-center gap-1 min-w-0">
+            <span className="text-[10px] font-bold text-gray-900 dark:text-white truncate">@{product.seller?.username || 'user'}</span>
+            <Badge isVerified={product.seller?.is_verified} className="flex-shrink-0" />
+          </span>
+          {product.seller?.is_verified && (
+            <span className="text-[7px] font-bold uppercase tracking-[0.1em] text-green-600/80 dark:text-green-400/80">
+              Verified student
+            </span>
+          )}
+        </span>
       </button>
 
       <div className="relative w-full aspect-square bg-gray-50 dark:bg-gray-900 flex items-center justify-center overflow-hidden rounded-2xl">

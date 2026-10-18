@@ -2,8 +2,9 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
-import { IonIcon } from '@ionic/react';
-import { alertCircleOutline, imageOutline, checkmarkCircleOutline } from 'ionicons/icons';
+import { useRouter } from 'next/navigation';
+import { IonIcon } from '@/shared/Icon/Icon';
+import { alertCircleOutline, imageOutline, checkmarkCircleOutline, chatbubblesOutline, eyeOutline, bagHandleOutline, layersOutline, chevronForwardOutline } from 'ionicons/icons';
 import { NIGERIAN_UNIVERSITIES } from '@/constants/universities';
 import { Button } from '@/shared/Button';
 import { Modal } from '@/shared/Modal/Modal';
@@ -23,7 +24,7 @@ import Link from 'next/link';
 /*  Constants                                                                 */
 /* -------------------------------------------------------------------------- */
 
-const TABS = ['Post Item', 'Draft', 'Pending Review', 'Approved', 'Active', 'Sold', 'Rejected'];
+const TABS = ['Post Item', 'Active', 'Pending Review', 'Approved', 'Sold', 'Draft', 'Rejected'];
 const CATEGORIES = ['Hostel Stuff', 'Electronics', 'Gadgets', 'Fashion', 'Books', 'Cooking Stuff', 'Other'];
 const CONDITIONS = ['New', 'Used'];
 const QUANTITY_OPTIONS = [...Array.from({ length: 10 }, (_, i) => String(i + 1)), 'Bulk'];
@@ -145,6 +146,41 @@ async function fetchSellerListings(userId: string, tab: string, limit: number) {
   const { data, error } = await query.order('created_at', { ascending: false }).limit(limit);
   if (error) throw error;
   return (data ?? []) as any[];
+}
+
+/* Seller-level overview for the dashboard header: KPIs + anything needing attention. */
+async function fetchSellerOverview(userId: string) {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data: products } = await supabase
+    .from('products')
+    .select('id, title, status')
+    .eq('seller_id', userId);
+  const all = (products ?? []) as any[];
+  const ids = all.map((p) => p.id);
+  const activeCount = all.filter((p) => p.status === 'ACTIVE' || p.status === 'APPROVED').length;
+  const rejected = all.filter((p) => p.status === 'REJECTED').slice(0, 3);
+
+  if (ids.length === 0) {
+    return { activeCount: 0, views7d: 0, unanswered: 0, orders7d: 0, rejected: [] as any[] };
+  }
+
+  const [viewsRes, qaRes, ordersRes] = await Promise.all([
+    supabase.from('product_views').select('id', { count: 'exact', head: true }).in('product_id', ids).gte('created_at', sevenDaysAgo),
+    supabase.from('product_reviews').select('id, parent_id').in('product_id', ids),
+    supabase.from('transactions').select('id', { count: 'exact', head: true }).in('product_id', ids).gte('created_at', sevenDaysAgo),
+  ]);
+
+  const repliedTo = new Set((qaRes.data ?? []).filter((q: any) => q.parent_id).map((q: any) => q.parent_id));
+  const unanswered = (qaRes.data ?? []).filter((q: any) => !q.parent_id && !repliedTo.has(q.id)).length;
+
+  return {
+    activeCount,
+    views7d: viewsRes.count ?? 0,
+    unanswered,
+    orders7d: ordersRes.count ?? 0,
+    rejected,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -325,6 +361,7 @@ const AmountInput = ({
 /* -------------------------------------------------------------------------- */
 
 export default function SellerDashboard() {
+  const router = useRouter();
   // Always starts on 'Post Item' so server and client render the same thing.
   // The real tab (URL param or last saved) is applied in the mount effect below.
   const [activeTab, setActiveTab] = useState('Post Item');
@@ -413,6 +450,16 @@ export default function SellerDashboard() {
   // After any write: quietly refetch every listings tab that has been opened
   const refreshListings = () =>
     globalMutate((key) => Array.isArray(key) && key[0] === LISTINGS_KEY);
+
+  // Seller overview (KPIs + needs-attention). Lives outside the tab cache
+  // so it stays fresh across tab switches; refreshed after writes too.
+  const { data: overview } = useSWR(
+    userId ? (['seller-overview', userId] as const) : null,
+    ([, uid]) => fetchSellerOverview(uid),
+    { revalidateOnFocus: true, dedupingInterval: 30000 }
+  );
+  const refreshOverview = () =>
+    globalMutate((key) => Array.isArray(key) && key[0] === 'seller-overview');
 
   const loadMore = async () => {
     if (isLoadingMore) return;
@@ -596,7 +643,7 @@ export default function SellerDashboard() {
       }
 
       // Make sure the tab we just jumped to isn't showing an old cached list
-      refreshListings();
+      refreshListings(); refreshOverview();
       resetForm();
     } catch (err: any) {
       setNotification({ type: 'error', message: 'Error saving product: ' + (err?.message || 'Something went wrong.') });
@@ -613,7 +660,7 @@ export default function SellerDashboard() {
 
     if (!error) {
       mutateListings(prev => prev?.filter(p => p.id !== id), { revalidate: false });
-      refreshListings();
+      refreshListings(); refreshOverview();
       showGlobalToast('Item deleted successfully.');
     } else {
       showGlobalToast('Error deleting item: ' + error.message, 'error');
@@ -632,7 +679,7 @@ export default function SellerDashboard() {
             : prev?.filter(p => p.id !== id),
         { revalidate: false }
       );
-      refreshListings();
+      refreshListings(); refreshOverview();
       showGlobalToast('Item marked as sold successfully!');
     } else {
       showGlobalToast('Error marking item as sold.', 'error');
@@ -674,7 +721,7 @@ export default function SellerDashboard() {
       if (activeTab === 'Active' || activeTab === 'Approved') {
         mutateListings(prev => [data, ...(prev ?? [])], { revalidate: false });
       }
-      refreshListings();
+      refreshListings(); refreshOverview();
       showGlobalToast('Listing duplicated successfully!');
     } else {
       showGlobalToast('Error duplicating listing.', 'error');
@@ -964,7 +1011,7 @@ export default function SellerDashboard() {
 
         {/* Fixed height container matches your main app header */}
         <div className="h-12 px-4 md:px-8 flex flex-col justify-center">
-          <h1 className="text-lg md:text-2xl font-black leading-none text-[#0f172a] dark:text-white flex items-baseline gap-2">
+          <h1 className="text-lg md:text-2xl font-black leading-none text-gray-900 dark:text-white flex items-baseline gap-2">
             Seller <span className="text-[#D4AF37]">Dashboard</span>
           </h1>
         </div>
@@ -1337,6 +1384,60 @@ export default function SellerDashboard() {
 
         {tabHydrated && activeTab !== 'Post Item' && (
           <div className="mt-2">
+            {/* Seller overview: KPIs + needs-attention */}
+            {overview && (
+              <div className="mb-6 animate-in fade-in">
+                <div className="grid grid-cols-4 gap-2">
+                  {[
+                    { icon: layersOutline, value: overview.activeCount, label: 'Active' },
+                    { icon: eyeOutline, value: overview.views7d, label: 'Views 7d' },
+                    { icon: chatbubblesOutline, value: overview.unanswered, label: 'Questions' },
+                    { icon: bagHandleOutline, value: overview.orders7d, label: 'Orders 7d' },
+                  ].map((kpi) => (
+                    <div key={kpi.label} className="flex flex-col items-center py-2">
+                      <IonIcon icon={kpi.icon} className="text-xl text-orange-500 mb-1" />
+                      <p className="text-lg font-black text-gray-900 dark:text-white">{kpi.value.toLocaleString()}</p>
+                      <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">{kpi.label}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {(overview.unanswered > 0 || overview.rejected.length > 0) && (
+                  <div className="mt-3 space-y-3">
+                    {overview.unanswered > 0 && (
+                      <button
+                        onClick={() => router.push('/questions')}
+                        className="w-full flex items-center gap-3 text-left"
+                      >
+                        <div className="w-9 h-9 rounded-full bg-orange-500/10 flex items-center justify-center flex-shrink-0">
+                          <IonIcon icon={chatbubblesOutline} className="text-lg text-orange-500" />
+                        </div>
+                        <p className="text-sm text-gray-700 dark:text-gray-200 flex-1">
+                          <span className="font-black text-gray-900 dark:text-white">{overview.unanswered}</span>{' '}
+                          question{overview.unanswered === 1 ? '' : 's'} need{overview.unanswered === 1 ? 's' : ''} your reply
+                        </p>
+                        <IonIcon icon={chevronForwardOutline} className="text-gray-300 dark:text-gray-600 text-sm" />
+                      </button>
+                    )}
+                    {overview.rejected.map((p: any) => (
+                      <div key={p.id} className="flex items-center gap-3">
+                        <IonIcon icon={alertCircleOutline} className="text-xl text-red-500 flex-shrink-0" />
+                        <p className="text-sm text-gray-700 dark:text-gray-200 flex-1 truncate">
+                          <span className="font-bold text-gray-900 dark:text-white">{p.title}</span>
+                          <span className="text-gray-400 dark:text-gray-500"> was rejected</span>
+                        </p>
+                        <button
+                          onClick={() => handleEdit(p.id)}
+                          className="text-sm font-bold text-orange-500 flex-shrink-0"
+                        >
+                          Fix
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {isLoadingProducts ? (
               <div className="flex items-center justify-center py-20 animate-in fade-in">
                 <PullSpinner spinning size={32} />

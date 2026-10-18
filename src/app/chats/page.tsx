@@ -74,6 +74,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation';
 import useSWR, { mutate as globalMutate } from 'swr';
 import { supabase } from '@/lib/supabase';
+import { notify } from '@/lib/notify';
 import { Avatar } from '@/shared/Avatar';
 import { Badge } from '@/shared/Badge';
 import IonIcon from '@/shared/Icon/Icon';
@@ -943,6 +944,23 @@ export default function DealRoomChat() {
   };
 
   const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  // Push + in-app notification to the chat partner (fire-and-forget).
+  const notifyChatPartner = (msg: any) => {
+    if (!msg?.receiver_id || !currentUser) return;
+    const preview =
+      msg.message_type === 'text' ? (msg.content || 'New message')
+      : msg.message_type === 'audio' ? 'Voice note'
+      : 'Sent a photo';
+    void notify({
+      userId: msg.receiver_id,
+      type: 'chat',
+      title: currentUser.full_name || 'New message',
+      body: preview,
+      route: `/chats?ref=${txRef}&seller=${msg.sender_id}`,
+    });
+  };
+
   const buildReplyMeta = () => {
     if (!replyTarget) return {};
     const meta: Record<string, any> = {
@@ -1013,6 +1031,7 @@ export default function DealRoomChat() {
       if (partnerId) {
         void broadcastTo(`user_inbox_${partnerId}`, 'new_message', savedMsg);
       }
+      void notifyChatPartner(savedMsg);
       void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
     }
   };
@@ -1115,6 +1134,7 @@ export default function DealRoomChat() {
         if (partnerId) {
           void broadcastTo(`user_inbox_${partnerId}`, 'new_message', savedMsg);
         }
+        void notifyChatPartner(savedMsg);
         void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
       } else throw new Error("Database save failed");
     } catch (err: any) {
@@ -1632,6 +1652,7 @@ export default function DealRoomChat() {
       if (partnerId) {
         void broadcastTo(`user_inbox_${partnerId}`, 'new_message', savedMsg);
       }
+      void notifyChatPartner(savedMsg);
       void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
     } else {
       failVoiceNote(tempId, new Error("Database save failed"));
@@ -2471,7 +2492,7 @@ export default function DealRoomChat() {
             ) : (
               <>
                 {recordState === 'holding' && (
-                  <div className="absolute left-0 right-[56px] top-0 bottom-0 z-10 flex items-center justify-between pl-4 pr-6 bg-white dark:bg-black !rounded-[24px] shadow-sm pointer-events-none">
+                  <div className="absolute left-0 right-[56px] top-0 bottom-0 z-10 flex items-center justify-between pl-4 pr-6 bg-white dark:bg-[#1f2937] !rounded-[24px] shadow-sm pointer-events-none">
                     <div className="flex items-center gap-2">
                       <IonIcon icon={micOutline} className="text-red-500 text-xl animate-pulse" />
                       <span className="text-gray-900 dark:text-white font-mono text-base">{formatDuration(recordingDuration)}</span>
@@ -2557,7 +2578,7 @@ export default function DealRoomChat() {
 
       {/* Initial loading overlay — same PullSpinner as the inbox */}
       {(!currentUser || historyLoading) && !initError && (
-        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-3 bg-[#e5ddd5] dark:bg-[#121212]">
+        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-3 bg-[#e5ddd5] dark:bg-background">
           <PullSpinner spinning size={36} />
           <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Loading chat…</p>
         </div>
@@ -2565,7 +2586,7 @@ export default function DealRoomChat() {
 
       {/* Init failure — never leave the user staring at a spinner forever */}
       {initError && (
-        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-3 px-8 text-center bg-[#e5ddd5] dark:bg-[#121212]">
+        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-3 px-8 text-center bg-[#e5ddd5] dark:bg-background">
           <p className="text-[15px] font-bold text-gray-900 dark:text-white">Couldn't open this chat</p>
           <p className="text-xs text-gray-500 dark:text-gray-400">{initError}</p>
           <button

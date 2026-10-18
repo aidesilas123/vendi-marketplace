@@ -4,12 +4,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
+import useSWR from 'swr';
+import { supabase } from '@/lib/supabase';
 import { safeBack } from '@/shared/safeBack';
 import { Button } from '@/shared/Button';
 import { Modal } from '@/shared/Modal/Modal';
 import { ToggleSwitch } from '@/shared/ToggleSwitch';
 import { useRubberBand } from '@/shared/hooks/useRubberBand';
-import { IonIcon } from '@ionic/react';
+import { IonIcon } from '@/shared/Icon/Icon';
 import {
   chevronBackOutline,
   chevronForwardOutline,
@@ -18,7 +20,11 @@ import {
   notificationsOutline,
   cartOutline,
   chatbubblesOutline,
-  bookmarkOutline,
+  helpCircleOutline,
+  walletOutline,
+  starOutline,
+  warningOutline,
+  megaphoneOutline,
   lockClosedOutline,
   hardwareChipOutline,
   desktopOutline,
@@ -26,16 +32,67 @@ import {
 } from 'ionicons/icons';
 import packageJson from '../../../package.json';
 
+type NotifPrefs = {
+  master: boolean;
+  chat: boolean;
+  question: boolean;
+  order: boolean;
+  wallet: boolean;
+  review: boolean;
+  dispute: boolean;
+  announcement: boolean;
+};
+
+const DEFAULT_PREFS: NotifPrefs = {
+  master: true,
+  chat: true,
+  question: true,
+  order: true,
+  wallet: true,
+  review: true,
+  dispute: true,
+  announcement: true,
+};
+
+async function fetchNotifPrefs(): Promise<NotifPrefs> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Not logged in');
+  const { data, error } = await supabase
+    .from('notification_preferences')
+    .select('master, chat, question, "order", wallet, review, dispute, announcement')
+    .eq('user_id', user.id)
+    .maybeSingle();
+  if (error) throw error;
+  return { ...DEFAULT_PREFS, ...(data ?? {}) };
+}
+
 export default function SettingsPage() {
   const router = useRouter();
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
-  // Notification toggles — kept as local state; wired up when push notifications land.
-  const [pushEnabled, setPushEnabled] = useState(true);
-  const [orderEnabled, setOrderEnabled] = useState(true);
-  const [chatEnabled, setChatEnabled] = useState(true);
-  const [savedEnabled, setSavedEnabled] = useState(false);
+  // Notification preferences — persisted per user, enforced by send-push/broadcast.
+  // Missing row = everything on.
+  const { data: prefsData, mutate: mutatePrefs } = useSWR('notif-prefs', fetchNotifPrefs, {
+    revalidateOnFocus: false,
+    dedupingInterval: 30000,
+  });
+  const prefs: NotifPrefs = { ...DEFAULT_PREFS, ...(prefsData ?? {}) };
+
+  const setPref = async (key: keyof NotifPrefs, value: boolean) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    // Optimistic: flip instantly, roll back on failure.
+    const prev = prefs;
+    void mutatePrefs({ ...prev, [key]: value }, { revalidate: false });
+    const { error } = await supabase
+      .from('notification_preferences')
+      .upsert(
+        { user_id: user.id, [key]: value, updated_at: new Date().toISOString() },
+        { onConflict: 'user_id' }
+      );
+    if (error) void mutatePrefs(prev, { revalidate: false });
+  };
 
   const [showCacheModal, setShowCacheModal] = useState(false);
 
@@ -82,12 +139,22 @@ export default function SettingsPage() {
     { id: 'system', label: 'System', icon: desktopOutline },
   ] as const;
 
-  const notifRows = [
-    { icon: notificationsOutline, title: 'Push Notifications', sub: 'Master alert toggle', value: pushEnabled, set: setPushEnabled, locked: false },
-    { icon: cartOutline, title: 'Order Updates', sub: 'Status changes', value: orderEnabled, set: setOrderEnabled, locked: !pushEnabled },
-    { icon: chatbubblesOutline, title: 'Chat Messages', sub: 'Direct messages', value: chatEnabled, set: setChatEnabled, locked: !pushEnabled },
-    { icon: bookmarkOutline, title: 'Saved Items', sub: 'Price drops or sold', value: savedEnabled, set: setSavedEnabled, locked: !pushEnabled },
-  ];
+  const notifRows = (
+    [
+      { icon: notificationsOutline, title: 'Push Notifications', sub: 'Master alert toggle', key: 'master', locked: false },
+      { icon: chatbubblesOutline, title: 'Chat Messages', sub: 'Direct messages', key: 'chat', locked: !prefs.master },
+      { icon: helpCircleOutline, title: 'Questions & Replies', sub: 'Listing Q&A activity', key: 'question', locked: !prefs.master },
+      { icon: cartOutline, title: 'Order Updates', sub: 'New orders and payouts', key: 'order', locked: !prefs.master },
+      { icon: walletOutline, title: 'Wallet Activity', sub: 'Top-ups and withdrawals', key: 'wallet', locked: !prefs.master },
+      { icon: starOutline, title: 'Reviews', sub: 'New ratings on your profile', key: 'review', locked: !prefs.master },
+      { icon: warningOutline, title: 'Dispute Alerts', sub: 'Disputes on your orders', key: 'dispute', locked: !prefs.master },
+      { icon: megaphoneOutline, title: 'Announcements', sub: 'News from Vendi', key: 'announcement', locked: !prefs.master },
+    ] as const
+  ).map((row) => ({
+    ...row,
+    value: prefs[row.key],
+    set: (v: boolean) => setPref(row.key, v),
+  }));
 
   return (
     <div className="min-h-screen bg-background text-gray-900 dark:text-white selection:bg-orange-500/30">
@@ -96,9 +163,7 @@ export default function SettingsPage() {
       <div className="flex-shrink-0 w-full bg-background sticky top-0 z-50">
         <div className="flex items-center gap-3 px-4 py-3">
           <button onClick={() => safeBack(router)} aria-label="Go back" className="!p-2 -ml-2 text-gray-900 dark:text-white active:bg-black/5 dark:active:bg-white/10 transition-colors !rounded-full">
-            <span suppressHydrationWarning className="flex items-center justify-center">
-              <IonIcon icon={chevronBackOutline} className="text-3xl" />
-            </span>
+            <IonIcon icon={chevronBackOutline} className="text-3xl" />
           </button>
           <h1 className="text-xl font-bold leading-tight">Settings</h1>
         </div>
@@ -119,9 +184,7 @@ export default function SettingsPage() {
                   : 'text-gray-500 dark:text-gray-400'
               }`}
             >
-              <span suppressHydrationWarning className="flex items-center justify-center">
-                <IonIcon icon={t.icon} className="text-2xl" />
-              </span>
+              <IonIcon icon={t.icon} className="text-2xl" />
               <span className="text-xs font-bold">{t.label}</span>
             </button>
           ))}
@@ -134,9 +197,7 @@ export default function SettingsPage() {
             <div key={row.title} className={`${rowClass} ${row.locked ? 'opacity-50 pointer-events-none' : ''}`}>
               <div className="flex items-center gap-4">
                 <div className={iconCircle}>
-                  <span suppressHydrationWarning className="flex items-center justify-center">
-                    <IonIcon icon={row.icon} className={rowIcon} />
-                  </span>
+                  <IonIcon icon={row.icon} className={rowIcon} />
                 </div>
                 <div className="flex flex-col">
                   <span className={labelPrimary}>{row.title}</span>
@@ -158,23 +219,17 @@ export default function SettingsPage() {
           <button onClick={() => router.push('/profile/edit')} className={`${rowClass} text-left`}>
             <div className="flex items-center gap-4">
               <div className={iconCircle}>
-                <span suppressHydrationWarning className="flex items-center justify-center">
-                  <IonIcon icon={lockClosedOutline} className={rowIcon} />
-                </span>
+                <IonIcon icon={lockClosedOutline} className={rowIcon} />
               </div>
               <span className={labelPrimary}>Change Password</span>
             </div>
-            <span suppressHydrationWarning className="flex items-center justify-center">
-              <IonIcon icon={chevronForwardOutline} className="text-lg text-gray-400 dark:text-gray-500" />
-            </span>
+            <IonIcon icon={chevronForwardOutline} className="text-lg text-gray-400 dark:text-gray-500" />
           </button>
 
           <button onClick={handleClearCache} className={`${rowClass} text-left`}>
             <div className="flex items-center gap-4">
               <div className={iconCircle}>
-                <span suppressHydrationWarning className="flex items-center justify-center">
-                  <IonIcon icon={hardwareChipOutline} className={rowIcon} />
-                </span>
+                <IonIcon icon={hardwareChipOutline} className={rowIcon} />
               </div>
               <div className="flex flex-col">
                 <span className={labelPrimary}>Clear App Cache</span>
@@ -190,18 +245,14 @@ export default function SettingsPage() {
           <button onClick={() => router.push('/about')} className={`${rowClass} text-left`}>
             <div className="flex items-center gap-4">
               <div className={iconCircle}>
-                <span suppressHydrationWarning className="flex items-center justify-center">
-                  <IonIcon icon={informationCircleOutline} className={rowIcon} />
-                </span>
+                <IonIcon icon={informationCircleOutline} className={rowIcon} />
               </div>
               <div className="flex flex-col">
                 <span className={labelPrimary}>About Vendi</span>
                 <span className={labelSecondary}>Version {packageJson.version}</span>
               </div>
             </div>
-            <span suppressHydrationWarning className="flex items-center justify-center">
-              <IonIcon icon={chevronForwardOutline} className="text-lg text-gray-400 dark:text-gray-500" />
-            </span>
+            <IonIcon icon={chevronForwardOutline} className="text-lg text-gray-400 dark:text-gray-500" />
           </button>
         </div>
 
@@ -210,9 +261,7 @@ export default function SettingsPage() {
       {/* Cache Cleared Modal */}
       <Modal isOpen={showCacheModal} onClose={() => setShowCacheModal(false)}>
         <div className="p-6 text-center">
-          <span suppressHydrationWarning className="flex items-center justify-center">
-            <IonIcon icon={hardwareChipOutline} className="text-6xl mb-4 text-orange-500" />
-          </span>
+          <IonIcon icon={hardwareChipOutline} className="text-6xl mb-4 text-orange-500" />
           <h2 className="text-xl font-black mb-2 text-gray-900 dark:text-white">Cache Cleared</h2>
           <p className="text-gray-500 dark:text-gray-400 mb-8 text-sm leading-relaxed">
             Temporary files and cached data were removed. You're still signed in and your place in the app is unchanged.

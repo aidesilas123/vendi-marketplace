@@ -1,4 +1,4 @@
-package com.campus.marketplace;
+package com.vendi.app;
 
 import android.os.Bundle;
 import android.webkit.WebView;

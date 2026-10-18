@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation';
 import useSWR, { useSWRConfig } from 'swr';
 import { supabase } from '@/lib/supabase';
+import { notify } from '@/lib/notify';
 import { calcFees, naira } from '@/lib/pricing';
 import { BuyerProductCard } from '@/shared/Card/BuyerProductCard';
 import { Avatar } from '@/shared/Avatar';
@@ -782,6 +783,16 @@ export default function ProductDetails() {
         mutateReviews(),
         globalMutate(['product-seller', product.seller_id])
       ]);
+
+      // New review -> seller
+      void notify({
+        userId: product.seller_id,
+        type: 'review',
+        title: `New ${rating}-star review`,
+        body: text.slice(0, 90) || 'A buyer rated your service.',
+        route: '/reviews',
+      });
+
       showToast('Thank you for your feedback!');
       return true;
     } catch {
@@ -799,6 +810,32 @@ export default function ProductDetails() {
 
       const { error } = await supabase.from('product_reviews').insert({ content: text, product_id: product.id, user_id: uid, parent_id: parentId });
       if (error) { showToast(error.message, 'error'); return false; }
+
+      // Notify: new question -> seller; thread reply -> the question asker (unless self).
+      try {
+        if (!parentId) {
+          if (product.seller_id && product.seller_id !== uid) {
+            void notify({
+              userId: product.seller_id,
+              type: 'question',
+              title: 'New question on your listing',
+              body: text.slice(0, 90),
+              route: '/questions',
+            });
+          }
+        } else {
+          const { data: parent } = await supabase.from('product_reviews').select('user_id').eq('id', parentId).maybeSingle();
+          if (parent?.user_id && parent.user_id !== uid) {
+            void notify({
+              userId: parent.user_id,
+              type: 'question',
+              title: 'New reply to your question',
+              body: text.slice(0, 90),
+              route: `/product?id=${product.id}`,
+            });
+          }
+        }
+      } catch { /* notification must not fail the post */ }
 
       await mutateQuestions();
       if (parentId) setReplyingTo(null);
@@ -985,6 +1022,11 @@ export default function ProductDetails() {
                         <h3 className="font-black text-gray-900 hover:underline dark:text-white">{seller.full_name}</h3>
                         <Badge isVerified={seller.is_verified} />
                       </div>
+                      {seller.is_verified && (
+                        <p className="mt-1 text-[10px] font-black uppercase tracking-[0.14em] text-green-600 dark:text-green-400 leading-none">
+                          Verified student
+                        </p>
+                      )}
                       <p className="mt-0.5 text-xs font-bold text-gray-500">
                         @{seller.username || seller.full_name?.split(' ')[0]?.toLowerCase() || 'seller'} • Joined {joinYear}
                       </p>

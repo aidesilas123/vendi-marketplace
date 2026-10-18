@@ -6,6 +6,7 @@ import { safeBack } from '@/shared/safeBack';
 import useSWR from 'swr';
 import { keys, fetchAuthUser, refreshAfterOrderWrite } from '@/lib/swr-orders';
 import { supabase } from '@/lib/supabase';
+import { notify } from '@/lib/notify';
 import { Button } from '@/shared/Button';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { useRubberBand } from '@/shared/hooks/useRubberBand';
@@ -85,6 +86,17 @@ export default function ConfirmReceiptPage() {
 
       // Purge the stale cached data for this specific order across the app
       refreshAfterOrderWrite(txRef!);
+
+      // Payout released -> seller
+      if (transaction?.seller_id) {
+        void notify({
+          userId: transaction.seller_id,
+          type: 'order',
+          title: 'Payment released',
+          body: `Escrow released for "${product?.title ?? 'your order'}".`,
+          route: `/order?ref=${txRef}`,
+        });
+      }
 
       router.push('/transactions');
     } catch (error: any) {
