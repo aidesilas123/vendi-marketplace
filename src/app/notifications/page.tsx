@@ -100,7 +100,8 @@ export default function NotificationsPage() {
     try {
       await supabase.from('notifications').update({ is_read: true }).eq('id', n.id);
     } catch { /* badge already updated; a revalidate will heal */ }
-    if (n.route) router.push(n.route);
+    // Every tap opens the detail page; the detail page's CTA goes to n.route.
+    router.push(`/notification?id=${n.id}`);
   };
 
   const markAllRead = async () => {

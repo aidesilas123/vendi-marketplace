@@ -1,4 +1,5 @@
 "use client";
+// src/app/chats/page.tsx
 /*
   ============================================================================
   THIS SESSION — SWR, PORTAL CROPPING FIX, SHARED PULL-TO-REFRESH, IN-APP
@@ -617,6 +618,19 @@ export default function DealRoomChat() {
     }
   }, [recordingDuration]);
 
+  // Native inline reply: the notification shade's Reply box deep-links here with
+  // ?quickReply=<text>. Send it once the chat is ready, then strip the param.
+  const quickReply = searchParams.get('quickReply');
+  const quickReplySentRef = useRef(false);
+  useEffect(() => {
+    if (!quickReply || quickReplySentRef.current || !currentUser || !txRef || !partnerId || isDealClosed) return;
+    quickReplySentRef.current = true;
+    void sendTextMessage(quickReply);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('quickReply');
+    router.replace(`/chats?${params.toString()}`);
+  }, [quickReply, currentUser, txRef, partnerId, isDealClosed]);
+
   useEffect(() => {
     return () => {
       if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
@@ -945,7 +959,9 @@ export default function DealRoomChat() {
 
   const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-  // Push + in-app notification to the chat partner (fire-and-forget).
+  // Push to the chat partner (fire-and-forget). Chat is push-only: no bell row,
+  // unread state lives in the chat list. The avatar gives the WhatsApp-style
+  // big-picture expanded notification.
   const notifyChatPartner = (msg: any) => {
     if (!msg?.receiver_id || !currentUser) return;
     const preview =
@@ -958,6 +974,9 @@ export default function DealRoomChat() {
       title: currentUser.full_name || 'New message',
       body: preview,
       route: `/chats?ref=${txRef}&seller=${msg.sender_id}`,
+      imageUrl: currentUser.avatar_url || undefined,
+      // Structured for the native rich notification (inline Reply / Mark as read).
+      data: { txRef: txRef ?? '', partnerId: msg.sender_id ?? '' },
     });
   };
 
@@ -997,11 +1016,18 @@ export default function DealRoomChat() {
 
     requestAnimationFrame(() => scrollToBottom(true));
 
+    void sendTextMessage(textToSend);
+  };
+
+  /** Core text send, shared by the composer and the native quick-reply deep link. */
+  const sendTextMessage = async (textToSend: string) => {
+    if (isDealClosed || !textToSend.trim() || !currentUser || !txRef) return;
+    const text = textToSend.trim();
     const tempId = `temp_${Date.now()}`;
     const replyMeta = buildReplyMeta();
     const optimisticMsg = {
       id: tempId, sender_id: currentUser.id, receiver_id: partnerId,
-      content: textToSend, message_type: 'text', status: 'sending', created_at: new Date().toISOString(),
+      content: text, message_type: 'text', status: 'sending', created_at: new Date().toISOString(),
       ...replyMeta
     };
     setOptimisticMsgs((prev) => [...prev, optimisticMsg]);
@@ -1011,7 +1037,7 @@ export default function DealRoomChat() {
 
     const { data: savedMsg, error } = await supabase.from('messages').insert({
       transaction_ref: txRef, sender_id: currentUser.id, receiver_id: partnerId,
-      content: textToSend, message_type: 'text', status: 'sent',
+      content: text, message_type: 'text', status: 'sent',
       ...replyMeta
     }).select().single();
 

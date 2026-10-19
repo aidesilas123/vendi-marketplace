@@ -1,11 +1,17 @@
 package com.vendi.app;
 
+import android.content.Intent;
+import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
+import androidx.core.app.NotificationManagerCompat;
+import androidx.core.app.RemoteInput;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+
+import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
     @Override
@@ -15,6 +21,71 @@ public class MainActivity extends BridgeActivity {
         // vanishes a second later and resizes the page (the launch jerk).
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         super.onCreate(savedInstanceState);
+        handleNotificationIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleNotificationIntent(intent);
+    }
+
+    /**
+     * Deep links fired from our native chat notifications (content tap and the
+     * inline Reply box). The route is delivered two ways: a JS CustomEvent when
+     * the WebView is already alive, plus a CapacitorStorage fallback the app
+     * checks on cold start (AppShell reads "vendi_pending_route").
+     */
+    private void handleNotificationIntent(Intent intent) {
+        if (intent == null) return;
+        String action = intent.getAction();
+        if (action == null) return;
+
+        if (VendiMessagingService.ACTION_DEEP_LINK.equals(action)) {
+            String route = intent.getStringExtra("route");
+            intent.setAction(null); // don't re-fire on rotation
+            if (route != null && !route.isEmpty()) dispatchDeepLink(route);
+            return;
+        }
+
+        if (VendiMessagingService.ACTION_QUICK_REPLY.equals(action)) {
+            android.os.Bundle results = RemoteInput.getResultsFromIntent(intent);
+            CharSequence text = results != null
+                    ? results.getCharSequence(VendiMessagingService.REMOTE_INPUT_KEY)
+                    : null;
+            String route = intent.getStringExtra("route");
+            int notifId = intent.getIntExtra("notif_id", 0);
+            intent.setAction(null); // don't re-fire on rotation
+            if (notifId != 0) {
+                try {
+                    NotificationManagerCompat.from(this).cancel(notifId);
+                } catch (Exception ignored) {}
+            }
+            if (text == null || text.length() == 0 || route == null || route.isEmpty()) return;
+            try {
+                String deepLink = route + (route.contains("?") ? "&" : "?")
+                        + "quickReply=" + java.net.URLEncoder.encode(text.toString(), "UTF-8");
+                dispatchDeepLink(deepLink);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private void dispatchDeepLink(String route) {
+        // 1. Persist for cold start.
+        try {
+            SharedPreferences prefs = getSharedPreferences("CapacitorStorage", MODE_PRIVATE);
+            prefs.edit().putString("vendi_pending_route", route).apply();
+        } catch (Exception ignored) {}
+        // 2. If the WebView is alive, deliver immediately.
+        try {
+            WebView webView = getBridge().getWebView();
+            if (webView != null) {
+                String js = "window.dispatchEvent(new CustomEvent('vendi-deep-link',{detail:"
+                        + JSONObject.quote(route) + "}));";
+                webView.post(() -> webView.evaluateJavascript(js, null));
+            }
+        } catch (Exception ignored) {}
     }
 
     @Override

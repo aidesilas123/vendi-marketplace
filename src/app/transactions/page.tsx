@@ -1,10 +1,11 @@
+// src/app/transactions/page.tsx
 "use client";
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
 import { supabase } from '@/lib/supabase';
-import { IonIcon } from '@ionic/react';
+import { IonIcon } from '@/shared/Icon/Icon';
 import { chevronBackOutline, bookmarkOutline, receiptOutline } from 'ionicons/icons';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
@@ -75,11 +76,41 @@ async function fetchActivity(): Promise<{ transactions: any[]; savedItems: any[]
       .map((tx: any) => ({ ...tx, status: effectiveTxStatus(tx) }));
   }
 
+  // SALES: orders where I'm the seller. These are the same escrow rows the buyer
+  // sees, viewed from the seller's side — tapping one opens the seller order view
+  // (src/app/order/page.tsx branches on role). Runs even without a wallet.
+  const { data: salesData, error: salesError } = await supabase
+    .from('transactions')
+    .select('*')
+    .eq('seller_id', user.id)
+    .order('created_at', { ascending: false });
+  if (salesError) throw salesError;
+
+  const sales = (salesData ?? [])
+    .filter((tx: any) => tx.type === 'escrow_hold' || tx.metadata?.product_id)
+    .map((tx: any) => {
+      // Seller's view of the money: payout = item_price - seller_fee_owed.
+      const md = tx.metadata ?? {};
+      const net = Number(md.item_price ?? 0) - Number(md.seller_fee_owed ?? 0);
+      return {
+        ...tx,
+        status: effectiveTxStatus(tx),
+        _isSale: true,
+        _displayAmount: net > 0 ? net : Math.abs(tx.amount),
+      };
+    });
+
+  // Merge both sides, dedupe by id, newest first.
+  const seen = new Set<string>();
+  transactions = [...transactions, ...sales]
+    .filter((tx: any) => (seen.has(tx.id) ? false : (seen.add(tx.id), true)))
+    .sort((a: any, b: any) => +new Date(b.created_at) - +new Date(a.created_at));
+
   const { data: savedData, error: savedError } = await supabase
     .from('saved_items')
     .select(`
       product_id,
-      products (*, seller:users(username, full_name, avatar_url, is_verified, average_rating, whatsapp))
+      products (*, seller:users(id, username, full_name, avatar_url, is_verified, average_rating, whatsapp))
     `)
     .eq('user_id', user.id)
     .order('created_at', { ascending: false });

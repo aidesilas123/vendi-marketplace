@@ -65,6 +65,7 @@ async function fetchSellerProduct(productId: string) {
     saves: savesRes.count ?? 0,
     orders: (ordersRes.data ?? []) as any[],
     orderCount: orderCountRes.count ?? 0,
+    userId: user.id,
   };
 }
 
@@ -216,6 +217,7 @@ export default function SellerProductDetails() {
   useRubberBand(bounceRef, { ready: !isLoading });
 
   const product = data?.product;
+  const myUserId = data?.userId ?? null;
   const images: string[] = product?.images?.length > 0 ? product.images : [];
 
   const daily = useMemo(() => bucketDailyViews(data?.views ?? []), [data?.views]);
@@ -535,14 +537,18 @@ export default function SellerProductDetails() {
                         </div>
                       </div>
 
-                      {repliesFor(q.id).map((r: any) => (
-                        <div key={r.id} className="ml-12 mt-2 pl-3 border-l-2 border-orange-500">
-                          <p className="text-xs font-bold text-orange-500 mb-0.5">
-                            You <span className="text-gray-400 dark:text-gray-500 font-semibold">· {timeAgo(r.created_at)}</span>
-                          </p>
-                          <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">{r.content}</p>
-                        </div>
-                      ))}
+                      {repliesFor(q.id).map((r: any) => {
+                        const isMine = myUserId != null && r.user_id === myUserId;
+                        const author = isMine ? 'You' : (r.user?.username || r.user?.full_name?.split(' ')[0] || 'Buyer');
+                        return (
+                          <div key={r.id} className="ml-12 mt-2 pl-3 border-l-2 border-orange-500">
+                            <p className={`text-xs font-bold mb-0.5 ${isMine ? 'text-orange-500' : 'text-gray-900 dark:text-white'}`}>
+                              {author} <span className="text-gray-400 dark:text-gray-500 font-semibold">· {timeAgo(r.created_at)}</span>
+                            </p>
+                            <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">{r.content}</p>
+                          </div>
+                        );
+                      })}
 
                       {replyingTo !== q.id ? (
                         <button
@@ -566,7 +572,7 @@ export default function SellerProductDetails() {
                             onClick={() => handleReplySubmit(q.id)}
                             disabled={isSubmitting || !replyText.trim()}
                             aria-label="Send reply"
-                            className="bg-orange-500 text-white w-10 h-10 flex flex-shrink-0 items-center justify-center rounded-full disabled:opacity-40"
+                            className="!bg-orange-500 text-white !w-10 !h-10 !min-w-[40px] !min-h-[40px] !p-0 !rounded-full flex flex-shrink-0 items-center justify-center disabled:opacity-40"
                           >
                             {isSubmitting
                               ? <IonIcon icon={syncOutline} className="text-xl animate-spin" />

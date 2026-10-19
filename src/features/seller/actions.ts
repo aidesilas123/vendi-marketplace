@@ -1,3 +1,4 @@
+// src/features/seller/actions.ts
 import { supabase } from '@/lib/supabase';
 import { notify } from '@/lib/notify';
 
@@ -221,12 +222,22 @@ export async function submitReviewAction(
           .eq('id', parentId)
           .maybeSingle();
         if (parent?.user_id && parent.user_id !== userId) {
+          const [{ data: prod }, { data: seller }] = await Promise.all([
+            supabase.from('products').select('title, images').eq('id', productId).maybeSingle(),
+            supabase.from('users').select('full_name, username').eq('id', userId).maybeSingle(),
+          ]);
+          const sellerName = seller?.username || seller?.full_name?.split(' ')[0] || 'The seller';
+          const itemTitle = prod?.title ?? 'the listing';
+          const rawImages = (prod as any)?.images;
+          const productImage = Array.isArray(rawImages) ? rawImages[0] : '';
           void notify({
             userId: parent.user_id,
             type: 'question',
-            title: 'The seller replied to your question',
-            body: content.slice(0, 90),
+            title: 'New reply to your question',
+            body: `${sellerName} replied on "${itemTitle}": "${content.slice(0, 90)}"`,
             route: `/product?id=${productId}`,
+            data: { itemTitle, counterparty: sellerName },
+            imageUrl: productImage || undefined,
           });
         }
       } catch { /* notification must not fail the reply */ }

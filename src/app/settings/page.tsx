@@ -12,6 +12,7 @@ import { Modal } from '@/shared/Modal/Modal';
 import { ToggleSwitch } from '@/shared/ToggleSwitch';
 import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { IonIcon } from '@/shared/Icon/Icon';
+import { TONES, previewTone, DEFAULT_TONE_ID } from '@/lib/notificationSound';
 import {
   chevronBackOutline,
   chevronForwardOutline,
@@ -28,7 +29,9 @@ import {
   lockClosedOutline,
   hardwareChipOutline,
   desktopOutline,
-  informationCircleOutline
+  informationCircleOutline,
+  musicalNoteOutline,
+  checkmarkOutline
 } from 'ionicons/icons';
 import packageJson from '../../../package.json';
 
@@ -41,6 +44,7 @@ type NotifPrefs = {
   review: boolean;
   dispute: boolean;
   announcement: boolean;
+  sound: string;
 };
 
 const DEFAULT_PREFS: NotifPrefs = {
@@ -52,6 +56,7 @@ const DEFAULT_PREFS: NotifPrefs = {
   review: true,
   dispute: true,
   announcement: true,
+  sound: DEFAULT_TONE_ID,
 };
 
 async function fetchNotifPrefs(): Promise<NotifPrefs> {
@@ -59,7 +64,7 @@ async function fetchNotifPrefs(): Promise<NotifPrefs> {
   if (!user) throw new Error('Not logged in');
   const { data, error } = await supabase
     .from('notification_preferences')
-    .select('master, chat, question, "order", wallet, review, dispute, announcement')
+    .select('master, chat, question, "order", wallet, review, dispute, announcement, sound')
     .eq('user_id', user.id)
     .maybeSingle();
   if (error) throw error;
@@ -93,6 +98,23 @@ export default function SettingsPage() {
       );
     if (error) void mutatePrefs(prev, { revalidate: false });
   };
+
+  // Notification sound — optimistic save; the tone preview plays on tap.
+  const [showSoundPicker, setShowSoundPicker] = useState(false);
+  const setSound = async (toneId: string) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const prev = prefs;
+    void mutatePrefs({ ...prev, sound: toneId }, { revalidate: false });
+    const { error } = await supabase
+      .from('notification_preferences')
+      .upsert(
+        { user_id: user.id, sound: toneId, updated_at: new Date().toISOString() },
+        { onConflict: 'user_id' }
+      );
+    if (error) void mutatePrefs(prev, { revalidate: false });
+  };
+  const currentTone = TONES.find((t) => t.id === prefs.sound) ?? TONES.find((t) => t.id === DEFAULT_TONE_ID) ?? TONES[0];
 
   const [showCacheModal, setShowCacheModal] = useState(false);
 
@@ -193,6 +215,22 @@ export default function SettingsPage() {
         {/* NOTIFICATIONS */}
         <h2 className={sectionTitle}>Notifications</h2>
         <div>
+          {/* Sound picker row */}
+          <button
+            onClick={() => setShowSoundPicker(true)}
+            className={`${rowClass} w-full text-left ${!prefs.master ? 'opacity-50 pointer-events-none' : ''}`}
+          >
+            <div className="flex items-center gap-4">
+              <div className={iconCircle}>
+                <IonIcon icon={musicalNoteOutline} className={rowIcon} />
+              </div>
+              <div className="flex flex-col">
+                <span className={labelPrimary}>Notification Sound</span>
+                <span className={labelSecondary}>{currentTone.name}</span>
+              </div>
+            </div>
+            <IonIcon icon={chevronForwardOutline} className="text-gray-300 dark:text-gray-600 text-lg" />
+          </button>
           {notifRows.map((row) => (
             <div key={row.title} className={`${rowClass} ${row.locked ? 'opacity-50 pointer-events-none' : ''}`}>
               <div className="flex items-center gap-4">
@@ -269,6 +307,36 @@ export default function SettingsPage() {
           <Button onClick={() => setShowCacheModal(false)} className="w-full !rounded-full !py-3.5 !bg-gray-100 dark:!bg-[#171717] !text-gray-900 dark:!text-white font-bold">
             Done
           </Button>
+        </div>
+      </Modal>
+
+      {/* Sound Picker Modal */}
+      <Modal isOpen={showSoundPicker} onClose={() => setShowSoundPicker(false)} title="Notification Sound">
+        <div className="px-2 py-2">
+          {TONES.map((tone) => {
+            const selected = prefs.sound === tone.id;
+            return (
+              <button
+                key={tone.id}
+                onClick={() => {
+                  previewTone(tone);
+                  void setSound(tone.id);
+                }}
+                className="w-full flex items-center gap-4 px-4 py-3.5 text-left active:bg-black/5 dark:active:bg-white/5 transition-colors !rounded-2xl"
+              >
+                <div className={`${iconCircle} ${selected ? '!bg-orange-500/15' : ''}`}>
+                  <IonIcon icon={musicalNoteOutline} className={`${rowIcon} ${selected ? '!text-orange-500' : ''}`} />
+                </div>
+                <span className={`flex-1 text-[15px] font-bold ${selected ? 'text-orange-500' : 'text-gray-900 dark:text-white'}`}>
+                  {tone.name}
+                </span>
+                {selected && <IonIcon icon={checkmarkOutline} className="text-xl text-orange-500" />}
+              </button>
+            );
+          })}
+          <p className="px-4 pt-2 pb-4 text-xs text-gray-400 leading-relaxed">
+            Applies to new notifications. Tap a tone to preview and save it.
+          </p>
         </div>
       </Modal>
 

@@ -1,4 +1,5 @@
 "use client";
+// src/features/wallet/WithdrawPage.tsx
 
 // src/features/wallet/WithdrawPage.tsx
 //
@@ -117,7 +118,7 @@ function BankPicker({
 
   return createPortal(
     <div className="fixed inset-0 z-[130] flex animate-fade-in flex-col bg-gray-50 text-gray-900 dark:bg-background dark:text-white">
-      <div className="flex shrink-0 items-center gap-2 px-5 pb-5 pt-[max(env(safe-area-inset-top),20px)]">
+      <div className="flex shrink-0 items-center gap-2 px-5 pb-5 pt-[max(var(--sat),20px)]">
         <button
           type="button"
           aria-label="Back"
@@ -361,7 +362,7 @@ export default function WithdrawPage({
         footer={(close) => {
           if (step === 'form') {
             return (
-              <div className="mx-auto w-full max-w-md px-5 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4">
+              <div className="mx-auto w-full max-w-md px-5 pb-[calc(var(--sab)+20px)] pt-4">
                 {/* h-16 + min-h keep the button tall; `!` overrides the global button styles */}
                 <button
                   type="button"
@@ -376,7 +377,7 @@ export default function WithdrawPage({
           }
           if (step === 'success' && receipt) {
             return (
-              <div className="mx-auto w-full max-w-md space-y-3 px-6 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4">
+              <div className="mx-auto w-full max-w-md space-y-3 px-6 pb-[calc(var(--sab)+20px)] pt-4">
                 <ShareReceiptButton tx={receipt} />
                 <button
                   type="button"

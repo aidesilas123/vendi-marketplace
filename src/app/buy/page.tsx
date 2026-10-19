@@ -1,3 +1,4 @@
+// src/app/buy/page.tsx
 "use client";
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -299,15 +300,37 @@ export default function BuyPage() {
       paymentDone.current = true;
       setActiveModal('none');
 
-      // New order -> seller (payment secured in escrow)
+      // Exact numbers from the escrow function; fallback to the item price
+      // if the deployed function predates the breakdown fields.
+      const itemAmount = Number(negotiatedOffer || product.base_price || 0);
+      const totalCharge = Number(data.total_charge ?? itemAmount);
+      const sellerNet = Number(data.seller_net ?? itemAmount);
+      const productImage = (product as any).images?.[0] || '';
+
+      // Sold -> seller (warm and specific; routes to the seller's order view)
       if (product.seller_id && product.seller_id !== userId) {
-        void notify({
-          userId: product.seller_id,
-          type: 'order',
-          title: 'New order received!',
-          body: `"${product.title}" — payment secured in escrow. Chat is now unlocked.`,
-          route: `/order?ref=${data.reference}`,
-        });
+        void (async () => {
+          let buyerName = 'A buyer';
+          try {
+            const { data: buyer } = await supabase.from('users').select('full_name').eq('id', userId).maybeSingle();
+            if (buyer?.full_name) buyerName = buyer.full_name.split(' ')[0];
+          } catch { /* name is a nicety, never block the notification */ }
+          await notify({
+            userId: product.seller_id,
+            type: 'order',
+            title: `Your "${product.title}" has been sold!`,
+            body: `${buyerName} paid ₦${totalCharge.toLocaleString()} — your payout is ₦${sellerNet.toLocaleString()}. Chat them to arrange inspection.`,
+            route: `/order?ref=${data.reference}`,
+            data: {
+              amount: String(totalCharge),
+              itemTitle: product.title,
+              counterparty: buyerName,
+              reference: data.reference,
+              detail: `Your payout is ₦${sellerNet.toLocaleString()}`,
+            },
+            imageUrl: productImage || undefined,
+          });
+        })();
       }
 
       // Escrow hold -> buyer (money-movement record for the bell + push)
@@ -315,9 +338,16 @@ export default function BuyPage() {
         void notify({
           userId,
           type: 'wallet',
-          title: 'Payment held in escrow',
-          body: `Your payment for "${product.title}" is secured until you confirm receipt.`,
+          title: 'Payment secured in escrow',
+          body: `Your ₦${totalCharge.toLocaleString()} for "${product.title}" is held safely. It goes to the seller only after you confirm receipt.`,
           route: `/order?ref=${data.reference}`,
+          data: {
+            amount: String(totalCharge),
+            direction: 'debit',
+            itemTitle: product.title,
+            reference: data.reference,
+          },
+          imageUrl: productImage || undefined,
         });
       }
 

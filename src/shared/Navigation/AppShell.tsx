@@ -1,4 +1,5 @@
 "use client";
+// src/shared/Navigation/AppShell.tsx
 
 import React, { useState, useEffect, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
@@ -6,11 +7,13 @@ import { supabase } from '@/lib/supabase';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { BottomNav } from './BottomNav';
+import { PushBanner } from './PushBanner';
 import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { mutate as globalMutate } from 'swr';
 import { ensurePresence, dropPresence, ensureChannel, dropChannel } from '@/lib/realtime';
 import { registerPushToken } from '@/lib/push';
 import { useUnreadNotifications } from '@/shared/hooks/useUnreadNotifications';
+import { Preferences } from '@capacitor/preferences';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -19,6 +22,7 @@ interface AppShellProps {
 const PAGE_TITLES: Record<string, string> = {
   chats: 'Messages',
   notifications: 'Notifications',
+  notification: 'Notification',
   wallet: 'Wallet',
   transactions: 'Transactions',
   saved: 'Saved',
@@ -165,6 +169,16 @@ export const AppShell = ({ children }: AppShellProps) => {
     };
     void deliverPending();
 
+    // Resilience: broadcasts are ephemeral with no replay, so a message sent
+    // while this device's socket was down stays 'sent' until something marks it
+    // delivered. Sweep periodically and on reconnect / returning to the app —
+    // not just on mount.
+    const deliverInterval = setInterval(() => { void deliverPending(); }, 30000);
+    const onVisible = () => { if (document.visibilityState === 'visible') void deliverPending(); };
+    const onOnline = () => { void deliverPending(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', onOnline);
+
     // 3. Personal inbox: a live new_message for ANY chat → mark it delivered.
     //    Never downgrade a message an open room already marked 'read'.
     ensureChannel(`user_inbox_${userId}`, (ch: any) => {
@@ -179,6 +193,9 @@ export const AppShell = ({ children }: AppShellProps) => {
     });
 
     return () => {
+      clearInterval(deliverInterval);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', onOnline);
       dropPresence();
       dropChannel(`user_inbox_${userId}`);
     };
@@ -190,6 +207,56 @@ export const AppShell = ({ children }: AppShellProps) => {
       window.scrollTo(0, 0);
     }
   }, [pathname]);
+
+  // Native notification actions (cold start + warm):
+  //  - "vendi_pending_route": deep link saved by MainActivity (content tap /
+  //    inline reply). A live 'vendi-deep-link' event fires when warm.
+  //  - "vendi_pending_mark_read": queue written by ChatActionReceiver; applied
+  //    here with the authenticated client.
+  useEffect(() => {
+    const applyPendingRoute = async () => {
+      try {
+        const { value } = await Preferences.get({ key: 'vendi_pending_route' });
+        if (value) {
+          await Preferences.remove({ key: 'vendi_pending_route' });
+          router.push(value);
+        }
+      } catch {}
+    };
+    const applyPendingMarkRead = async () => {
+      try {
+        const { value } = await Preferences.get({ key: 'vendi_pending_mark_read' });
+        if (!value) return;
+        await Preferences.remove({ key: 'vendi_pending_mark_read' });
+        const items = JSON.parse(value);
+        if (!Array.isArray(items)) return;
+        for (const it of items) {
+          if (!it?.txRef || !it?.readerId) continue;
+          try {
+            await supabase
+              .from('messages')
+              .update({ status: 'read' })
+              .eq('transaction_ref', it.txRef)
+              .eq('receiver_id', it.readerId)
+              .in('status', ['sent', 'delivered']);
+          } catch {}
+        }
+        void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
+      } catch {}
+    };
+    void applyPendingRoute();
+    void applyPendingMarkRead();
+    const onDeepLink = (e: Event) => {
+      const route = (e as CustomEvent<string>).detail;
+      if (route) {
+        // Clear the stored copy so a later mount doesn't navigate twice.
+        void Preferences.remove({ key: 'vendi_pending_route' }).catch(() => {});
+        router.push(route);
+      }
+    };
+    window.addEventListener('vendi-deep-link', onDeepLink);
+    return () => window.removeEventListener('vendi-deep-link', onDeepLink);
+  }, [router]);
 
   if (!showShell) return <>{children}</>;
 
@@ -237,6 +304,9 @@ export const AppShell = ({ children }: AppShellProps) => {
           <BottomNav />
         </div>
       </div>
+
+      {/* In-app banner for foreground pushes (tap deep-links). */}
+      <PushBanner />
 
     </div>
   );

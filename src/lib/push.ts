@@ -16,6 +16,7 @@ import {
   type ActionPerformed,
 } from '@capacitor/push-notifications';
 import { supabase } from '@/lib/supabase';
+import { ensureToneChannels } from '@/lib/notificationSound';
 
 const TOKEN_KEY = 'vendi_push_token';
 let listenersAttached = false;
@@ -43,8 +44,24 @@ function attachListeners(onAction?: (route: string) => void) {
     // Permission denied or Play Services unavailable — silent.
   });
 
-  // App is open when the push arrives: the in-app bell/SWR covers it.
-  PushNotifications.addListener('pushNotificationReceived', () => {});
+  // App is open when the push arrives: show the in-app banner (tap deep-links).
+  // The bell/SWR also refreshes in the background.
+  PushNotifications.addListener('pushNotificationReceived', (notification: any) => {
+    try {
+      const data = notification?.data ?? {};
+      window.dispatchEvent(
+        new CustomEvent('vendi-push-received', {
+          detail: {
+            title: notification?.title ?? '',
+            body: notification?.body ?? '',
+            route: (data as any)?.route ?? '',
+          },
+        })
+      );
+    } catch {
+      // A banner must never break the app.
+    }
+  });
 
   // User tapped the notification -> deep link (payload: { data: { route } }).
   PushNotifications.addListener('pushNotificationActionPerformed', (action: ActionPerformed) => {
@@ -64,6 +81,9 @@ export async function registerPushToken(onAction?: (route: string) => void) {
     }
     attachListeners(onAction);
     await PushNotifications.register();
+    // Pre-create one notification channel per tone so the user's chosen
+    // sound just works (channel sound is fixed at creation).
+    void ensureToneChannels();
   } catch {
     // Push unavailable — not fatal.
   }

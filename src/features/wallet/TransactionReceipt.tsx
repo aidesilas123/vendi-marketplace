@@ -1,4 +1,5 @@
 "use client";
+// src/features/wallet/TransactionReceipt.tsx
 
 // src/features/wallet/TransactionReceipt.tsx
 //
@@ -136,7 +137,7 @@ export default function TransactionReceiptPage({ tx, onClose }: { tx: WalletTx; 
       zIndex={120}
       onClosed={onClose}
       footer={(close) => (
-        <div className="mx-auto w-full max-w-md space-y-3 px-5 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4">
+        <div className="mx-auto w-full max-w-md space-y-3 px-5 pb-[calc(var(--sab)+20px)] pt-4">
           <ShareReceiptButton tx={tx} />
           <button
             type="button"

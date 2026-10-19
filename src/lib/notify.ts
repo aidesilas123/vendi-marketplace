@@ -15,7 +15,8 @@ export type NotifyType =
   | 'wallet'
   | 'review'
   | 'verification'
-  | 'dispute';
+  | 'dispute'
+  | 'announcement';
 
 export interface NotifyInput {
   userId: string;
@@ -24,7 +25,10 @@ export interface NotifyInput {
   body?: string;
   /** Deep link opened on tap, e.g. "/order?ref=abc", "/questions", "/chats". */
   route?: string;
+  /** Extra context for the detail page (amount, itemTitle, reference...). Values are stringified. */
   data?: Record<string, string>;
+  /** Public image URL shown as the big-picture in the push notification. */
+  imageUrl?: string;
 }
 
 export async function notify(input: NotifyInput): Promise<void> {
@@ -37,6 +41,7 @@ export async function notify(input: NotifyInput): Promise<void> {
         body: input.body ?? '',
         route: input.route ?? '',
         data: input.data ?? {},
+        imageUrl: input.imageUrl ?? '',
       },
     });
   } catch {

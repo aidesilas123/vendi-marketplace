@@ -1,4 +1,5 @@
 "use client";
+// src/app/order/confirm/page.tsx
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
@@ -87,15 +88,32 @@ export default function ConfirmReceiptPage() {
       // Purge the stale cached data for this specific order across the app
       refreshAfterOrderWrite(txRef!);
 
-      // Payout released -> seller
+      // Payout released -> seller (net of the Vendi fee, from the escrow snapshot)
       if (transaction?.seller_id) {
-        void notify({
-          userId: transaction.seller_id,
-          type: 'order',
-          title: 'Payment released',
-          body: `Escrow released for "${product?.title ?? 'your order'}".`,
-          route: `/order?ref=${txRef}`,
-        });
+        void (async () => {
+          let buyerName = 'The buyer';
+          try {
+            const { data: me } = await supabase.from('users').select('full_name').eq('id', currentUser?.id).maybeSingle();
+            if (me?.full_name) buyerName = me.full_name.split(' ')[0];
+          } catch { /* fallback stands; never block the notification */ }
+          const md = (transaction.metadata ?? {}) as any;
+          const net = Math.max(0, Number(md.item_price ?? 0) - Number(md.seller_fee_owed ?? 0));
+          const itemTitle = product?.title ?? 'your item';
+          await notify({
+            userId: transaction.seller_id,
+            type: 'order',
+            title: `₦${net.toLocaleString()} released to your wallet`,
+            body: `${buyerName} confirmed receipt of "${itemTitle}". The money is now yours.`,
+            route: `/order?ref=${txRef}`,
+            data: {
+              amount: String(net),
+              direction: 'credit',
+              itemTitle,
+              counterparty: buyerName,
+              reference: txRef ?? '',
+            },
+          });
+        })();
       }
 
       router.push('/transactions');

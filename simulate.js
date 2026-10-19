@@ -3,9 +3,9 @@ const crypto = require('crypto');
 // ==========================================
 // 1. FILL IN THESE THREE VARIABLES
 // ==========================================
-const SECRET_KEY = "72WWAS0K0A63RJTLVF9UC9FRBA2EG6VL"; // Your Monnify Sandbox Secret Key
-const WEBHOOK_URL = "https://cmwhefqflopywessgcwh.supabase.co/functions/v1/monnify-webhook"; // Your live webhook URL
-const ACCOUNT_NUMBER = "3390488207"; // The number from your UI
+const SECRET_KEY = "72WWAS0K0A63RJTLVF9UC9FRBA2EG6VL"; 
+const WEBHOOK_URL = "https://cmwhefqflopywessgcwh.supabase.co/functions/v1/monnify-webhook";
+const ACCOUNT_NUMBER = "2104146823"; 
 
 // ==========================================
 // 2. THE FAKE MONNIFY PAYLOAD

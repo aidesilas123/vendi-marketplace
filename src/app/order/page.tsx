@@ -1,3 +1,4 @@
+// src/app/order/page.tsx
 "use client";
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -14,7 +15,7 @@ import { ImageViewer } from '@/shared/ImageViewer/ImageViewer';
 import { Toast, useToast } from '@/shared/Toast/Toast';
 import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { effectiveTxStatus } from '@/lib/txStatus';
-import { IonIcon } from '@ionic/react';
+import { IonIcon } from '@/shared/Icon/Icon';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import {
   chevronBackOutline,
@@ -27,7 +28,10 @@ import {
   chatbubbleEllipsesOutline,
   expandOutline,
   imageOutline,
-  receiptOutline
+  receiptOutline,
+  checkmarkCircle,
+  walletOutline,
+  alertCircleOutline
 } from 'ionicons/icons';
 
 /* ---------------------------------------------------------------------------
@@ -35,12 +39,13 @@ import {
  * Fetchers THROW on error so SWR keeps showing the last good data.
  * ------------------------------------------------------------------------- */
 
-type OrderBundle = { transaction: any; product: any | null; seller: any | null };
+type OrderBundle = { transaction: any; product: any | null; seller: any | null; buyer: any | null };
 
 // Only the columns this page renders. The transaction keeps '*' because
 // effectiveTxStatus() decides the displayed status from fields not visible here.
 const PRODUCT_COLUMNS = 'id,title,images,university_id,campus,specific_location,specifications,description';
 const SELLER_COLUMNS = 'id,full_name,avatar_url,is_verified,average_rating,total_reviews,whatsapp';
+const BUYER_COLUMNS = 'id,full_name,avatar_url,is_verified,average_rating,total_reviews,whatsapp';
 
 const parseImages = (raw: unknown): string[] => {
   if (Array.isArray(raw)) return raw;
@@ -65,22 +70,28 @@ const fetchOrder = async (ref: string): Promise<OrderBundle | null> => {
   if (txError) throw txError;
   if (!transaction) return null;
 
-  // Product and seller only depend on the transaction, so fetch them in parallel
-  const [productRes, sellerRes] = await Promise.all([
+  // Product, seller and buyer only depend on the transaction, so fetch them in parallel
+  const buyerId = (transaction as any).buyer_id || (transaction as any).user_id;
+  const [productRes, sellerRes, buyerRes] = await Promise.all([
     transaction.product_id
       ? supabase.from('products').select(PRODUCT_COLUMNS).eq('id', transaction.product_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     transaction.seller_id
       ? supabase.from('users').select(SELLER_COLUMNS).eq('id', transaction.seller_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
+    buyerId
+      ? supabase.from('users').select(BUYER_COLUMNS).eq('id', buyerId).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
   ]);
   if (productRes.error) throw productRes.error;
   if (sellerRes.error) throw sellerRes.error;
+  if (buyerRes.error) throw buyerRes.error;
 
   return {
     transaction,
     product: productRes.data ? { ...productRes.data, images: parseImages(productRes.data.images) } : null,
     seller: sellerRes.data ?? null,
+    buyer: buyerRes.data ?? null,
   };
 };
 
@@ -108,6 +119,22 @@ export default function OrderDetails() {
   const transaction = order?.transaction ?? null;
   const product = order?.product ?? null;
   const seller = order?.seller ?? null;
+  const buyer = order?.buyer ?? null;
+
+  // Role: the seller sees the Sold view (buyer card, no buyer actions);
+  // the buyer sees the existing view (confirm receipt, raise dispute).
+  const isSeller = !!currentUser && !!transaction && currentUser.id === transaction.seller_id;
+  // The "other party" whose contact card this page shows.
+  const contactPerson = isSeller ? buyer : seller;
+  const buyerFirstName = buyer?.full_name?.split(' ')[0] || 'The buyer';
+  // Money math: the buyer paid totalCharge (item + buyer fee); the seller's
+  // payout is item_price - seller_fee_owed, snapshotted in the escrow metadata.
+  const md = (transaction?.metadata ?? {}) as any;
+  const totalPaid = transaction ? Math.abs(transaction.amount).toLocaleString() : '0';
+  const sellerNet =
+    md.item_price != null ? Math.max(0, Number(md.item_price) - Number(md.seller_fee_owed ?? 0)) : null;
+  const sellerPayout = (sellerNet ?? (transaction ? Math.abs(transaction.amount) : 0)).toLocaleString();
+  const sellerFee = Number(md.seller_fee_owed ?? 0);
 
   // Not signed in -> login
   useEffect(() => {
@@ -177,8 +204,8 @@ export default function OrderDetails() {
   };
 
   const copyPhoneNumber = async () => {
-    if (contactLocked || !seller?.whatsapp) return;
-    const ok = await writeToClipboard(seller.whatsapp);
+    if (contactLocked || !contactPerson?.whatsapp) return;
+    const ok = await writeToClipboard(contactPerson.whatsapp);
     if (ok) {
       // Light tap confirms the copy; harmlessly ignored where haptics aren't supported (web)
       Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
@@ -188,9 +215,11 @@ export default function OrderDetails() {
   };
 
   const openWhatsApp = () => {
-    if (contactLocked || !seller?.whatsapp) return;
-    const text = encodeURIComponent(`Hi ${seller.full_name}, I just purchased your ${product?.title} on Vendi. I'd like to arrange a meetup to inspect and pick it up!`);
-    const formattedPhone = seller.whatsapp.startsWith('0') ? '234' + seller.whatsapp.slice(1) : seller.whatsapp;
+    if (contactLocked || !contactPerson?.whatsapp) return;
+    const text = isSeller
+      ? encodeURIComponent(`Hi ${contactPerson.full_name}, thanks for buying my ${product?.title} on Vendi! When would you like to meet up to inspect it?`)
+      : encodeURIComponent(`Hi ${contactPerson.full_name}, I just purchased your ${product?.title} on Vendi. I'd like to arrange a meetup to inspect and pick it up!`);
+    const formattedPhone = contactPerson.whatsapp.startsWith('0') ? '234' + contactPerson.whatsapp.slice(1) : contactPerson.whatsapp;
     window.open(`https://wa.me/${formattedPhone}?text=${text}`, '_blank');
   };
 
@@ -260,6 +289,11 @@ export default function OrderDetails() {
     : isCompleted ? 'text-green-500'
     : 'text-red-500';
 
+  // The seller's "pending" is money secured, not goods awaited.
+  const statusLabel =
+    status === 'pending' ? (isSeller ? 'Payment Secured' : 'Awaiting Delivery') : status;
+  const isDisputed = status === 'disputed';
+
   const disabledBtn = 'opacity-40 cursor-not-allowed pointer-events-none';
 
   return (
@@ -294,13 +328,67 @@ export default function OrderDetails() {
           <div className="flex items-center gap-1.5 pl-3 shrink-0">
             {status === 'pending' && <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse"></span>}
             <span className={`text-[10px] font-bold uppercase tracking-wider ${statusColor}`}>
-              {status === 'pending' ? 'Awaiting Delivery' : status}
+              {statusLabel}
             </span>
           </div>
         </div>
       </header>
 
       <div className="max-w-2xl mx-auto w-full px-4 mt-2 space-y-5">
+
+        {/* SELLER HERO — sold / completed / disputed states, buyer never sees this */}
+        {isSeller && status === 'pending' && (
+          <div className="px-1">
+            <div className="flex items-start gap-3">
+              <IonIcon icon={checkmarkCircle} className="text-4xl text-green-500 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <h2 className="text-xl font-black tracking-tight text-gray-900 dark:text-white">Your item has been sold!</h2>
+                <p className="text-sm text-gray-600 dark:text-gray-300 mt-1 leading-relaxed">
+                  {buyerFirstName} paid <span className="font-bold text-gray-900 dark:text-white">₦{totalPaid}</span> —
+                  your payout is <span className="font-bold text-gray-900 dark:text-white">₦{sellerPayout}</span>
+                  {sellerFee > 0 ? ` (after the ₦${sellerFee.toLocaleString()} Vendi fee)` : ''}, released once they confirm receipt.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isSeller && isCompleted && (
+          <div className="px-1">
+            <div className="flex items-start gap-3">
+              <IonIcon icon={checkmarkCircle} className="text-4xl text-green-500 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <h2 className="text-xl font-black tracking-tight text-gray-900 dark:text-white">Order completed</h2>
+                <p className="text-sm text-gray-600 dark:text-gray-300 mt-1 leading-relaxed">
+                  <span className="font-bold text-gray-900 dark:text-white">₦{sellerPayout}</span> has been released
+                  to your wallet. Nice sale!
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isDisputed && (
+          <div className="px-1">
+            <div className="flex items-start gap-3">
+              <IonIcon icon={alertCircleOutline} className="text-4xl text-red-500 shrink-0 mt-0.5" />
+              <div className="min-w-0 flex-1">
+                <h2 className="text-xl font-black tracking-tight text-gray-900 dark:text-white">This order is under dispute</h2>
+                <p className="text-sm text-gray-600 dark:text-gray-300 mt-1 leading-relaxed">
+                  {isSeller
+                    ? 'The funds stay locked in escrow until the dispute is resolved. We\'ll keep you posted.'
+                    : 'Your payment stays locked in escrow until the dispute is resolved.'}
+                </p>
+                <button
+                  onClick={() => router.push(`/dispute?ref=${transaction.reference}`)}
+                  className="!mt-3 !inline-flex items-center !bg-gray-100 dark:!bg-gray-800 text-gray-900 dark:text-white font-bold !py-2.5 !px-5 !rounded-full text-sm transition-all active:scale-[0.98]"
+                >
+                  View dispute
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* PRODUCT GALLERY */}
         <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl cursor-pointer">
@@ -356,6 +444,30 @@ export default function OrderDetails() {
           </div>
         </div>
 
+        {/* WHAT HAPPENS NEXT — seller only, pending orders */}
+        {isSeller && status === 'pending' && (
+          <div className="px-1">
+            <p className="text-[10px] text-gray-500 dark:text-gray-400 font-bold uppercase tracking-widest mb-3">What happens next</p>
+            <div className="space-y-4">
+              {[
+                { icon: chatbubbleEllipsesOutline, title: `Chat ${buyerFirstName}`, sub: 'Arrange inspection and agree on a meetup spot.' },
+                { icon: checkmarkCircle, title: 'Buyer confirms receipt', sub: 'They confirm in the app after inspecting the item.' },
+                { icon: walletOutline, title: 'You get paid', sub: `₦${sellerPayout} is released to your wallet.` },
+              ].map((step, i) => (
+                <div key={i} className="flex items-start gap-3">
+                  <div className="w-9 h-9 rounded-full bg-orange-500/10 flex items-center justify-center shrink-0">
+                    <IonIcon icon={step.icon} className="text-xl text-orange-500" />
+                  </div>
+                  <div className="min-w-0 pt-0.5">
+                    <p className="text-sm font-bold text-gray-900 dark:text-white leading-tight">{step.title}</p>
+                    <p className="text-[13px] text-gray-500 dark:text-gray-400 mt-0.5 leading-snug">{step.sub}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* DESCRIPTION BLOCK */}
         {(product?.specifications || product?.description) && (
           <div className="space-y-4 px-1">
@@ -376,23 +488,25 @@ export default function OrderDetails() {
           </div>
         )}
 
-        {/* SELLER BLOCK */}
-        {seller && (
+        {/* CONTACT BLOCK — buyer sees the seller, seller sees the buyer */}
+        {contactPerson && (
           <div className="px-1 pt-2">
-            <p className="text-[10px] text-gray-500 dark:text-gray-400 font-bold uppercase tracking-widest mb-3">Meet The Seller</p>
+            <p className="text-[10px] text-gray-500 dark:text-gray-400 font-bold uppercase tracking-widest mb-3">
+              {isSeller ? 'Meet The Buyer' : 'Meet The Seller'}
+            </p>
 
             <div
-              onClick={() => router.push(`/profile?id=${seller.id}`)}
+              onClick={() => router.push(`/profile?id=${contactPerson.id}`)}
               className="flex items-center gap-3 mb-4 cursor-pointer active:opacity-70 transition-opacity"
             >
-              <Avatar src={seller.avatar_url} name={seller.full_name} size="lg" />
+              <Avatar src={contactPerson.avatar_url} name={contactPerson.full_name} size="lg" />
               <div>
                 <div className="flex items-center gap-1.5">
-                  <h3 className="font-bold text-base text-gray-900 dark:text-white tracking-tight">{seller.full_name}</h3>
-                  <Badge isVerified={seller.is_verified} />
+                  <h3 className="font-bold text-base text-gray-900 dark:text-white tracking-tight">{contactPerson.full_name}</h3>
+                  <Badge isVerified={contactPerson.is_verified} />
                 </div>
                 <div className="flex items-center gap-1.5 text-xs text-[#D4AF37] font-bold mt-0.5">
-                  <IonIcon icon={star} /> {seller.average_rating || 0} <span className="text-gray-400 font-medium">({seller.total_reviews || 0} Reviews)</span>
+                  <IonIcon icon={star} /> {contactPerson.average_rating || 0} <span className="text-gray-400 font-medium">({contactPerson.total_reviews || 0} Reviews)</span>
                 </div>
               </div>
             </div>
@@ -426,7 +540,7 @@ export default function OrderDetails() {
                     className="!w-full !flex items-center justify-center gap-2 mt-3 text-gray-600 dark:text-gray-300 font-bold !py-3 !rounded-2xl text-sm transition-all active:scale-[0.98]"
                   >
                     <IonIcon icon={callOutline} className="text-xl" />
-                    {seller.whatsapp || 'Number unavailable'}
+                    {contactPerson.whatsapp || 'Number unavailable'}
                   </button>
                 )}
 
@@ -441,8 +555,8 @@ export default function OrderDetails() {
 
       </div>
 
-      {/* BOTTOM ACTION NAV */}
-      {status === 'pending' && (
+      {/* BOTTOM ACTION NAV — buyer only. The seller never confirms receipt or raises disputes. */}
+      {!isSeller && status === 'pending' && (
         <div className="fixed bottom-0 left-0 right-0 z-[90] bg-gray-50 dark:bg-background p-4 pt-3 pb-[max(1rem,var(--sab))]">
           <div className="max-w-2xl mx-auto space-y-3">
             <Button

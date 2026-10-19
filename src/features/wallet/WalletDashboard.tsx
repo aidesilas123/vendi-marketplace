@@ -1,4 +1,5 @@
 "use client";
+// src/features/wallet/WalletDashboard.tsx
 
 // src/features/wallet/WalletDashboard.tsx
 //
@@ -385,7 +386,7 @@ export default function WalletDashboard() {
         }}
         className="fixed inset-x-0 bottom-0 z-[100] rounded-t-3xl bg-white text-gray-900 dark:bg-[#171717] dark:text-white"
       >
-        <div className="mx-auto max-w-md px-6 pb-[calc(env(safe-area-inset-bottom,0px)+40px)] pt-3">
+        <div className="mx-auto max-w-md px-6 pb-[calc(var(--sab)+40px)] pt-3">
           <div className="mx-auto mb-7 h-1.5 w-12 cursor-grab rounded-full bg-gray-300 active:cursor-grabbing dark:bg-gray-700" />
           <h3 className="text-xl font-black">Fund wallet</h3>
           <p className="mt-2 text-sm leading-relaxed text-gray-500 dark:text-gray-400">

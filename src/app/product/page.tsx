@@ -1,4 +1,5 @@
 "use client";
+// src/app/product/page.tsx
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
@@ -785,13 +786,26 @@ export default function ProductDetails() {
       ]);
 
       // New review -> seller
-      void notify({
-        userId: product.seller_id,
-        type: 'review',
-        title: `New ${rating}-star review`,
-        body: text.slice(0, 90) || 'A buyer rated your service.',
-        route: '/reviews',
-      });
+      void (async () => {
+        let buyerName = 'A buyer';
+        let buyerAvatar = '';
+        try {
+          const { data: buyer } = await supabase.from('users').select('full_name, avatar_url').eq('id', uid).maybeSingle();
+          if (buyer?.full_name) buyerName = buyer.full_name.split(' ')[0];
+          if (buyer?.avatar_url) buyerAvatar = buyer.avatar_url;
+        } catch { /* name is a nicety, never block the notification */ }
+        await notify({
+          userId: product.seller_id,
+          type: 'review',
+          title: `You got a ${rating}-star review!`,
+          body: text.trim()
+            ? `${buyerName} rated you ${rating} stars: "${text.slice(0, 90)}"`
+            : `${buyerName} rated you ${rating} stars.`,
+          route: '/reviews',
+          data: { rating: String(rating), counterparty: buyerName, itemTitle: product.title },
+          imageUrl: buyerAvatar || undefined,
+        });
+      })();
 
       showToast('Thank you for your feedback!');
       return true;
@@ -813,14 +827,19 @@ export default function ProductDetails() {
 
       // Notify: new question -> seller; thread reply -> the question asker (unless self).
       try {
+        const { data: me } = await supabase.from('users').select('full_name, username').eq('id', uid).maybeSingle();
+        const myName = me?.username || me?.full_name?.split(' ')[0] || 'Someone';
+        const productImage = product.images?.[0] || '';
         if (!parentId) {
           if (product.seller_id && product.seller_id !== uid) {
             void notify({
               userId: product.seller_id,
               type: 'question',
-              title: 'New question on your listing',
-              body: text.slice(0, 90),
+              title: `New question on "${product.title}"`,
+              body: `${myName} asked: "${text.slice(0, 90)}"`,
               route: '/questions',
+              data: { itemTitle: product.title, counterparty: myName },
+              imageUrl: productImage || undefined,
             });
           }
         } else {
@@ -830,8 +849,10 @@ export default function ProductDetails() {
               userId: parent.user_id,
               type: 'question',
               title: 'New reply to your question',
-              body: text.slice(0, 90),
+              body: `${myName} replied on "${product.title}": "${text.slice(0, 90)}"`,
               route: `/product?id=${product.id}`,
+              data: { itemTitle: product.title, counterparty: myName },
+              imageUrl: productImage || undefined,
             });
           }
         }

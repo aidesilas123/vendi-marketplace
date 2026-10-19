@@ -1,4 +1,5 @@
 "use client";
+// src/app/dispute/page.tsx
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
@@ -128,13 +129,41 @@ export default function DisputePage() {
 
       // Dispute opened -> seller (funds frozen)
       if (transaction?.seller_id) {
-        void notify({
-          userId: transaction.seller_id,
-          type: 'dispute',
-          title: 'A dispute was opened on your order',
-          body: `Order ${txRef} — funds are frozen until it is resolved.`,
-          route: `/dispute?ref=${txRef}`,
-        });
+        void (async () => {
+          let buyerName = 'The buyer';
+          try {
+            const { data: me } = await supabase.from('users').select('full_name').eq('id', currentUser?.id).maybeSingle();
+            if (me?.full_name) buyerName = me.full_name.split(' ')[0];
+          } catch { /* fallback stands; never block the notification */ }
+          const itemTitle = product?.title ?? 'your order';
+          const amount = Math.abs(transaction.amount).toLocaleString();
+          const disputeData = {
+            itemTitle,
+            amount: String(Math.abs(transaction.amount)),
+            reference: txRef ?? '',
+            reason,
+            counterparty: buyerName,
+          };
+          await notify({
+            userId: transaction.seller_id,
+            type: 'dispute',
+            title: 'A dispute was opened on your order',
+            body: `${buyerName} opened a dispute on "${itemTitle}" (₦${amount}). The funds stay locked until it's resolved.`,
+            route: `/dispute?ref=${txRef}`,
+            data: disputeData,
+          });
+          // Confirmation -> buyer (the raiser)
+          if (currentUser?.id) {
+            await notify({
+              userId: currentUser.id,
+              type: 'dispute',
+              title: 'Dispute recorded',
+              body: `Your dispute on "${itemTitle}" is open. The ₦${amount} stays locked until it's resolved.`,
+              route: `/dispute?ref=${txRef}`,
+              data: disputeData,
+            });
+          }
+        })();
       }
       
       showToast('Dispute raised successfully. Funds frozen.', 'success');

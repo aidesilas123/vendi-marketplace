@@ -38,7 +38,7 @@ async function fetchAllQuestions() {
     .in('product_id', ids)
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return { questions: (data ?? []) as any[] };
+  return { questions: (data ?? []) as any[], userId: user.id };
 }
 
 function timeAgo(iso: string) {
@@ -70,6 +70,7 @@ export default function QuestionsPage() {
   }, [error, router]);
 
   const questions = data?.questions ?? [];
+  const myUserId = data?.userId ?? null;
   const repliedTo = useMemo(
     () => new Set(questions.filter((q: any) => q.parent_id).map((q: any) => q.parent_id)),
     [questions]
@@ -245,14 +246,18 @@ export default function QuestionsPage() {
                     </div>
                   </div>
 
-                  {repliesFor(q.id).map((r: any) => (
-                    <div key={r.id} className="ml-12 mt-2 pl-3 border-l-2 border-orange-500">
-                      <p className="text-xs font-bold text-orange-500 mb-0.5">
-                        You <span className="text-gray-400 dark:text-gray-500 font-semibold">· {timeAgo(r.created_at)}</span>
-                      </p>
-                      <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">{r.content}</p>
-                    </div>
-                  ))}
+                  {repliesFor(q.id).map((r: any) => {
+                    const isMine = myUserId != null && r.user_id === myUserId;
+                    const author = isMine ? 'You' : (r.user?.username || r.user?.full_name?.split(' ')[0] || 'Buyer');
+                    return (
+                      <div key={r.id} className="ml-12 mt-2 pl-3 border-l-2 border-orange-500">
+                        <p className={`text-xs font-bold mb-0.5 ${isMine ? 'text-orange-500' : 'text-gray-900 dark:text-white'}`}>
+                          {author} <span className="text-gray-400 dark:text-gray-500 font-semibold">· {timeAgo(r.created_at)}</span>
+                        </p>
+                        <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">{r.content}</p>
+                      </div>
+                    );
+                  })}
 
                   {replyingTo !== q.id ? (
                     <button
