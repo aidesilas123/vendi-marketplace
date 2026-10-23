@@ -30,6 +30,7 @@ type NotificationRow = {
   title: string;
   body: string;
   route: string;
+  data: Record<string, string> | null;
   is_read: boolean;
   created_at: string;
 };
@@ -62,7 +63,7 @@ async function fetchNotifications(): Promise<NotificationRow[] | null> {
   if (!user) return null;
   const { data, error } = await supabase
     .from('notifications')
-    .select('id, type, title, body, route, is_read, created_at')
+    .select('id, type, title, body, route, data, is_read, created_at')
     .eq('user_id', user.id)
     .order('created_at', { ascending: false })
     .limit(100);
@@ -100,8 +101,17 @@ export default function NotificationsPage() {
     try {
       await supabase.from('notifications').update({ is_read: true }).eq('id', n.id);
     } catch { /* badge already updated; a revalidate will heal */ }
-    // Every tap opens the detail page; the detail page's CTA goes to n.route.
-    router.push(`/notification?id=${n.id}`);
+    // Routing by type: question / wallet / review go straight to the original
+    // page (wallet → the exact transaction receipt). Everything else (order,
+    // dispute, verification, announcement) opens the detail page first.
+    if (n.type === 'wallet') {
+      const ref = n.data?.reference;
+      router.push(ref ? `/wallet?receipt=${encodeURIComponent(ref)}` : (n.route || '/wallet'));
+    } else if (n.type === 'question' || n.type === 'review') {
+      router.push(n.route || (n.type === 'review' ? '/reviews' : '/questions'));
+    } else {
+      router.push(`/notification?id=${n.id}`);
+    }
   };
 
   const markAllRead = async () => {

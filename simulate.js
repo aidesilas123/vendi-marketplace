@@ -5,7 +5,7 @@ const crypto = require('crypto');
 // ==========================================
 const SECRET_KEY = "72WWAS0K0A63RJTLVF9UC9FRBA2EG6VL"; 
 const WEBHOOK_URL = "https://cmwhefqflopywessgcwh.supabase.co/functions/v1/monnify-webhook";
-const ACCOUNT_NUMBER = "2104146823"; 
+const ACCOUNT_NUMBER = "12345678900"; 
 
 // ==========================================
 // 2. THE FAKE MONNIFY PAYLOAD

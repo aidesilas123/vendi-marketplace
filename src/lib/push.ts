@@ -46,14 +46,16 @@ function attachListeners(onAction?: (route: string) => void) {
 
   // App is open when the push arrives: show the in-app banner (tap deep-links).
   // The bell/SWR also refreshes in the background.
+  // Data-only pushes (chat) carry title/body inside `data`, not at the top
+  // level — read both shapes or the banner silently drops chat.
   PushNotifications.addListener('pushNotificationReceived', (notification: any) => {
     try {
       const data = notification?.data ?? {};
       window.dispatchEvent(
         new CustomEvent('vendi-push-received', {
           detail: {
-            title: notification?.title ?? '',
-            body: notification?.body ?? '',
+            title: notification?.title || data?.title || '',
+            body: notification?.body || data?.body || '',
             route: (data as any)?.route ?? '',
           },
         })

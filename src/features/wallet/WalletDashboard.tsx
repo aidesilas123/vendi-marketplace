@@ -10,6 +10,7 @@
 // Spacing knobs are the constants right below the imports.
 
 import React, { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { IonIcon } from '@ionic/react';
 import { Clipboard } from '@capacitor/clipboard';
 import {
@@ -125,6 +126,20 @@ export default function WalletDashboard() {
     isPoppedByHistory.current = false;
     setReceiptTx(null);
   };
+
+  // Deep link from a wallet notification: /wallet?receipt=<reference> opens
+  // that exact transaction's receipt once the transactions have loaded.
+  const searchParams = useSearchParams();
+  const receiptParamHandled = useRef(false);
+  useEffect(() => {
+    const ref = searchParams.get('receipt');
+    if (!ref || receiptParamHandled.current || !transactions?.length) return;
+    const tx = transactions.find((t) => t.reference === ref || t.id === ref);
+    if (!tx) return;
+    receiptParamHandled.current = true;
+    openReceipt(tx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, transactions]);
 
   // 1. Hardware Back Button (Capacitor Android native app):
   // When receipt or a subview is open, closing it intercepts the hardware back button instead of leaving the wallet.

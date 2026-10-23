@@ -39,6 +39,7 @@ public class VendiMessagingService extends FirebaseMessagingService {
 
     public static final String ACTION_QUICK_REPLY = "com.vendi.app.QUICK_REPLY";
     public static final String ACTION_DEEP_LINK = "com.vendi.app.DEEP_LINK";
+    public static final String ACTION_FOREGROUND_PUSH = "com.vendi.app.FOREGROUND_PUSH";
     public static final String REMOTE_INPUT_KEY = "quick_reply";
 
     private static final int VENDI_ORANGE = 0xFFF97316;
@@ -46,11 +47,19 @@ public class VendiMessagingService extends FirebaseMessagingService {
     @Override
     public void onMessageReceived(RemoteMessage remoteMessage) {
         Map<String, String> d = remoteMessage.getData();
+
+        // Foreground: the in-app banner covers EVERY type. Forward the payload
+        // to the WebView (MainActivity owns the bridge) and stop here. This
+        // matters because Android may deliver the message to this service
+        // instead of the Capacitor plugin's — without the forward, the
+        // plugin's pushNotificationReceived never fires and no banner appears.
+        if (isAppInForeground()) {
+            forwardToBanner(remoteMessage, d);
+            return;
+        }
+
         if (!"1".equals(d.get("vendi_rich")) || !"chat".equals(d.get("type"))) {
             return; // not ours — the Capacitor plugin handles everything else
-        }
-        if (isAppInForeground()) {
-            return; // the in-app banner covers foreground pushes
         }
 
         String title = d.get("title");
@@ -127,6 +136,34 @@ public class VendiMessagingService extends FirebaseMessagingService {
         }
 
         NotificationManagerCompat.from(this).notify(notifId, builder.build());
+    }
+
+    /**
+     * Hand a foreground push to the WebView as a `vendi-push-received` event
+     * (the PushBanner listens for it). Data-only chat carries title/body in
+     * `data`; notification payloads carry them on the notification itself.
+     */
+    private void forwardToBanner(RemoteMessage msg, Map<String, String> d) {
+        String title;
+        String body;
+        RemoteMessage.Notification n = msg.getNotification();
+        if ("1".equals(d.get("vendi_rich")) || n == null) {
+            title = d.get("title");
+            body = d.get("body");
+        } else {
+            title = n.getTitle();
+            body = n.getBody();
+        }
+        if (title == null || title.isEmpty()) return;
+        try {
+            Intent intent = new Intent(ACTION_FOREGROUND_PUSH);
+            intent.setPackage(getPackageName());
+            intent.putExtra("title", title);
+            intent.putExtra("body", body != null ? body : "");
+            String route = d.get("route");
+            intent.putExtra("route", route != null ? route : "");
+            sendBroadcast(intent);
+        } catch (Exception ignored) {}
     }
 
     private boolean isAppInForeground() {

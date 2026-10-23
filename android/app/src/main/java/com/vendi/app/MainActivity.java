@@ -1,12 +1,16 @@
 package com.vendi.app;
 
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.app.RemoteInput;
+import androidx.core.content.ContextCompat;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -14,6 +18,8 @@ import androidx.core.view.WindowInsetsCompat;
 import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
+    private BroadcastReceiver foregroundPushReceiver;
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         // Edge-to-edge from the very first frame: the window extends under the
@@ -22,6 +28,48 @@ public class MainActivity extends BridgeActivity {
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         super.onCreate(savedInstanceState);
         handleNotificationIntent(getIntent());
+        registerForegroundPushReceiver();
+    }
+
+    @Override
+    public void onDestroy() {
+        if (foregroundPushReceiver != null) {
+            try {
+                unregisterReceiver(foregroundPushReceiver);
+            } catch (Exception ignored) {}
+            foregroundPushReceiver = null;
+        }
+        super.onDestroy();
+    }
+
+    /**
+     * VendiMessagingService forwards foreground pushes as an in-app broadcast;
+     * relay them to the WebView as `vendi-push-received` events (PushBanner).
+     */
+    private void registerForegroundPushReceiver() {
+        foregroundPushReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                String title = intent.getStringExtra("title");
+                if (title == null || title.isEmpty()) return;
+                String body = intent.getStringExtra("body");
+                String route = intent.getStringExtra("route");
+                try {
+                    JSONObject detail = new JSONObject();
+                    detail.put("title", title);
+                    detail.put("body", body != null ? body : "");
+                    detail.put("route", route != null ? route : "");
+                    String js = "window.dispatchEvent(new CustomEvent('vendi-push-received',{detail:"
+                            + detail.toString() + "}));";
+                    WebView webView = getBridge().getWebView();
+                    if (webView != null) {
+                        webView.post(() -> webView.evaluateJavascript(js, null));
+                    }
+                } catch (Exception ignored) {}
+            }
+        };
+        IntentFilter filter = new IntentFilter(VendiMessagingService.ACTION_FOREGROUND_PUSH);
+        ContextCompat.registerReceiver(this, foregroundPushReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
     }
 
     @Override

@@ -171,8 +171,8 @@ export default function NotificationDetailPage() {
       </header>
 
       <div ref={bounceRef} className="max-w-2xl mx-auto px-5 pt-4">
-        {/* HERO */}
-        <div className="flex flex-col items-center text-center pt-4">
+        {/* HERO — left-aligned */}
+        <div className="flex flex-col items-start text-left pt-4">
           <div className={`w-20 h-20 rounded-full flex items-center justify-center ${tint}`}>
             <IonIcon icon={icon} className="text-4xl" />
           </div>
@@ -205,7 +205,7 @@ export default function NotificationDetailPage() {
 
         {/* REVIEW STARS */}
         {type === 'review' && d.rating && (
-          <div className="mt-6 flex items-center justify-center gap-1">
+          <div className="mt-6 flex items-center justify-start gap-1">
             {[1, 2, 3, 4, 5].map((s) => (
               <IonIcon
                 key={s}
@@ -217,8 +217,9 @@ export default function NotificationDetailPage() {
         )}
       </div>
 
-      {/* BOTTOM CTA — the one way out to the real page */}
-      {!!notif.route && (
+      {/* BOTTOM CTA — the one way out to the real page. Announcements have no
+          destination page, so they get no button. */}
+      {!!notif.route && type !== 'announcement' && (
         <div className="fixed bottom-0 left-0 right-0 z-[90] bg-gray-50 dark:bg-background p-4 pt-3 pb-[max(1rem,var(--sab))]">
           <div className="max-w-2xl mx-auto">
             <Button
