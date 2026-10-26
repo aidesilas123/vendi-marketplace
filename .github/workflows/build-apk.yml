@@ -1,3 +1,4 @@
+# .github/workflows/build-apk.yml
 name: Build Android APK
 on:
   push:
@@ -30,6 +31,23 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '21'
+
+      # A stable debug keystore committed to the repo (android/app/debug.keystore),
+      # so every CI build signs with the SAME key no matter which runner or image
+      # runs the job. Installed here before the build; Gradle's default debug
+      # signing picks it up from ~/.android/debug.keystore automatically, so no
+      # build.gradle change is needed. Safe to commit: the debug keystore uses the
+      # publicly-known android/android credentials and can never publish to Play.
+      - name: Install Stable Debug Keystore
+        run: |
+          mkdir -p ~/.android
+          cp android/app/debug.keystore ~/.android/debug.keystore
+
+      # Prints the SHA-1 of the debug key that signs the APK, for the
+      # Google Cloud Console API-key restriction. Read it from this step's log.
+      # Stable across builds because the keystore above is committed to the repo.
+      - name: Print Debug Signing SHA-1
+        run: keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android | grep -i "SHA-1\|SHA1"
 
       - name: Sync Capacitor Android
         run: |

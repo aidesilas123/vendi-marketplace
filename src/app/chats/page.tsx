@@ -618,19 +618,6 @@ export default function DealRoomChat() {
     }
   }, [recordingDuration]);
 
-  // Native inline reply: the notification shade's Reply box deep-links here with
-  // ?quickReply=<text>. Send it once the chat is ready, then strip the param.
-  const quickReply = searchParams.get('quickReply');
-  const quickReplySentRef = useRef(false);
-  useEffect(() => {
-    if (!quickReply || quickReplySentRef.current || !currentUser || !txRef || !partnerId || isDealClosed) return;
-    quickReplySentRef.current = true;
-    void sendTextMessage(quickReply);
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete('quickReply');
-    router.replace(`/chats?${params.toString()}`);
-  }, [quickReply, currentUser, txRef, partnerId, isDealClosed]);
-
   useEffect(() => {
     return () => {
       if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);

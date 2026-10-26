@@ -13,7 +13,6 @@ import { mutate as globalMutate } from 'swr';
 import { ensurePresence, dropPresence, ensureChannel, dropChannel } from '@/lib/realtime';
 import { registerPushToken } from '@/lib/push';
 import { useUnreadNotifications } from '@/shared/hooks/useUnreadNotifications';
-import { Preferences } from '@capacitor/preferences';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -207,56 +206,6 @@ export const AppShell = ({ children }: AppShellProps) => {
       window.scrollTo(0, 0);
     }
   }, [pathname]);
-
-  // Native notification actions (cold start + warm):
-  //  - "vendi_pending_route": deep link saved by MainActivity (content tap /
-  //    inline reply). A live 'vendi-deep-link' event fires when warm.
-  //  - "vendi_pending_mark_read": queue written by ChatActionReceiver; applied
-  //    here with the authenticated client.
-  useEffect(() => {
-    const applyPendingRoute = async () => {
-      try {
-        const { value } = await Preferences.get({ key: 'vendi_pending_route' });
-        if (value) {
-          await Preferences.remove({ key: 'vendi_pending_route' });
-          router.push(value);
-        }
-      } catch {}
-    };
-    const applyPendingMarkRead = async () => {
-      try {
-        const { value } = await Preferences.get({ key: 'vendi_pending_mark_read' });
-        if (!value) return;
-        await Preferences.remove({ key: 'vendi_pending_mark_read' });
-        const items = JSON.parse(value);
-        if (!Array.isArray(items)) return;
-        for (const it of items) {
-          if (!it?.txRef || !it?.readerId) continue;
-          try {
-            await supabase
-              .from('messages')
-              .update({ status: 'read' })
-              .eq('transaction_ref', it.txRef)
-              .eq('receiver_id', it.readerId)
-              .in('status', ['sent', 'delivered']);
-          } catch {}
-        }
-        void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
-      } catch {}
-    };
-    void applyPendingRoute();
-    void applyPendingMarkRead();
-    const onDeepLink = (e: Event) => {
-      const route = (e as CustomEvent<string>).detail;
-      if (route) {
-        // Clear the stored copy so a later mount doesn't navigate twice.
-        void Preferences.remove({ key: 'vendi_pending_route' }).catch(() => {});
-        router.push(route);
-      }
-    };
-    window.addEventListener('vendi-deep-link', onDeepLink);
-    return () => window.removeEventListener('vendi-deep-link', onDeepLink);
-  }, [router]);
 
   if (!showShell) return <>{children}</>;
 

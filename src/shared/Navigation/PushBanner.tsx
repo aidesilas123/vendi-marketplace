@@ -13,9 +13,8 @@ const EXIT_MS = 280;
 
 /**
  * In-app banner for pushes that arrive while the app is open.
- * Sources: push.ts dispatches `vendi-push-received` (plugin path), and the
- * native VendiMessagingService forwards foreground pushes through
- * MainActivity (same event). Behavior: slides down from the top, swipe
+ * Source: push.ts dispatches `vendi-push-received` when the push plugin
+ * reports a foreground arrival. Behavior: slides down from the top, swipe
  * up / left / right dismisses, tap opens the destination, auto-dismisses
  * after 5s.
  */

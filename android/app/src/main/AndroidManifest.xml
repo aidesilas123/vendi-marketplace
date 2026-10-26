@@ -12,22 +12,6 @@
         <meta-data
             android:name="com.google.firebase.MESSAGING_DEFAULT_NOTIFICATION_CHANNEL_ID"
             android:value="vendi_default" />
-        <!-- Rich chat notifications (inline Reply + Mark as read), built by
-             VendiMessagingService from data-only FCM payloads. -->
-        <service
-            android:name=".VendiMessagingService"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.google.firebase.MESSAGING_EVENT" />
-            </intent-filter>
-        </service>
-        <receiver
-            android:name=".ChatActionReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.vendi.app.MARK_READ" />
-            </intent-filter>
-        </receiver>
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
             android:name=".MainActivity"

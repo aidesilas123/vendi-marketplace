@@ -14,7 +14,7 @@ export const CHANNEL_PREFIX = 'vendi_';
 
 // ★ THE DEFAULT TONE — change this id anytime to change the default
 // notification sound. Must be one of the ids in TONES below.
-export const DEFAULT_TONE_ID = 'tone_bell';
+export const DEFAULT_TONE_ID = 'tone_penetrating';
 
 export interface Tone {
   id: string; // stored in notification_preferences.sound; '' = system default
@@ -27,10 +27,11 @@ export interface Tone {
 
 export const TONES: Tone[] = [
   { id: 'default', name: 'Default', raw: null, preview: null },
-  { id: 'tone_chime', name: 'Chime', raw: 'tone_chime', preview: '/sounds/tone_chime.ogg' },
-  { id: 'tone_pop', name: 'Pop', raw: 'tone_pop', preview: '/sounds/tone_pop.ogg' },
-  { id: 'tone_bell', name: 'Bell', raw: 'tone_bell', preview: '/sounds/tone_bell.ogg' },
-  { id: 'tone_sparkle', name: 'Sparkle', raw: 'tone_sparkle', preview: '/sounds/tone_sparkle.ogg' },
+  { id: 'tone_penetrating', name: 'Penetrating', raw: 'tone_penetrating', preview: '/sounds/tone_penetrating.ogg' },
+  { id: 'tone_zero', name: 'Zero', raw: 'tone_zero', preview: '/sounds/tone_zero.ogg' },
+  { id: 'tone_hard_wood', name: 'Hard Wood', raw: 'tone_hard_wood', preview: '/sounds/tone_hard_wood.ogg' },
+  { id: 'tone_gentle', name: 'Gentle', raw: 'tone_gentle', preview: '/sounds/tone_gentle.ogg' },
+  { id: 'tone_bubble_gum', name: 'Bubble Gum', raw: 'tone_bubble_gum', preview: '/sounds/tone_bubble_gum.ogg' },
 ];
 
 export const toneIds = new Set(TONES.map((t) => t.id));
