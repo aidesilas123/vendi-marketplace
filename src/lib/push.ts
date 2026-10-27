@@ -31,17 +31,26 @@ function attachListeners(onAction?: (route: string) => void) {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user || !token.value) return;
       await Preferences.set({ key: TOKEN_KEY, value: token.value });
-      await supabase.from('user_push_tokens').upsert(
+      const { error } = await supabase.from('user_push_tokens').upsert(
         { user_id: user.id, token: token.value, platform: Capacitor.getPlatform() },
         { onConflict: 'user_id,token' }
       );
+      if (error) {
+        // TEMPORARY DIAGNOSTIC — remove once the missing-token cause is found.
+        console.error('[push] token upsert failed', error);
+        await Preferences.set({ key: 'vendi_push_upsert_error', value: JSON.stringify({ at: new Date().toISOString(), error: error.message }) });
+      }
     } catch {
       // Push registration must never break the app.
     }
   });
 
-  PushNotifications.addListener('registrationError', () => {
-    // Permission denied or Play Services unavailable — silent.
+  PushNotifications.addListener('registrationError', (err: any) => {
+    // TEMPORARY DIAGNOSTIC — remove once the missing-token cause is found.
+    try {
+      console.error('[push] registrationError', err);
+      void Preferences.set({ key: 'vendi_push_error', value: JSON.stringify({ at: new Date().toISOString(), error: String(err?.message ?? err) }) });
+    } catch {}
   });
 
   // App is open when the push arrives: show the in-app banner (tap deep-links).

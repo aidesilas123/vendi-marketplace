@@ -61,6 +61,11 @@ export function PushBanner() {
       setDrag(null);
       setEntered(false);
       setPush(detail);
+      // Banner sound: the app is open, so Android plays no channel sound
+      // for this push — play the banner file ourselves, once per arrival.
+      try {
+        void new Audio('/sounds/banner_pop.ogg').play().catch(() => {});
+      } catch {}
       // Slide in on the next frame so the transform transition runs.
       requestAnimationFrame(() => requestAnimationFrame(() => setEntered(true)));
       restartAuto();
