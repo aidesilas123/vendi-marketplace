@@ -31,12 +31,12 @@ const ERROR_KEYS = ['vendi_push_error', 'vendi_push_upsert_error', 'vendi_push_r
 
 const SOUND_FILES = [
   'banner_pop.ogg',
-  'notification_decorative-01.ogg',
-  'notification_decorative-02.ogg',
-  'notification_simple-01.ogg',
-  'notification_simple-02.ogg',
-  'alert_high-intensity.ogg',
-  'hero_decorative-celebration-02.ogg',
+  'notification_decorative_01.ogg',
+  'notification_decorative_02.ogg',
+  'notification_simple_01.ogg',
+  'notification_simple_02.ogg',
+  'alert_high_intensity.ogg',
+  'hero_decorative_celebration_02.ogg',
   'msg_sent_kpo.ogg',
   'message_received.ogg',
 ];

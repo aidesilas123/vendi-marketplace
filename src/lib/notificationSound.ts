@@ -28,12 +28,12 @@ export interface Tone {
 export const TONES: Tone[] = [
   { id: 'default', name: 'Default', raw: null, preview: null },
   { id: 'banner_pop', name: 'Banner Pop', raw: 'banner_pop', preview: '/sounds/banner_pop.ogg' },
-  { id: 'notification_decorative-01', name: 'Decorative 01', raw: 'notification_decorative_01', preview: '/sounds/notification_decorative-01.ogg' },
-  { id: 'notification_decorative-02', name: 'Decorative 02', raw: 'notification_decorative_02', preview: '/sounds/notification_decorative-02.ogg' },
-  { id: 'notification_simple-01', name: 'Simple 01', raw: 'notification_simple_01', preview: '/sounds/notification_simple-01.ogg' },
-  { id: 'notification_simple-02', name: 'Simple 02', raw: 'notification_simple_02', preview: '/sounds/notification_simple-02.ogg' },
-  { id: 'alert_high-intensity', name: 'High Intensity', raw: 'alert_high_intensity', preview: '/sounds/alert_high-intensity.ogg' },
-  { id: 'hero_decorative-celebration-02', name: 'Celebration', raw: 'hero_decorative_celebration_02', preview: '/sounds/hero_decorative-celebration-02.ogg' },
+  { id: 'notification_decorative-01', name: 'Decorative 01', raw: 'notification_decorative_01', preview: '/sounds/notification_decorative_01.ogg' },
+  { id: 'notification_decorative-02', name: 'Decorative 02', raw: 'notification_decorative_02', preview: '/sounds/notification_decorative_02.ogg' },
+  { id: 'notification_simple-01', name: 'Simple 01', raw: 'notification_simple_01', preview: '/sounds/notification_simple_01.ogg' },
+  { id: 'notification_simple-02', name: 'Simple 02', raw: 'notification_simple_02', preview: '/sounds/notification_simple_02.ogg' },
+  { id: 'alert_high-intensity', name: 'High Intensity', raw: 'alert_high_intensity', preview: '/sounds/alert_high_intensity.ogg' },
+  { id: 'hero_decorative-celebration-02', name: 'Celebration', raw: 'hero_decorative_celebration_02', preview: '/sounds/hero_decorative_celebration_02.ogg' },
 ];
 
 export const toneIds = new Set(TONES.map((t) => t.id));
