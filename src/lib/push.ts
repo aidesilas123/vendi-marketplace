@@ -29,7 +29,16 @@ function attachListeners(onAction?: (route: string) => void) {
   PushNotifications.addListener('registration', async (token: Token) => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user || !token.value) return;
+      if (!user || !token.value) {
+        // TEMPORARY DIAGNOSTIC — remove once the missing-token cause is found.
+        // A silent bail here (no user, or no token value) leaves no row and
+        // no error anywhere — record which one was missing.
+        try {
+          console.error('[push] registration bailed', { noUser: !user, noToken: !token.value });
+          void Preferences.set({ key: 'vendi_push_bailed', value: JSON.stringify({ at: new Date().toISOString(), noUser: !user, noToken: !token.value }) });
+        } catch {}
+        return;
+      }
       await Preferences.set({ key: TOKEN_KEY, value: token.value });
       const { error } = await supabase.from('user_push_tokens').upsert(
         { user_id: user.id, token: token.value, platform: Capacitor.getPlatform() },
@@ -95,8 +104,14 @@ export async function registerPushToken(onAction?: (route: string) => void) {
     // Pre-create one notification channel per tone so the user's chosen
     // sound just works (channel sound is fixed at creation).
     void ensureToneChannels();
-  } catch {
-    // Push unavailable — not fatal.
+  } catch (err: any) {
+    // TEMPORARY DIAGNOSTIC — remove once the missing-token cause is found.
+    // register() itself throwing (as opposed to the registrationError event)
+    // was previously swallowed by this empty catch.
+    try {
+      console.error('[push] register failed', err);
+      void Preferences.set({ key: 'vendi_push_register_error', value: JSON.stringify({ at: new Date().toISOString(), error: String(err?.message ?? err) }) });
+    } catch {}
   }
 }
 

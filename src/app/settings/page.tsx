@@ -337,6 +337,7 @@ export default function SettingsPage() {
           <p className="px-4 pt-2 pb-4 text-xs text-gray-400 leading-relaxed">
             Applies to new notifications. Tap a tone to preview and save it.
           </p>
+          <button onClick={() => router.push('/push-debug')} className="w-full px-4 py-3 text-left text-sm font-bold text-orange-500">Push diagnostics (temporary)</button>
         </div>
       </Modal>
 
