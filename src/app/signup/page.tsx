@@ -1,25 +1,41 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useEffect, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
+import { Capacitor } from '@capacitor/core';
 import { Button } from '@/shared/Button';
 import { Modal } from '@/shared/Modal/Modal';
 import { ImageUploader } from '@/shared/ImageUploader/ImageUploader';
 import { NIGERIAN_UNIVERSITIES } from '@/constants/universities';
-import { IonIcon } from '@ionic/react';
+import IonIcon from '@/shared/Icon/Icon';
 import { 
   personOutline, mailOutline, lockClosedOutline, 
   eyeOutline, eyeOffOutline, callOutline, schoolOutline,
   checkmarkCircleOutline, closeCircleOutline, syncOutline,
-  alertCircleOutline, chevronBackOutline, cameraOutline, cropOutline
+  alertCircleOutline, chevronBackOutline, logoGoogle
 } from 'ionicons/icons';
 
-export default function SignupPage() {
+function SignupForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Same redirect rules as the login page: same-app paths only, never an auth page.
+  const getSafeRedirectParam = () => {
+    const redirect = searchParams.get('redirect');
+    if (!redirect || !redirect.startsWith('/') || redirect.startsWith('//')) return null;
+    if (redirect === '/login' || redirect === '/signup') return null;
+    return redirect;
+  };
+  const redirectTarget = getSafeRedirectParam() ?? '/';
+  const loginHref = (() => {
+    const param = getSafeRedirectParam();
+    return param ? `/login?redirect=${encodeURIComponent(param)}` : '/login';
+  })();
   const [step, setStep] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [error, setError] = useState('');
 
   // Form State
@@ -38,15 +54,16 @@ export default function SignupPage() {
 
   const [showPassword, setShowPassword] = useState(false);
   const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
+  const [confirmationSent, setConfirmationSent] = useState(false);
 
   // Auto-redirect if already logged in
   useEffect(() => {
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (session) router.replace('/');
+      if (session) router.replace(redirectTarget);
     };
     checkSession();
-  }, [router]);
+  }, [router, redirectTarget]);
 
   // Debounced Username Check (Now works because of SQL fix)
   useEffect(() => {
@@ -58,11 +75,13 @@ export default function SignupPage() {
     setUsernameStatus('checking');
     const delayDebounceFn = setTimeout(async () => {
       try {
+        // maybeSingle: no row is a normal null, not an exception. Real errors
+        // (e.g. RLS) still fall through to the 'available' fallback below.
         const { data } = await supabase
           .from('users')
           .select('username')
           .ilike('username', formData.username)
-          .single();
+          .maybeSingle();
 
         if (data) setUsernameStatus('taken');
         else setUsernameStatus('available');
@@ -74,17 +93,57 @@ export default function SignupPage() {
     return () => clearTimeout(delayDebounceFn);
   }, [formData.username]);
 
+  // WhatsApp numbers arrive in every shape (+234..., 234..., 0803..., 803...).
+  // The order page builds wa.me links from the stored value, expecting either
+  // 234... or 0... — so normalize to digits and keep one of those two forms.
+  const normalizeWhatsapp = (raw: string) => {
+    const digits = raw.replace(/\D/g, '');
+    if (digits.startsWith('234')) return digits;
+    if (digits.startsWith('0')) return digits;
+    return digits.length === 9 ? `0${digits}` : digits;
+  };
+
   const handleNext = () => {
-    if (step === 1 && (!formData.firstName || !formData.lastName || !formData.email || formData.password.length < 6)) {
-      setError("Please fill all fields. Password must be at least 6 characters.");
-      return;
+    if (step === 1) {
+      // Step 1 has no <form>, so the inputs' type="email"/required attributes
+      // never run browser validation — check the format here instead.
+      const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim());
+      if (!formData.firstName.trim() || !formData.lastName.trim() || !emailOk || formData.password.length < 6) {
+        setError("Please fill all fields with a valid email. Password must be at least 6 characters.");
+        return;
+      }
     }
-    if (step === 2 && (usernameStatus !== 'available' || !formData.whatsapp || formData.whatsapp.length < 10)) {
+    if (step === 2 && (usernameStatus !== 'available' || normalizeWhatsapp(formData.whatsapp).length < 10)) {
       setError("Please provide a valid WhatsApp number and ensure your username is available.");
       return;
     }
     setError('');
     setStep(step + 1);
+  };
+
+  const handleGoogleSignIn = async () => {
+    setIsGoogleLoading(true);
+    setError('');
+    try {
+      // Remember where to land after the OAuth round-trip; the callback page reads it back.
+      localStorage.setItem('vendi_post_auth_redirect', redirectTarget);
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: Capacitor.isNativePlatform()
+            ? 'com.vendi.app://auth/callback'
+            : `${window.location.origin}/auth/callback`,
+        },
+      });
+      if (oauthError) {
+        setError(oauthError.message);
+        setIsGoogleLoading(false);
+      }
+      // On success the browser leaves the app; nothing more to do here.
+    } catch {
+      setError('Could not reach the server. Check your connection and try again.');
+      setIsGoogleLoading(false);
+    }
   };
 
   const handleSignup = async (e: React.FormEvent) => {
@@ -97,33 +156,47 @@ export default function SignupPage() {
     setIsLoading(true);
     setError('');
 
-    const { data, error: signUpError } = await supabase.auth.signUp({
-      email: formData.email,
-      password: formData.password,
-      options: {
-        data: {
-          full_name: `${formData.firstName} ${formData.lastName}`,
-          username: formData.username,
-          whatsapp: formData.whatsapp,
-          university_id: formData.university,
-          campus: formData.campus,
-          avatar_url: formData.images.length > 0 ? formData.images[0] : null,
+    try {
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email: formData.email.trim(),
+        password: formData.password,
+        options: {
+          data: {
+            full_name: `${formData.firstName.trim()} ${formData.lastName.trim()}`,
+            username: formData.username,
+            whatsapp: normalizeWhatsapp(formData.whatsapp),
+            university_id: formData.university,
+            campus: formData.campus,
+            avatar_url: formData.images.length > 0 ? formData.images[0] : null,
+          }
         }
-      }
-    });
+      });
 
-    if (signUpError) {
-      setError(signUpError.message);
+      if (signUpError) {
+        setError(signUpError.message);
+        setIsLoading(false);
+        return;
+      }
+      // If email confirmation is on, there is no session yet: the account exists
+      // but the user must confirm first. Say so instead of dropping them on the
+      // feed as a guest. If confirmation is off, they are already logged in.
+      if (data.session) {
+        window.dispatchEvent(new Event('refresh-profile'));
+        router.replace(redirectTarget);
+      } else {
+        setConfirmationSent(true);
+        setIsLoading(false);
+      }
+    } catch {
+      setError('Could not reach the server. Check your connection and try again.');
       setIsLoading(false);
-    } else {
-      window.location.href = '/';
     }
   };
 
   const inputClasses = "w-full bg-gray-50 dark:bg-[#171717] border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white px-12 py-4 rounded-2xl outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-colors shadow-sm";
 
   return (
-    <div className="min-h-screen bg-white dark:bg-background flex flex-col px-6 md:px-8 pt-safe pb-safe">
+    <div className="h-dvh overflow-y-auto bg-white dark:bg-background flex flex-col px-6 md:px-8 pt-safe pb-safe">
       
       {error && (
         <Modal isOpen={!!error} onClose={() => setError('')}>
@@ -150,15 +223,39 @@ export default function SignupPage() {
 
       <div className="max-w-md w-full mx-auto flex-1 flex flex-col pb-20">
         
+        {confirmationSent ? (
+          <div className="animate-in fade-in space-y-4 pt-10 text-center">
+            <IonIcon icon={checkmarkCircleOutline} className="text-6xl text-green-500 mb-6 mx-auto" />
+            <h1 className="text-3xl font-black text-gray-900 dark:text-white mb-2">Check your email</h1>
+            <p className="text-sm font-bold text-gray-500 leading-relaxed">
+              We sent a confirmation link to {formData.email.trim()}. Open it to activate your account, then log in.
+            </p>
+            <Button onClick={() => router.push('/login')} className="w-full !rounded-2xl !py-4 !text-lg !font-black shadow-md hover:!bg-orange-600 mt-4">
+              Back to Log In
+            </Button>
+          </div>
+        ) : (
+          <>
         {step === 1 && (
           <div className="animate-in fade-in slide-in-from-right-4 space-y-4">
             
             <div className="flex justify-center mb-6">
-              <img src="/logo.png" alt="Campus Market Logo" className="w-16 h-16 object-contain drop-shadow-md" />
+              <img src="/logo.png" alt="Vendi Logo" className="w-16 h-16 object-contain drop-shadow-md" />
             </div>
 
             <h1 className="text-3xl font-black text-gray-900 dark:text-white mb-2 text-center">Create Account</h1>
             <p className="text-sm font-bold text-gray-500 mb-8 text-center">Let's start with the basics.</p>
+
+            <Button onClick={handleGoogleSignIn} disabled={isGoogleLoading} className="w-full !rounded-2xl !py-4 !text-lg !font-black shadow-md !bg-white dark:!bg-[#171717] !text-gray-900 dark:!text-white border border-gray-200 dark:border-gray-800 hover:!bg-gray-50 dark:hover:!bg-gray-900 flex items-center justify-center gap-3">
+              <IonIcon icon={logoGoogle} className="text-xl" />
+              {isGoogleLoading ? 'Connecting...' : 'Continue with Google'}
+            </Button>
+
+            <div className="flex items-center gap-3">
+              <div className="h-px flex-1 bg-gray-200 dark:bg-gray-800" />
+              <span className="text-xs font-bold text-gray-400">or sign up with email</span>
+              <div className="h-px flex-1 bg-gray-200 dark:bg-gray-800" />
+            </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div className="relative">
@@ -176,7 +273,7 @@ export default function SignupPage() {
             <div className="relative">
               <IonIcon icon={lockClosedOutline} className="absolute left-4 top-1/2 -translate-y-1/2 text-xl text-gray-400" />
               <input type={showPassword ? "text" : "password"} placeholder="Password (Min 6 chars)" value={formData.password} onChange={(e) => setFormData({...formData, password: e.target.value})} className={inputClasses} />
-              <button onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
+              <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
                 <IonIcon icon={showPassword ? eyeOffOutline : eyeOutline} className="text-xl" />
               </button>
             </div>
@@ -251,14 +348,6 @@ export default function SignupPage() {
                 </div>
               </div>
               
-              <div className="flex gap-3 mt-4">
-                <button className="flex items-center gap-1.5 text-xs font-bold text-gray-500 hover:text-orange-500 transition-colors bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-full">
-                  <IonIcon icon={cameraOutline} /> Change Photo
-                </button>
-                <button className="flex items-center gap-1.5 text-xs font-bold text-gray-500 hover:text-orange-500 transition-colors bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-full">
-                  <IonIcon icon={cropOutline} /> Edit / Crop
-                </button>
-              </div>
             </div>
 
             <div className="flex items-start gap-3 bg-gray-50 dark:bg-[#171717] p-4 rounded-2xl border border-gray-200 dark:border-gray-800">
@@ -270,7 +359,7 @@ export default function SignupPage() {
                 className="mt-1 w-5 h-5 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
               />
               <label htmlFor="terms" className="text-xs font-bold text-gray-600 dark:text-gray-400 leading-relaxed">
-                I agree to the <span className="text-orange-500">Terms of Service</span> and acknowledge that my information will be verified to prevent fraud on the marketplace.
+                I agree to the <Link href="/terms" className="text-orange-500">Terms of Service</Link> and acknowledge that my information will be verified to prevent fraud on the marketplace.
               </label>
             </div>
 
@@ -281,10 +370,19 @@ export default function SignupPage() {
         )}
 
         <p className="text-center text-sm font-bold text-gray-500 mt-auto">
-          Already have an account? <Link href="/login" className="text-orange-500 hover:underline">Log In</Link>
+          Already have an account? <Link href={loginHref} className="text-orange-500 hover:underline">Log In</Link>
         </p>
+        </>)}
 
       </div>
     </div>
+  );
+}
+
+export default function SignupPage() {
+  return (
+    <Suspense>
+      <SignupForm />
+    </Suspense>
   );
 }

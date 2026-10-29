@@ -226,8 +226,11 @@ export default function SellerProductDetails() {
     () => (data?.questions ?? []).filter((q: any) => q.parent_id === null),
     [data?.questions]
   );
+  // Same pattern as the buyer product page: threads read oldest-first.
   const repliesFor = (id: string) =>
-    (data?.questions ?? []).filter((q: any) => q.parent_id === id);
+    (data?.questions ?? [])
+      .filter((q: any) => q.parent_id === id)
+      .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
   const conversion =
     totalViews > 0 && data ? Math.round(((data.orderCount ?? 0) / totalViews) * 100) : null;

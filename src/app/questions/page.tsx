@@ -91,7 +91,12 @@ export default function QuestionsPage() {
     ? topQuestions.filter((q: any) => !repliedTo.has(q.id))
     : topQuestions;
 
-  const repliesFor = (id: string) => questions.filter((q: any) => q.parent_id === id);
+  // Same pattern as the buyer product page: threads read oldest-first, even though
+  // the list itself is fetched newest-first.
+  const repliesFor = (id: string) =>
+    questions
+      .filter((q: any) => q.parent_id === id)
+      .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
   const handleReplySubmit = async (q: any) => {
     if (!replyText.trim() || isSubmitting) return;

@@ -4,6 +4,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { App as CapacitorApp } from '@capacitor/app';
+import { Capacitor } from '@capacitor/core';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { BottomNav } from './BottomNav';
@@ -53,7 +55,7 @@ export const AppShell = ({ children }: AppShellProps) => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [user, setUser] = useState<{ id?: string; name: string; email: string; avatarUrl?: string } | null>(null);
 
-  const isAuthPage = pathname === '/login' || pathname === '/signup';
+  const isAuthPage = pathname === '/login' || pathname === '/signup' || pathname === '/forgot-password' || pathname === '/reset-password' || pathname === '/auth/callback' || pathname === '/complete-profile';
   const isChatRoom = pathname === '/chats' || pathname?.startsWith('/chats');
   const showShell = !isAuthPage && !isChatRoom;
 
@@ -206,6 +208,40 @@ export const AppShell = ({ children }: AppShellProps) => {
       window.scrollTo(0, 0);
     }
   }, [pathname]);
+
+  // Native deep-link return (e.g. Google sign-in): the OS reopens the app with
+  // com.vendi.app://auth/callback?code=... — forward it to the callback page,
+  // which exchanges the code for a session. Skipped on web (not native).
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let removed = false;
+    let handle: { remove: () => Promise<void> } | undefined;
+    CapacitorApp.addListener('appUrlOpen', ({ url }) => {
+      if (url.includes('auth/callback')) {
+        const query = url.split('?')[1] ?? '';
+        router.push(query ? `/auth/callback?${query}` : '/auth/callback');
+      } else if (url.includes('reset-password')) {
+        // Recovery links carry tokens in the query (?code=, PKCE) or the
+        // fragment (#access_token=..., implicit). Forward both as query
+        // params so /reset-password can consume them.
+        const query = url.split('?')[1]?.split('#')[0] ?? '';
+        const hash = url.split('#')[1] ?? '';
+        const params = new URLSearchParams(query);
+        if (hash) {
+          new URLSearchParams(hash).forEach((v, k) => params.set(k, v));
+        }
+        const qs = params.toString();
+        router.push(qs ? `/reset-password?${qs}` : '/reset-password');
+      }
+    }).then((l) => {
+      if (removed) void l.remove();
+      else handle = l;
+    });
+    return () => {
+      removed = true;
+      void handle?.remove();
+    };
+  }, [router]);
 
   if (!showShell) return <>{children}</>;
 

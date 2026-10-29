@@ -1,11 +1,13 @@
 "use client";
+// src/app/dispute/DisputeStatus.tsx
 
 import React, { useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { IonIcon } from '@ionic/react';
+import IonIcon from '@/shared/Icon/Icon';
 import {
   chevronBackOutline,
   checkmarkCircle,
+  closeCircleOutline,
   hourglassOutline,
   lockClosedOutline
 } from 'ionicons/icons';
@@ -83,6 +85,8 @@ export const DisputeStatus: React.FC<DisputeStatusProps> = ({ transaction, produ
   const STEPS = stepsFor(disputeState);
   const isResolved = disputeState === 'resolved';
   const isReviewing = disputeState === 'under_review';
+  // 'withdrawn' = the buyer cancelled the dispute; escrow resumed, no decision.
+  const isWithdrawn = disputeState === 'withdrawn';
 
   const handleCancelDispute = async () => {
     if (cancelling) return;
@@ -131,42 +135,57 @@ export const DisputeStatus: React.FC<DisputeStatusProps> = ({ transaction, produ
               </h2>
             )}
             <p className="text-2xl font-black text-orange-500 tracking-tight">₦{amount.toLocaleString()}</p>
-            <div className="flex items-center gap-1.5 mt-1.5 text-xs font-bold text-gray-500 dark:text-gray-400">
-              <IonIcon icon={lockClosedOutline} className="text-sm" />
-              <span>Held in escrow</span>
-            </div>
+            {isWithdrawn ? (
+              <div className="flex items-center gap-1.5 mt-1.5 text-xs font-bold text-gray-500 dark:text-gray-400">
+                <IonIcon icon={checkmarkCircle} className="text-sm text-gray-400" />
+                <span>Escrow resumed</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 mt-1.5 text-xs font-bold text-gray-500 dark:text-gray-400">
+                <IonIcon icon={lockClosedOutline} className="text-sm" />
+                <span>Held in escrow</span>
+              </div>
+            )}
           </div>
 
           {/* Current status — follows the dispute status */}
           <div className={`flex gap-3 rounded-2xl p-4 mt-6 ${
-            isResolved
-              ? 'bg-green-500/10 dark:bg-green-500/10'
-              : isReviewing
-                ? 'bg-blue-500/10 dark:bg-blue-500/10'
-                : 'bg-orange-50 dark:bg-orange-900/20'
+            isWithdrawn
+              ? 'bg-gray-100 dark:bg-gray-800/60'
+              : isResolved
+                ? 'bg-green-500/10 dark:bg-green-500/10'
+                : isReviewing
+                  ? 'bg-blue-500/10 dark:bg-blue-500/10'
+                  : 'bg-orange-50 dark:bg-orange-900/20'
           }`}>
             <IonIcon
-              icon={isResolved ? checkmarkCircle : hourglassOutline}
+              icon={isWithdrawn ? closeCircleOutline : isResolved ? checkmarkCircle : hourglassOutline}
               className={`text-2xl flex-shrink-0 ${
-                isResolved ? 'text-green-500' : isReviewing ? 'text-blue-500' : 'text-orange-500'
+                isWithdrawn
+                  ? 'text-gray-400'
+                  : isResolved ? 'text-green-500' : isReviewing ? 'text-blue-500' : 'text-orange-500'
               }`}
             />
             <div>
               <p className={`text-sm font-black ${
-                isResolved
-                  ? 'text-green-600 dark:text-green-400'
-                  : isReviewing
-                    ? 'text-blue-600 dark:text-blue-400'
-                    : 'text-orange-600 dark:text-orange-400'
+                isWithdrawn
+                  ? 'text-gray-600 dark:text-gray-300'
+                  : isResolved
+                    ? 'text-green-600 dark:text-green-400'
+                    : isReviewing
+                      ? 'text-blue-600 dark:text-blue-400'
+                      : 'text-orange-600 dark:text-orange-400'
               }`}>
-                {isResolved ? 'Dispute resolved' : isReviewing ? 'Under review' : 'Pending admin review'}
+                {isWithdrawn ? 'Dispute cancelled' : isResolved ? 'Dispute resolved' : isReviewing ? 'Under review' : 'Pending admin review'}
               </p>
               <p className="text-xs text-gray-600 dark:text-gray-400 font-medium leading-relaxed mt-1">
-                {isResolved
-                  ? 'An admin has made a final decision on this dispute.'
-                  : isReviewing
-                    ? 'An admin is actively investigating your dispute. The funds stay frozen until a final decision.'
-                    : 'A dispute has been raised on this order. The funds stay frozen in escrow until an admin makes a final decision.'}
+                {isWithdrawn
+                  ? 'The buyer cancelled this dispute. The escrow has resumed and the funds are no longer frozen.'
+                  : isResolved
+                    ? 'An admin has made a final decision on this dispute.'
+                    : isReviewing
+                      ? 'An admin is actively investigating your dispute. The funds stay frozen until a final decision.'
+                      : 'A dispute has been raised on this order. The funds stay frozen in escrow until an admin makes a final decision.'}
               </p>
             </div>
           </div>
@@ -228,7 +247,8 @@ export const DisputeStatus: React.FC<DisputeStatusProps> = ({ transaction, produ
             </div>
           )}
 
-          {/* Progress */}
+          {/* Progress — hidden for cancelled disputes: the flow never ran its course */}
+          {!isWithdrawn && (
           <ol className="mt-8 px-2">
             {STEPS.map((step, i) => {
               const isLast = i === STEPS.length - 1;
@@ -258,6 +278,7 @@ export const DisputeStatus: React.FC<DisputeStatusProps> = ({ transaction, produ
               );
             })}
           </ol>
+          )}
 
           <p className="mt-8 px-2 text-[11px] font-medium text-gray-400 dark:text-gray-500 break-all">
             Ref: {transaction.reference}

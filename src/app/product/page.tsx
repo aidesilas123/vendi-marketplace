@@ -144,6 +144,16 @@ async function fetchSeller(sellerId: string) {
   return data ?? null;
 }
 
+async function fetchSellerStats(sellerId: string) {
+  const [salesRes, disputesRes] = await Promise.all([
+    supabase.from('transactions').select('id', { count: 'exact', head: true }).eq('seller_id', sellerId).eq('status', 'completed'),
+    supabase.from('disputes').select('id', { count: 'exact', head: true }).eq('seller_id', sellerId),
+  ]);
+  if (salesRes.error) throw salesRes.error;
+  if (disputesRes.error) throw disputesRes.error;
+  return { sales: salesRes.count ?? 0, disputes: disputesRes.count ?? 0 };
+}
+
 async function fetchSellerReviews(sellerId: string) {
   const { data, error } = await supabase
     .from('seller_reviews')
@@ -581,6 +591,12 @@ export default function ProductDetails() {
   const { data: sellerData } = useSWR(
     sellerId ? (['product-seller', sellerId] as const) : null,
     ([, id]) => fetchSeller(id),
+    { revalidateOnFocus: false, dedupingInterval: 10000 }
+  );
+
+  const { data: sellerStats } = useSWR(
+    sellerId ? (['product-seller-stats', sellerId] as const) : null,
+    ([, id]) => fetchSellerStats(id),
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
 
@@ -1071,7 +1087,12 @@ export default function ProductDetails() {
                   <div className="h-8 w-px bg-gray-200 dark:bg-gray-700"></div>
                   <div>
                     <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-gray-500">Sales</p>
-                    <span className="text-lg font-black leading-none text-gray-900 dark:text-white">12+</span>
+                    <span className="text-lg font-black leading-none text-gray-900 dark:text-white">{sellerStats?.sales ?? 0}</span>
+                  </div>
+                  <div className="h-8 w-px bg-gray-200 dark:bg-gray-700"></div>
+                  <div>
+                    <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-gray-500">Disputes</p>
+                    <span className="text-lg font-black leading-none text-gray-900 dark:text-white">{sellerStats?.disputes ?? 0}</span>
                   </div>
                 </div>
 

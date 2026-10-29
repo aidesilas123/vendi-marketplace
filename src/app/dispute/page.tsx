@@ -195,9 +195,14 @@ export default function DisputePage() {
     );
   }
 
-  // --- THE ROUTING FIX ---
-  // If the order exists but is ALREADY disputed, show the Status view instead of the form
-  if (transaction && transaction.status === 'disputed') {
+  // --- DISPUTE ROUTING ---
+  // A dispute row existing (any status, including 'withdrawn') means this order
+  // already went through the dispute flow: both parties get the status view and
+  // never the raise form. The raise form is only for the buyer, and only when no
+  // dispute row exists yet. (transaction.status === 'disputed' stays in the
+  // condition so the status view renders immediately while the row loads.)
+  const hasDisputeRow = dispute !== undefined && dispute !== null;
+  if (transaction && (transaction.status === 'disputed' || hasDisputeRow)) {
     return (
       <DisputeStatus 
         transaction={transaction} 
@@ -217,6 +222,22 @@ export default function DisputePage() {
         <p className="text-base font-bold text-gray-800 dark:text-gray-200">Cannot raise dispute.</p>
         <p className="text-xs text-gray-400 mt-1 max-w-[240px]">
           This order is marked as "{transaction?.status || 'unknown'}". Only pending orders can be disputed.
+        </p>
+        <Button onClick={() => router.back()} className="mt-6 px-8 !py-3 !rounded-full text-sm">Go Back</Button>
+      </div>
+    );
+  }
+
+  // No dispute row exists yet: only the buyer (transactions.user_id) may raise one.
+  // Anyone else (e.g. the seller opening an old link) gets a notice instead of the form.
+  const isBuyer = !!currentUser?.id && !!transaction.user_id && currentUser.id === transaction.user_id;
+  if (currentUser && !isBuyer) {
+    return (
+      <div className="w-full h-screen flex flex-col items-center justify-center text-gray-500 pb-20 px-4 text-center bg-gray-50 dark:bg-background">
+        <IonIcon icon={alertCircleOutline} className="text-5xl mb-4 text-gray-300 dark:text-gray-600" />
+        <p className="text-base font-bold text-gray-800 dark:text-gray-200">Only the buyer can raise a dispute.</p>
+        <p className="text-xs text-gray-400 mt-1 max-w-[240px]">
+          Disputes on this order can only be opened by the buyer.
         </p>
         <Button onClick={() => router.back()} className="mt-6 px-8 !py-3 !rounded-full text-sm">Go Back</Button>
       </div>
