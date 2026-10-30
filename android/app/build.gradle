@@ -1,3 +1,4 @@
+// android/app/build.gradle
 apply plugin: 'com.android.application'
 
 android {
@@ -16,7 +17,22 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // Forces debug signing to use the repo's committed keystore, no matter
+    // what debug keystore Gradle would otherwise pick by default (runner
+    // home, AGP defaults, or anything else). This is the key whose SHA-1
+    // is 4B:60:F3:EB:91:90:D2:E6:EC:F0:EB:EA:2C:07:B7:2D:5F:10:5F:F8.
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

@@ -35,10 +35,11 @@ jobs:
 
       # A stable debug keystore committed to the repo (android/app/debug.keystore),
       # so every CI build signs with the SAME key no matter which runner or image
-      # runs the job. Installed here before the build; Gradle's default debug
-      # signing picks it up from ~/.android/debug.keystore automatically, so no
-      # build.gradle change is needed. Safe to commit: the debug keystore uses the
-      # publicly-known android/android credentials and can never publish to Play.
+      # runs the job. Installed here before the build for the Print cross-check;
+      # the actual signing key is forced by signingConfigs.debug in
+      # android/app/build.gradle, which points at this same file. Safe to commit:
+      # the debug keystore uses the publicly-known android/android credentials
+      # and can never publish to Play.
       - name: Install Stable Debug Keystore
         run: |
           mkdir -p ~/.android
@@ -63,6 +64,13 @@ jobs:
       - name: Rename APK
         run: |
           mv android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/apk/debug/vendi.apk
+
+      # Prints the SHA-1 of the APK file itself (not the keystore). If this
+      # ever differs from the Print Debug Signing SHA-1 step above, the build
+      # signed with a different key than the repo keystore — read this line
+      # before trusting anything else about the artifact.
+      - name: Print APK Signing SHA-1
+        run: keytool -printcert -jarfile android/app/build/outputs/apk/debug/vendi.apk | grep -i "SHA1\|SHA-1"
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
