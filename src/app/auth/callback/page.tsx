@@ -4,6 +4,7 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { VendiLoader } from '@/shared/VendiLoader';
 
 function CallbackForm() {
   const router = useRouter();
@@ -72,7 +73,8 @@ function CallbackForm() {
   }, [router, searchParams]);
 
   return (
-    <div className="min-h-screen bg-white dark:bg-background flex items-center justify-center px-6">
+    <div className="min-h-screen bg-white dark:bg-background flex flex-col items-center justify-center gap-4 px-6">
+      <VendiLoader label={message} />
       <p className="text-sm font-bold text-gray-500 text-center">{message}</p>
     </div>
   );
