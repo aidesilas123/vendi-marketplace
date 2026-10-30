@@ -4,16 +4,16 @@ import React, { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
+import { signInWithGoogleNative } from '@/lib/googleSignIn';
 import { Capacitor } from '@capacitor/core';
 import { Button } from '@/shared/Button';
-import { Modal } from '@/shared/Modal/Modal';
+import { showGlobalToast } from '@/shared/Toast/Toast';
 import IonIcon from '@/shared/Icon/Icon';
 import { 
   mailOutline, 
   lockClosedOutline, 
   eyeOutline, 
   eyeOffOutline,
-  alertCircleOutline,
   chevronBackOutline,
   logoGoogle
 } from 'ionicons/icons';
@@ -25,7 +25,6 @@ function LoginForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-  const [error, setError] = useState('');
 
   const searchParams = useSearchParams();
 
@@ -59,25 +58,28 @@ function LoginForm() {
 
   const handleGoogleSignIn = async () => {
     setIsGoogleLoading(true);
-    setError('');
     try {
-      // Remember where to land after the OAuth round-trip; the callback page reads it back.
+      // Remember where to land after sign-in; the callback page reads it back.
       localStorage.setItem('vendi_post_auth_redirect', getSafeRedirect());
-      const { error: oauthError } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: Capacitor.isNativePlatform()
-            ? 'com.vendi.app://auth/callback'
-            : `${window.location.origin}/auth/callback`,
-        },
-      });
-      if (oauthError) {
-        setError(oauthError.message);
-        setIsGoogleLoading(false);
+      if (Capacitor.isNativePlatform()) {
+        // Native: the system account sheet, no browser. The callback page
+        // finishes routing (it already handles an existing session).
+        const result = await signInWithGoogleNative();
+        if (result === 'signed-in') router.push('/auth/callback');
+        // 'cancelled' = user dismissed the sheet; stay put, no error.
+      } else {
+        const { error: oauthError } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo: `${window.location.origin}/auth/callback`,
+          },
+        });
+        if (oauthError) showGlobalToast(oauthError.message, 'error');
+        // On success the browser leaves the app; nothing more to do here.
       }
-      // On success the browser leaves the app; nothing more to do here.
-    } catch {
-      setError('Could not reach the server. Check your connection and try again.');
+    } catch (err: any) {
+      showGlobalToast(err?.message || 'Could not reach the server. Check your connection and try again.', 'error');
+    } finally {
       setIsGoogleLoading(false);
     }
   };
@@ -85,7 +87,6 @@ function LoginForm() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    setError('');
 
     try {
       // Mobile keyboards/autofill often add a stray space; Supabase treats it as a
@@ -93,33 +94,23 @@ function LoginForm() {
       const { error: signInError } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
 
       if (signInError) {
-        setError(signInError.message);
+        showGlobalToast(signInError.message, 'error');
         setIsLoading(false);
       } else {
         window.dispatchEvent(new Event('refresh-profile'));
         router.replace(getSafeRedirect());
       }
     } catch {
-      setError('Could not reach the server. Check your connection and try again.');
+      showGlobalToast('Could not reach the server. Check your connection and try again.', 'error');
       setIsLoading(false);
     }
   };
 
-  const inputClasses = "w-full bg-gray-50 dark:bg-[#171717] border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white px-12 py-4 rounded-2xl outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-colors shadow-sm";
+  const inputClasses = "w-full bg-transparent border border-orange-500/50 text-gray-900 dark:text-white px-12 py-4 rounded-2xl outline-none focus:border-orange-400 transition-colors";
 
   return (
     <div className="h-dvh overflow-y-auto bg-white dark:bg-background flex flex-col px-6 md:px-8 pt-safe pb-safe">
       
-      {error && (
-        <Modal isOpen={!!error} onClose={() => setError('')}>
-          <div className="p-6 text-center">
-            <IonIcon icon={alertCircleOutline} className="text-5xl text-red-500 mb-4" />
-            <h2 className="text-xl font-black mb-2 text-gray-900 dark:text-white">Login Failed</h2>
-            <p className="text-gray-600 dark:text-gray-300 mb-6">{error}</p>
-            <Button onClick={() => setError('')} className="w-full !py-3">Try Again</Button>
-          </div>
-        </Modal>
-      )}
 
       {/* Transparent Back Button */}
       <div className="pt-8">
@@ -137,17 +128,6 @@ function LoginForm() {
 
         <h1 className="text-3xl font-black text-gray-900 dark:text-white mb-2 text-center">Welcome Back</h1>
         <p className="text-sm font-bold text-gray-500 mb-8 text-center">Log in to your Vendi account.</p>
-
-        <Button onClick={handleGoogleSignIn} disabled={isLoading || isGoogleLoading} className="w-full !rounded-2xl !py-4 !text-lg !font-black shadow-md !bg-white dark:!bg-[#171717] !text-gray-900 dark:!text-white border border-gray-200 dark:border-gray-800 hover:!bg-gray-50 dark:hover:!bg-gray-900 flex items-center justify-center gap-3">
-          <IonIcon icon={logoGoogle} className="text-xl" />
-          {isGoogleLoading ? 'Connecting...' : 'Continue with Google'}
-        </Button>
-
-        <div className="flex items-center gap-3">
-          <div className="h-px flex-1 bg-gray-200 dark:bg-gray-800" />
-          <span className="text-xs font-bold text-gray-400">or log in with email</span>
-          <div className="h-px flex-1 bg-gray-200 dark:bg-gray-800" />
-        </div>
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div className="relative">
@@ -173,6 +153,17 @@ function LoginForm() {
             {isLoading ? 'Logging in...' : 'Log In'}
           </Button>
         </form>
+
+        <div className="flex items-center gap-3 mt-6">
+          <div className="h-px flex-1 bg-gray-200 dark:bg-gray-800" />
+          <span className="text-xs font-bold text-gray-400">or continue with</span>
+          <div className="h-px flex-1 bg-gray-200 dark:bg-gray-800" />
+        </div>
+
+<button type="button" onClick={handleGoogleSignIn} disabled={isLoading || isGoogleLoading} className="w-full flex items-center justify-center gap-3 !rounded-2xl py-4 text-lg font-black bg-transparent text-gray-900 dark:text-white border border-orange-500/50 hover:border-orange-400 transition-colors active:scale-[0.98] disabled:opacity-60 mt-6">
+          <IonIcon icon={logoGoogle} className="text-xl" />
+          {isGoogleLoading ? 'Connecting...' : 'Continue with Google'}
+        </button>
 
         <p className="text-center text-sm font-bold text-gray-500 mt-8">
           Don't have an account? <Link href={signupHref} className="text-orange-500 hover:underline">Sign Up</Link>

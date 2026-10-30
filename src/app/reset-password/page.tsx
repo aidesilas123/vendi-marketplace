@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { Button } from '@/shared/Button';
-import { Modal } from '@/shared/Modal/Modal';
+import { showGlobalToast } from '@/shared/Toast/Toast';
 import IonIcon from '@/shared/Icon/Icon';
 import {
   lockClosedOutline,
@@ -24,7 +24,6 @@ export default function ResetPasswordPage() {
   const [confirm, setConfirm] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
 
   // The recovery link reaches this page three ways, and all three must work:
   // - Web PKCE: ?code=... -> exchange it for a session.
@@ -72,45 +71,34 @@ export default function ResetPasswordPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
+      showGlobalToast('Password must be at least 6 characters.', 'error');
       return;
     }
     if (password !== confirm) {
-      setError('Passwords do not match.');
+      showGlobalToast('Passwords do not match.', 'error');
       return;
     }
     setIsLoading(true);
-    setError('');
     try {
       const { error: updateError } = await supabase.auth.updateUser({ password });
       if (updateError) {
-        setError(updateError.message);
+        showGlobalToast(updateError.message, 'error');
         setIsLoading(false);
       } else {
         window.dispatchEvent(new Event('refresh-profile'));
         router.replace('/');
       }
     } catch {
-      setError('Could not reach the server. Check your connection and try again.');
+      showGlobalToast('Could not reach the server. Check your connection and try again.', 'error');
       setIsLoading(false);
     }
   };
 
-  const inputClasses = "w-full bg-gray-50 dark:bg-[#171717] border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white px-12 py-4 rounded-2xl outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-colors shadow-sm";
+  const inputClasses = "w-full bg-transparent border border-orange-500/50 text-gray-900 dark:text-white px-12 py-4 rounded-2xl outline-none focus:border-orange-400 transition-colors";
 
   return (
     <div className="h-dvh overflow-y-auto bg-white dark:bg-background flex flex-col px-6 md:px-8 pt-safe pb-safe">
 
-      {error && (
-        <Modal isOpen={!!error} onClose={() => setError('')}>
-          <div className="p-6 text-center">
-            <IonIcon icon={alertCircleOutline} className="text-5xl text-red-500 mb-4" />
-            <h2 className="text-xl font-black mb-2 text-gray-900 dark:text-white">Something went wrong</h2>
-            <p className="text-gray-600 dark:text-gray-300 mb-6">{error}</p>
-            <Button onClick={() => setError('')} className="w-full !py-3">Try Again</Button>
-          </div>
-        </Modal>
-      )}
 
       <div className="pt-8">
         <button onClick={() => router.push('/login')} className="w-10 h-10 rounded-full bg-transparent flex items-center justify-center mb-4 text-gray-900 dark:text-white transition-colors hover:bg-black/5 dark:hover:bg-white/10">

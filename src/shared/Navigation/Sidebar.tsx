@@ -353,18 +353,18 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
           <p className="text-gray-600 dark:text-gray-400 mb-8 font-medium leading-relaxed">
             Are you sure you want to sign out of your Vendi account?
           </p>
-          <div className="flex flex-col gap-3">
-            <Button 
-              onClick={handleSignOut} 
-              className="w-full !rounded-full !py-3.5 !bg-red-500 hover:!bg-red-600 shadow-lg shadow-red-500/30 text-white font-black transition-all active:scale-[0.98]"
-            >
-              Yes, Sign Out
-            </Button>
-            <Button 
-              onClick={() => setShowSignOutModal(false)} 
-              className="w-full !rounded-full !py-3.5 !bg-gray-200 dark:!bg-gray-800 !text-gray-900 dark:!text-white font-bold hover:!bg-gray-300 dark:hover:!bg-gray-700 transition-colors"
+          <div className="flex flex-row gap-3">
+            <Button
+              onClick={() => setShowSignOutModal(false)}
+              className="flex-1 !rounded-full !py-2.5 !text-sm !bg-gray-200 dark:!bg-gray-800 !text-gray-900 dark:!text-white font-bold hover:!bg-gray-300 dark:hover:!bg-gray-700 transition-colors"
             >
               Cancel
+            </Button>
+            <Button
+              onClick={handleSignOut}
+              className="flex-1 !rounded-full !py-2.5 !text-sm !bg-red-500 hover:!bg-red-600 shadow-lg shadow-red-500/30 text-white font-black transition-all active:scale-[0.98]"
+            >
+              Yes, Sign Out
             </Button>
           </div>
         </div>
