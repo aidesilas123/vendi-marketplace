@@ -65,12 +65,24 @@ jobs:
         run: |
           mv android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/apk/debug/vendi.apk
 
-      # Prints the SHA-1 of the APK file itself (not the keystore). If this
-      # ever differs from the Print Debug Signing SHA-1 step above, the build
-      # signed with a different key than the repo keystore — read this line
-      # before trusting anything else about the artifact.
+      # Prints the APK file's own signer certificates (not the keystore's).
+      # If this ever differs from the Print Debug Signing SHA-1 step above,
+      # the build signed with a different key than the repo keystore — read
+      # this before trusting anything else about the artifact.
+      # Uses apksigner, not keytool: keytool only reads JAR (v1) signatures
+      # and its output labels didn't match the grep, which failed the run
+      # (grep exits 1 on no match, and the step runs under bash -e).
+      # apksigner understands v1+v2+v3 signatures and prints the SHA-1
+      # digest directly. Non-blocking: a diagnostic step must never stop
+      # the artifact upload again.
       - name: Print APK Signing SHA-1
-        run: keytool -printcert -jarfile android/app/build/outputs/apk/debug/vendi.apk | grep -i "SHA1\|SHA-1"
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --print-certs android/app/build/outputs/apk/debug/vendi.apk || echo "apksigner could not verify the APK"
+          else
+            keytool -printcert -jarfile android/app/build/outputs/apk/debug/vendi.apk || echo "keytool could not read the APK signature"
+          fi
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
