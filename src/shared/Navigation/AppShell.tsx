@@ -290,7 +290,7 @@ export const AppShell = ({ children }: AppShellProps) => {
         </div>
       </div>
 
-      {/* Inapp banner for foreground pushes (tap deep-links). */}
+      {/* In-app banner for foreground pushes (tap deep-links). */}
       <PushBanner />
 
     </div>
