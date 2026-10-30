@@ -80,13 +80,14 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
   ref
 ) {
   const scrollerRef = useRef<HTMLDivElement>(null);
-  const [pull, setPull] = useState(0); // spinner travel (px)
-  const [bounce, setBounce] = useState(0); // bottom elastic offset (px, negative)
+  const badgeContainerRef = useRef<HTMLDivElement>(null);
+
   const [dragging, setDragging] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const pullRef = useRef(0);
   const bounceRef = useRef(0);
+  const draggingRef = useRef(false);
   const refreshingRef = useRef(false);
   const onRefreshRef = useRef(onRefresh);
   const thresholdRef = useRef(threshold);
@@ -98,23 +99,42 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
     bottomBounceRef.current = bottomBounce;
   }, [onRefresh, threshold, bottomBounce]);
 
-  const applyPull = useCallback((value: number) => {
-    pullRef.current = value;
-    setPull(value);
+  const updateDOM = useCallback((pullVal: number, bounceVal: number, isDraggingMode: boolean, isRefreshingMode: boolean) => {
+    if (badgeContainerRef.current) {
+      const badgeY = HIDDEN_Y + Math.min(pullVal, MAX_PULL);
+      const badgeOpacity = isRefreshingMode ? 1 : Math.min(1, pullVal / 24);
+      badgeContainerRef.current.style.transform = `translate3d(0, ${badgeY}px, 0)`;
+      badgeContainerRef.current.style.opacity = String(badgeOpacity);
+      badgeContainerRef.current.style.transition = isDraggingMode
+        ? 'none'
+        : `transform ${SETTLE_MS}ms ${EASE}, opacity 200ms ease-out`;
+    }
+    if (scrollerRef.current) {
+      const topStretch = isRefreshingMode ? 24 : (pullVal > 0 ? pullVal * 0.42 : 0);
+      const contentOffset = bounceVal !== 0 ? bounceVal : topStretch;
+      scrollerRef.current.style.transform = contentOffset !== 0 ? `translate3d(0, ${contentOffset}px, 0)` : 'none';
+      scrollerRef.current.style.transition = isDraggingMode ? 'none' : `transform ${SETTLE_MS}ms ${EASE}`;
+    }
   }, []);
 
-  const applyBounce = useCallback((value: number) => {
+  const applyPull = useCallback((value: number, isDraggingMode = false) => {
+    pullRef.current = value;
+    updateDOM(value, bounceRef.current, isDraggingMode, refreshingRef.current);
+  }, [updateDOM]);
+
+  const applyBounce = useCallback((value: number, isDraggingMode = false) => {
     bounceRef.current = value;
-    setBounce(value);
-  }, []);
+    updateDOM(pullRef.current, value, isDraggingMode, refreshingRef.current);
+  }, [updateDOM]);
 
   const runRefresh = useCallback(async () => {
     if (refreshingRef.current) return;
     refreshingRef.current = true;
     setRefreshing(true);
+    draggingRef.current = false;
     setDragging(false);
-    applyBounce(0);
-    applyPull(HOLD);
+    applyBounce(0, false);
+    applyPull(HOLD, false);
 
     try {
       await Promise.all([
@@ -125,7 +145,7 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
       // The caller shows its own errors (toast). We only need to slide away.
     }
 
-    applyPull(0); // slides up and out
+    applyPull(0, false); // slides up and out
     setTimeout(() => {
       refreshingRef.current = false;
       setRefreshing(false);
@@ -184,23 +204,29 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
         if (step > 0 && atTop() && onRefreshRef.current) {
           mode = 'top';
           anchorY = lastY;
+          if (!draggingRef.current) {
+            draggingRef.current = true;
+            setDragging(true);
+          }
         } else if (step < 0 && atBottom() && bottomBounceRef.current) {
           mode = 'bottom';
           anchorY = lastY;
+          if (!draggingRef.current) {
+            draggingRef.current = true;
+            setDragging(true);
+          }
         }
       }
 
       if (mode === 'top') {
         const distance = y - anchorY;
         if (distance <= 0) {
-          applyPull(0);
-          setDragging(false);
+          applyPull(0, true);
           mode = 'idle';
         } else {
           if (e.cancelable) e.preventDefault();
-          setDragging(true);
           const next = Math.min(rubber(distance), MAX_PULL);
-          applyPull(next);
+          applyPull(next, true);
           const isPast = next >= thresholdRef.current;
           if (isPast && !crossed) {
             crossed = true;
@@ -212,13 +238,11 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
       } else if (mode === 'bottom') {
         const distance = anchorY - y;
         if (distance <= 0) {
-          applyBounce(0);
-          setDragging(false);
+          applyBounce(0, true);
           mode = 'idle';
         } else {
           if (e.cancelable) e.preventDefault();
-          setDragging(true);
-          applyBounce(-Math.min(rubber(distance), 90));
+          applyBounce(-Math.min(rubber(distance), 90), true);
         }
       }
 
@@ -228,15 +252,18 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
     const onEnd = () => {
       const wasMode = mode;
       mode = 'idle';
+      if (draggingRef.current) {
+        draggingRef.current = false;
+        setDragging(false);
+      }
       if (refreshingRef.current) return;
 
       if (wasMode === 'top' && onRefreshRef.current && pullRef.current >= thresholdRef.current) {
         void runRefresh();
         return;
       }
-      setDragging(false);
-      if (pullRef.current !== 0) applyPull(0);
-      if (bounceRef.current !== 0) applyBounce(0);
+      if (pullRef.current !== 0) applyPull(0, false);
+      if (bounceRef.current !== 0) applyBounce(0, false);
     };
 
     el.addEventListener('touchstart', onStart, { passive: true });
@@ -251,19 +278,16 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
     };
   }, [applyBounce, applyPull, runRefresh]);
 
-  const progress = Math.min(1, pull / HOLD);
-  const topStretch = refreshing ? 24 : (pull > 0 ? pull * 0.42 : 0);
-  const contentOffset = bounce !== 0 ? bounce : topStretch;
-
   return (
     <div className={`relative overflow-hidden ${bgClassName} ${className}`}>
       {/* The spinner badge */}
       <div
+        ref={badgeContainerRef}
         aria-hidden
         className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-center"
         style={{
-          transform: `translate3d(0, ${HIDDEN_Y + Math.min(pull, MAX_PULL)}px, 0)`,
-          opacity: refreshing ? 1 : Math.min(1, pull / 24),
+          transform: `translate3d(0, ${HIDDEN_Y}px, 0)`,
+          opacity: 0,
           transition: dragging ? 'none' : `transform ${SETTLE_MS}ms ${EASE}, opacity 200ms ease-out`,
         }}
       >
@@ -271,7 +295,7 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
           className="flex items-center justify-center rounded-full bg-white shadow-lg dark:bg-[#171717]"
           style={{ width: BADGE, height: BADGE }}
         >
-          <PullSpinner progress={progress} spinning={refreshing} />
+          <PullSpinner progress={1} spinning={refreshing} />
         </div>
       </div>
 
@@ -280,9 +304,6 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
         onScroll={onScroll}
         className={`h-full overflow-y-auto ${bgClassName} ${contentClassName}`}
         style={{
-          // Elastic rubber-band stretch at top and bottom. 'none' at rest so fixed descendants behave.
-          transform: contentOffset !== 0 ? `translate3d(0, ${contentOffset}px, 0)` : 'none',
-          transition: dragging ? 'none' : `transform ${SETTLE_MS}ms ${EASE}`,
           overscrollBehaviorY: 'contain',
           WebkitOverflowScrolling: 'touch',
         }}

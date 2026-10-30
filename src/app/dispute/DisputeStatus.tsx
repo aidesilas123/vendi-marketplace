@@ -13,7 +13,6 @@ import {
 } from 'ionicons/icons';
 import { Button } from '@/shared/Button';
 import { Modal } from '@/shared/Modal/Modal';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { ImageViewer } from '@/shared/ImageViewer/ImageViewer';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 import { supabase } from '@/lib/supabase';
@@ -59,7 +58,6 @@ function stepsFor(status: string): { title: string; note: string; state: StepSta
 
 export const DisputeStatus: React.FC<DisputeStatusProps> = ({ transaction, product, dispute, canCancel, onBack }) => {
   const bounceRef = useRef<HTMLDivElement>(null);
-  useRubberBand(bounceRef, { ready: true });
   const router = useRouter();
 
   const [viewerOpen, setViewerOpen] = useState(false);

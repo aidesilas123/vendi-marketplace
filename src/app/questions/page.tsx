@@ -16,7 +16,6 @@ import { submitReviewAction } from '@/features/seller/actions';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 import { safeBack } from '@/shared/safeBack';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 
 const QA_USER_JOIN = 'user:user_id(full_name, avatar_url, username)';
 const QA_PRODUCT_JOIN = 'product:product_id(id, title, images)';
@@ -63,7 +62,6 @@ export default function QuestionsPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const { data, error, isLoading, mutate } = useSWR('seller-questions', fetchAllQuestions);
-  useRubberBand(bounceRef, { ready: !isLoading });
 
   React.useEffect(() => {
     if (error?.message === 'unauthenticated') router.replace('/login');

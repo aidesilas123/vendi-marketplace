@@ -13,7 +13,6 @@ import {
   starHalfOutline,
   chatbubblesOutline
 } from 'ionicons/icons';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { safeBack } from '@/shared/safeBack';
 
@@ -100,7 +99,6 @@ export default function MyReviewsPage() {
   }, [isLoading, data, router]);
 
   const bounceRef = useRef<HTMLDivElement>(null);
-  useRubberBand(bounceRef, { ready: !isLoading });
 
   const reviews = data?.reviews ?? [];
   const averageRating = data?.averageRating ?? 0;

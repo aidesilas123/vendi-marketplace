@@ -10,7 +10,6 @@ import { safeBack } from '@/shared/safeBack';
 import { Button } from '@/shared/Button';
 import { Modal } from '@/shared/Modal/Modal';
 import { ToggleSwitch } from '@/shared/ToggleSwitch';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { IonIcon } from '@/shared/Icon/Icon';
 import { TONES, previewTone, DEFAULT_TONE_ID } from '@/lib/notificationSound';
 import {
@@ -124,7 +123,6 @@ export default function SettingsPage() {
   }, []);
 
   const bounceRef = useRef<HTMLDivElement>(null);
-  useRubberBand(bounceRef, { ready: mounted });
 
   const handleClearCache = () => {
     // Preserve the auth session so the user stays signed in.

@@ -4,7 +4,6 @@
 import React, { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { safeBack } from '@/shared/safeBack';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { Button } from '@/shared/Button';
 import { IonIcon } from '@ionic/react';
 import {
@@ -26,7 +25,6 @@ export default function HowItWorksPage() {
   const [activeTab, setActiveTab] = useState<'buy' | 'sell'>('buy');
 
   const bounceRef = useRef<HTMLDivElement>(null);
-  useRubberBand(bounceRef, { ready: true });
 
   const sectionHeaderClass =
     'text-[12px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest px-2 mb-4 mt-10';

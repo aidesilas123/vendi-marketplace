@@ -1,12 +1,12 @@
 // src/app/notifications/page.tsx
 "use client";
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import useSWR, { mutate as globalMutate } from 'swr';
 import { supabase } from '@/lib/supabase';
 import { safeBack } from '@/shared/safeBack';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
+import { PullToRefresh } from '@/shared/PullToRefresh/PullToRefresh';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { useToast, Toast } from '@/shared/Toast/Toast';
 import IonIcon from '@/shared/Icon/Icon';
@@ -74,14 +74,11 @@ async function fetchNotifications(): Promise<NotificationRow[] | null> {
 export default function NotificationsPage() {
   const router = useRouter();
   const { toast, showToast, hideToast } = useToast();
-  const bounceRef = useRef<HTMLDivElement>(null);
 
   const { data, error, isLoading, mutate } = useSWR('notifications', fetchNotifications, {
     revalidateOnFocus: true,
     dedupingInterval: 10000,
   });
-
-  useRubberBand(bounceRef, { ready: !isLoading });
 
   useEffect(() => {
     if (data === null && !isLoading) router.replace('/login');
@@ -150,9 +147,10 @@ export default function NotificationsPage() {
   return (
     <>
       <Toast {...toast} onClose={hideToast} />
-      <div ref={bounceRef} className="min-h-screen bg-gray-50 dark:bg-background text-gray-900 dark:text-white">
-        {/* Solid header — same fill as the body so it blends with no seam */}
-        <header className="sticky top-0 z-50 bg-gray-50 dark:bg-background">
+      <div className="relative flex flex-col h-[100dvh] bg-gray-50 dark:bg-background text-gray-900 dark:text-white">
+        {/* Solid header — same fill as the body so it blends with no seam.
+            Sits above the pull-to-refresh list, so it stays put on pull. */}
+        <header className="flex-shrink-0 bg-gray-50 dark:bg-background">
           <div className="flex items-center justify-between h-14 px-2">
             <button
               onClick={() => safeBack(router)}
@@ -175,38 +173,50 @@ export default function NotificationsPage() {
           </div>
         </header>
 
-        {notifications.length === 0 ? (
-          <div className="flex flex-col items-center justify-center pt-32 px-6 text-center">
-            <IonIcon icon={notificationsOutline} className="text-5xl text-gray-300 dark:text-gray-700 mb-3" />
-            <p className="font-black">You&apos;re all caught up</p>
-            <p className="text-sm text-gray-500 mt-1">New messages, orders and updates will show up here.</p>
-          </div>
-        ) : (
-          <ul>
-            {notifications.map((n) => (
-              <li key={n.id}>
-                <button
-                  onClick={() => markRead(n)}
-                  className="w-full flex items-start gap-3 px-4 py-3.5 text-left active:bg-black/5 dark:active:bg-white/5"
-                >
-                  <span className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${n.is_read ? 'bg-gray-100 dark:bg-[#171717] text-gray-400' : 'bg-orange-500/10 text-orange-500'}`}>
-                    <IonIcon icon={TYPE_ICON[n.type] ?? notificationsOutline} className="text-xl" />
-                  </span>
-                  <span className="flex-1 min-w-0">
-                    <span className="flex items-center gap-2">
-                      <span className={`text-sm truncate ${n.is_read ? 'font-bold text-gray-600 dark:text-gray-400' : 'font-black'}`}>{n.title}</span>
-                      {!n.is_read && <span className="w-2 h-2 rounded-full bg-orange-500 flex-shrink-0" />}
+        {/* Pull-to-refresh via the shared wrapper (same as the chat feed):
+            only the spinner badge moves on pull; the header stays put.
+            Refresh revalidates the list and the header bell badge. */}
+        <PullToRefresh
+          onRefresh={async () => {
+            await mutate();
+            await globalMutate(UNREAD_KEY);
+          }}
+          className="flex-1 min-h-0"
+          contentClassName="pb-24"
+        >
+          {notifications.length === 0 ? (
+            <div className="flex flex-col items-center justify-center pt-32 px-6 text-center">
+              <IonIcon icon={notificationsOutline} className="text-5xl text-gray-300 dark:text-gray-700 mb-3" />
+              <p className="font-black">You&apos;re all caught up</p>
+              <p className="text-sm text-gray-500 mt-1">New messages, orders and updates will show up here.</p>
+            </div>
+          ) : (
+            <ul>
+              {notifications.map((n) => (
+                <li key={n.id}>
+                  <button
+                    onClick={() => markRead(n)}
+                    className="w-full flex items-start gap-3 px-4 py-3.5 text-left active:bg-black/5 dark:active:bg-white/5"
+                  >
+                    <span className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${n.is_read ? 'bg-gray-100 dark:bg-[#171717] text-gray-400' : 'bg-orange-500/10 text-orange-500'}`}>
+                      <IonIcon icon={TYPE_ICON[n.type] ?? notificationsOutline} className="text-xl" />
                     </span>
-                    {n.body ? (
-                      <span className="block text-xs text-gray-500 mt-0.5 line-clamp-2">{n.body}</span>
-                    ) : null}
-                    <span className="block text-[11px] text-gray-400 mt-1">{timeAgo(n.created_at)}</span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+                    <span className="flex-1 min-w-0">
+                      <span className="flex items-center gap-2">
+                        <span className={`text-sm truncate ${n.is_read ? 'font-bold text-gray-600 dark:text-gray-400' : 'font-black'}`}>{n.title}</span>
+                        {!n.is_read && <span className="w-2 h-2 rounded-full bg-orange-500 flex-shrink-0" />}
+                      </span>
+                      {n.body ? (
+                        <span className="block text-xs text-gray-500 mt-0.5 line-clamp-2">{n.body}</span>
+                      ) : null}
+                      <span className="block text-[11px] text-gray-400 mt-1">{timeAgo(n.created_at)}</span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </PullToRefresh>
       </div>
     </>
   );

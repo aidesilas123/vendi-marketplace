@@ -15,7 +15,6 @@ import { Button } from '@/shared/Button';
 import { Toast, useToast } from '@/shared/Toast/Toast';
 import { CheckoutBottomSheet } from '@/shared/Checkout/CheckoutBottomSheet';
 import { PinPadModal } from '@/shared/Checkout/PinPadModal';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { IonIcon } from '@ionic/react';
 import {
   chevronBackOutline, shieldCheckmarkOutline, alertCircleOutline,
@@ -103,7 +102,6 @@ export default function BuyPage() {
   // The toast, processing overlay, bottom bar and modals are rendered outside it so their
   // `fixed` positioning isn't affected by the wrapper's transform.
   const bounceRef = useRef<HTMLDivElement>(null);
-  useRubberBand(bounceRef);
 
   const [isProcessingTx, setIsProcessingTx] = useState(false);
 
@@ -319,10 +317,10 @@ export default function BuyPage() {
             userId: product.seller_id,
             type: 'order',
             title: `Your "${product.title}" has been sold!`,
-            body: `${buyerName} paid ₦${totalCharge.toLocaleString()} — your payout is ₦${sellerNet.toLocaleString()}. Chat them to arrange inspection.`,
+            body: `${buyerName} has paid — your payout of ₦${sellerNet.toLocaleString()} is secured in escrow. Chat them to arrange inspection and delivery; once they confirm receipt, the payout will be released to your wallet.`,
             route: `/order?ref=${data.reference}`,
             data: {
-              amount: String(totalCharge),
+              amount: String(sellerNet),
               itemTitle: product.title,
               counterparty: buyerName,
               reference: data.reference,

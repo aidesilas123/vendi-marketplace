@@ -1,3 +1,4 @@
+// src/app/chats/components/CameraCapture.tsx
 "use client";
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -102,7 +103,7 @@ export function CameraCapture({ onCapture, onClose, onOpenGallery }: Props) {
   return (
     <div className="fixed inset-0 z-[1001] bg-black flex flex-col">
       {/* top bar */}
-      <div className="flex items-center justify-end px-4 pb-2 relative z-10" style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}>
+      <div className="flex items-center justify-end px-4 pb-2 relative z-10" style={{ paddingTop: 'max(0.75rem, var(--sat))' }}>
         <button
           onClick={onClose}
           type="button"
@@ -146,7 +147,7 @@ export function CameraCapture({ onCapture, onClose, onOpenGallery }: Props) {
       </div>
 
       {/* bottom controls: gallery | capture | switch camera */}
-      <div className="flex items-center justify-around px-10 pt-4 bg-black" style={{ paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))' }}>
+      <div className="flex items-center justify-around px-10 pt-4 bg-black" style={{ paddingBottom: 'max(1.5rem, var(--sab))' }}>
         <button
           onClick={onOpenGallery}
           type="button"

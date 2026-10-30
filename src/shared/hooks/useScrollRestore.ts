@@ -16,7 +16,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 type ElRef = { readonly current: HTMLElement | null };
 
 const BACK_WINDOW_MS = 2500; // a popstate this recent means the current page was reached by going back
-const MAX_FRAMES = 600;      // ~10s of retries while late content (slow images) gives the page its height back
+const MAX_FRAMES = 120;      // ~2s of retries while late content (slow images) gives the page its height back
 const MAX_ENTRIES = 40;
 
 const positions = new Map<string, number>();
@@ -83,6 +83,9 @@ export function useScrollRestore(ref: ElRef, key: string | null, ready: boolean)
     const p = plan.current;
     if (p.done) return;
 
+    // Find the scroll container ONCE, avoiding repeated getComputedStyle DOM walks
+    const scroller = findScroller(ref.current);
+
     let frame = 0;
     let raf = 0;
     const userEvents = ['touchstart', 'wheel', 'mousedown', 'keydown'] as const;
@@ -95,7 +98,6 @@ export function useScrollRestore(ref: ElRef, key: string | null, ready: boolean)
     function finish() { p.done = true; stop(); }
 
     const tick = () => {
-      const scroller = findScroller(ref.current);
       const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
       jumpTo(scroller, Math.min(p.target, max));
       frame += 1;

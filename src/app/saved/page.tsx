@@ -8,7 +8,6 @@ import { BuyerProductCard } from '@/shared/Card/BuyerProductCard';
 import { IonIcon } from '@ionic/react';
 import { chevronBackOutline, bookmarkOutline } from 'ionicons/icons';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { useScrollRestore } from '@/shared/hooks/useScrollRestore';
 import { Toast, useToast } from '@/shared/Toast/Toast';
 import { useSavedIds } from '@/shared/hooks/useSavedIds';
@@ -95,7 +94,6 @@ export default function SavedItemsPage() {
   }, [isLoading, data, router]);
 
   const bounceRef = useRef<HTMLDivElement>(null);
-  useRubberBand(bounceRef, { ready: !isLoading });
 
   // Tapping a card saves your place; coming back restores it.
   const listRef = useRef<HTMLDivElement>(null);

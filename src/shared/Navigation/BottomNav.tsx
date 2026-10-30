@@ -60,12 +60,33 @@ export const BottomNav = () => {
     sessionUserId ? (['bottomnav-seller-badges', sessionUserId] as const) : null,
     ([, id]) => fetchSellerBadges(id)
   );
-  // BottomNav stays mounted across pages, so refetch on navigation (plus SWR's
-  // default focus/reconnect revalidation) to keep the badges fresh.
-  useEffect(() => {
+  const lastBadgeFetchRef = React.useRef<number>(0);
+  const triggerBadgeRefresh = React.useCallback(() => {
+    const now = Date.now();
+    if (now - lastBadgeFetchRef.current < 30000) return;
+    lastBadgeFetchRef.current = now;
     void mutateChats();
     void mutateSellerBadges();
-  }, [pathname, mutateChats, mutateSellerBadges]);
+  }, [mutateChats, mutateSellerBadges]);
+
+  // Mutate at most once per 30 seconds on navigation
+  useEffect(() => {
+    triggerBadgeRefresh();
+  }, [pathname, triggerBadgeRefresh]);
+
+  // Refresh badges on window focus / visibility return (guarded by the 30s threshold)
+  useEffect(() => {
+    const onFocus = () => triggerBadgeRefresh();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') triggerBadgeRefresh();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [triggerBadgeRefresh]);
 
   const navItems = [
     { name: "Feed", route: "/", outline: homeOutline, solid: home },

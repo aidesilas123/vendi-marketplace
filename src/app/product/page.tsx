@@ -15,7 +15,6 @@ import { Button } from '@/shared/Button';
 import { ImageViewer } from '@/shared/ImageViewer/ImageViewer';
 import { EscrowBreakdown } from '@/shared/Checkout/EscrowBreakdown';
 import { Toast, useToast } from '@/shared/Toast/Toast';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { useScrollRestore } from '@/shared/hooks/useScrollRestore';
 import { IonIcon } from '@ionic/react';
 import {
@@ -146,7 +145,8 @@ async function fetchSeller(sellerId: string) {
 
 async function fetchSellerStats(sellerId: string) {
   const [salesRes, disputesRes] = await Promise.all([
-    supabase.from('transactions').select('id', { count: 'exact', head: true }).eq('seller_id', sellerId).eq('status', 'completed'),
+    // Same param as the profile page: sold listings, not completed transactions.
+    supabase.from('products').select('id', { count: 'exact', head: true }).eq('seller_id', sellerId).eq('status', 'SOLD'),
     supabase.from('disputes').select('id', { count: 'exact', head: true }).eq('seller_id', sellerId),
   ]);
   if (salesRes.error) throw salesRes.error;
@@ -498,11 +498,11 @@ const ProductGallery = React.memo(function ProductGallery({
           {images.length > 1 && (
             <div className="pointer-events-none absolute bottom-4 left-0 right-0 z-10 flex justify-center gap-1.5">
               {images.map((_, idx) => (
-                <div key={idx} className={`h-1.5 rounded-full transition-all duration-300 ${index === idx ? 'w-6 bg-orange-500' : 'w-2 bg-white/60 backdrop-blur-sm'}`} />
+                <div key={idx} className={`h-1.5 rounded-full transition-all duration-300 ${index === idx ? 'w-6 bg-orange-500' : 'w-2 bg-white/80'}`} />
               ))}
             </div>
           )}
-          <button onClick={(e) => { e.stopPropagation(); onOpen(); }} className="absolute bottom-4 right-4 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white shadow-lg backdrop-blur-md hover:bg-black/70">
+          <button onClick={(e) => { e.stopPropagation(); onOpen(); }} className="absolute bottom-4 right-4 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white shadow-lg hover:bg-black/80">
             <IonIcon icon={expandOutline} className="text-lg" />
           </button>
         </>
@@ -512,7 +512,7 @@ const ProductGallery = React.memo(function ProductGallery({
           <p className="text-sm font-bold">No images provided</p>
         </div>
       )}
-      <div className="pointer-events-none absolute left-4 top-4 flex gap-2 rounded-lg bg-black/60 px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-white backdrop-blur-md">
+      <div className="pointer-events-none absolute left-4 top-4 flex gap-2 rounded-lg bg-black/75 px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-white">
         <span>{condition}</span>
         {quantity && <span className="border-l border-white/30 pl-2">QTY: {quantity}</span>}
       </div>
@@ -535,7 +535,6 @@ export default function ProductDetails() {
   // Toast, image viewer and the offer modal are rendered outside it so their `fixed`
   // positioning isn't affected by the wrapper's transform.
   const bounceRef = useRef<HTMLDivElement>(null);
-  useRubberBand(bounceRef);
 
   const [isFullScreenGallery, setIsFullScreenGallery] = useState(false);
 

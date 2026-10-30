@@ -1,3 +1,4 @@
+// src/shared/Card/BuyerProductCard.tsx
 "use client";
 
 import React, { useCallback, useMemo, useRef, useState } from 'react';
@@ -57,6 +58,7 @@ interface BuyerProductCardProps {
     created_at: string;
     images: string[] | string | null;
     views_count?: number;
+    seller_id: string;
     seller: {
       id: string;
       username: string;
@@ -151,7 +153,7 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
 
       <button
         type="button"
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(`/profile?id=${product.seller.id}`); }}
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); router.push(`/profile?id=${product.seller_id}`); }}
         aria-label={`View ${product.seller?.username || 'seller'}'s profile`}
         className="relative z-10 px-1 py-2 flex items-center gap-1.5 overflow-hidden w-full text-left active:opacity-70 transition-opacity"
       >

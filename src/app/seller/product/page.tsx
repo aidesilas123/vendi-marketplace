@@ -29,7 +29,6 @@ import { submitReviewAction } from '@/features/seller/actions';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 import { safeBack } from '@/shared/safeBack';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { ImageViewer } from '@/shared/ImageViewer/ImageViewer';
 
 const QA_USER_JOIN = 'user:user_id(full_name, avatar_url, username)';
@@ -214,7 +213,6 @@ export default function SellerProductDetails() {
     if (error?.message === 'unauthenticated') router.replace('/login');
   }, [error, router]);
 
-  useRubberBand(bounceRef, { ready: !isLoading });
 
   const product = data?.product;
   const myUserId = data?.userId ?? null;

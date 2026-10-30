@@ -12,7 +12,6 @@ import {
   imageOutline,
 } from 'ionicons/icons';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { useScrollRestore } from '@/shared/hooks/useScrollRestore';
 import { safeBack } from '@/shared/safeBack';
 
@@ -206,7 +205,6 @@ export default function DisputesPage() {
   }, [isLoading, data, router]);
 
   const bounceRef = useRef<HTMLDivElement>(null);
-  useRubberBand(bounceRef, { ready: !isLoading });
 
   const listRef = useRef<HTMLDivElement>(null);
   const { saveScroll } = useScrollRestore(listRef, 'disputes', !isLoading);

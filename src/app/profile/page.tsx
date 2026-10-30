@@ -1,3 +1,4 @@
+// src/app/profile/page.tsx
 "use client";
 import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
@@ -11,7 +12,6 @@ import { Button } from '@/shared/Button';
 import { Modal } from '@/shared/Modal/Modal';
 import { Toast, useToast } from '@/shared/Toast/Toast';
 import { ImageViewer } from '@/shared/ImageViewer/ImageViewer';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { safeBack } from '@/shared/safeBack';
 import { IonIcon } from '@ionic/react';
 import {
@@ -30,7 +30,10 @@ import {
 
 export default function ProfilePage() {
   const searchParams = useSearchParams();
-  const profileId = searchParams.get('id');
+  const rawProfileId = searchParams.get('id');
+  /* Guard: a literal "undefined"/"null" id (e.g. from a bad link) is no id at all.
+     Without this it reaches the queries as eq.undefined and PostgREST 400s. */
+  const profileId = rawProfileId && rawProfileId !== 'undefined' && rawProfileId !== 'null' ? rawProfileId : null;
   const router = useRouter();
   const { toast, showToast, hideToast } = useToast();
 
@@ -124,7 +127,6 @@ export default function ProfilePage() {
     }
   }, [profileData]);
 
-  useRubberBand(bounceRef, { ready: !isRedirecting && !isLoading && !notFound });
 
   const handleShare = async () => {
     const url = window.location.href;

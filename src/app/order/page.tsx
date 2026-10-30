@@ -2,6 +2,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { safeBack } from '@/shared/safeBack';
 import useSWR from 'swr';
@@ -13,7 +14,6 @@ import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { Button } from '@/shared/Button';
 import { ImageViewer } from '@/shared/ImageViewer/ImageViewer';
 import { Toast, useToast } from '@/shared/Toast/Toast';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { effectiveTxStatus } from '@/lib/txStatus';
 import { IonIcon } from '@/shared/Icon/Icon';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
@@ -130,7 +130,6 @@ export default function OrderDetails() {
   // Money math: the buyer paid totalCharge (item + buyer fee); the seller's
   // payout is item_price - seller_fee_owed, snapshotted in the escrow metadata.
   const md = (transaction?.metadata ?? {}) as any;
-  const totalPaid = transaction ? Math.abs(transaction.amount).toLocaleString() : '0';
   const sellerNet =
     md.item_price != null ? Math.max(0, Number(md.item_price) - Number(md.seller_fee_owed ?? 0)) : null;
   const sellerPayout = (sellerNet ?? (transaction ? Math.abs(transaction.amount) : 0)).toLocaleString();
@@ -140,6 +139,11 @@ export default function OrderDetails() {
   useEffect(() => {
     if (currentUser === null) router.push('/login');
   }, [currentUser, router]);
+
+  // Portal guard: the bottom action bar renders into <body> (see below),
+  // which only exists on the client — never during SSR.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
 
   // Spinner/skeleton only when nothing is cached. `order === undefined` means "never loaded";
   // `null` means "loaded, and the order doesn't exist". Once visited, the page shows instantly
@@ -159,7 +163,6 @@ export default function OrderDetails() {
   // Rubber-band bounce. The wrapper only exists once the order has loaded, so `ready`
   // delays attaching the listeners until then. Fixed bars stay outside the wrapper.
   const bounceRef = useRef<HTMLDivElement>(null);
-  useRubberBand(bounceRef, { ready: !showSkeleton && !!transaction });
 
   // The status this order should DISPLAY (refund rows from a cancelled order count as cancelled)
   const status = transaction ? effectiveTxStatus(transaction) : '';
@@ -344,8 +347,7 @@ export default function OrderDetails() {
               <div className="min-w-0">
                 <h2 className="text-xl font-black tracking-tight text-gray-900 dark:text-white">Your item has been sold!</h2>
                 <p className="text-sm text-gray-600 dark:text-gray-300 mt-1 leading-relaxed">
-                  {buyerFirstName} paid <span className="font-bold text-gray-900 dark:text-white">₦{totalPaid}</span> —
-                  your payout is <span className="font-bold text-gray-900 dark:text-white">₦{sellerPayout}</span>
+                  {buyerFirstName} has paid — your payout is <span className="font-bold text-gray-900 dark:text-white">₦{sellerPayout}</span>
                   {sellerFee > 0 ? ` (after the ₦${sellerFee.toLocaleString()} Vendi fee)` : ''}, released once they confirm receipt.
                 </p>
               </div>
@@ -426,7 +428,7 @@ export default function OrderDetails() {
         {/* ORDER SUMMARY */}
         <div className="px-1">
           <h2 className="text-xl font-bold leading-snug tracking-tight text-gray-900 dark:text-white">{product?.title || 'Marketplace Item'}</h2>
-          <p className="mt-1.5 text-2xl font-black text-orange-500 tracking-tight">₦{Math.abs(transaction.amount).toLocaleString()}</p>
+          <p className="mt-1.5 text-2xl font-black text-orange-500 tracking-tight">₦{isSeller ? sellerPayout : Math.abs(transaction.amount).toLocaleString()}</p>
 
           <div className="flex flex-wrap items-center gap-y-2 gap-x-5 text-xs font-semibold text-gray-500 dark:text-gray-400 mt-4">
             <div className="flex items-center gap-1.5">
@@ -555,8 +557,11 @@ export default function OrderDetails() {
 
       </div>
 
-      {/* BOTTOM ACTION NAV — buyer only. The seller never confirms receipt or raises disputes. */}
-      {!isSeller && status === 'pending' && (
+      {/* BOTTOM ACTION NAV — buyer only. The seller never confirms receipt or raises disputes.
+          Portaled to <body>: AppShell's rubber-band wrapper gets a CSS transform during
+          overscroll, and a transformed ancestor hijacks `fixed` positioning — that is why
+          the bar used to ride up with the page. Safe-area padding is unchanged. */}
+      {mounted && !isSeller && status === 'pending' && createPortal(
         <div className="fixed bottom-0 left-0 right-0 z-[90] bg-gray-50 dark:bg-background p-4 pt-3 pb-[max(1rem,var(--sab))]">
           <div className="max-w-2xl mx-auto space-y-3">
             <Button
@@ -572,7 +577,8 @@ export default function OrderDetails() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

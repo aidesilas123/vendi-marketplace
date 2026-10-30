@@ -15,7 +15,6 @@ import { ImageUploader } from '@/shared/ImageUploader/ImageUploader';
 import { ProductCard } from '@/shared/Card/ProductCard';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { showGlobalToast } from '@/shared/Toast/Toast';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { submitProductAction } from './actions';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
@@ -389,7 +388,6 @@ export default function SellerDashboard() {
   // Rubber-band bounce for the whole page (header + content). Modals, spinners and toasts
   // are rendered outside this wrapper so their `fixed` positioning isn't affected.
   const bounceRef = useRef<HTMLDivElement>(null);
-  useRubberBand(bounceRef);
 
   /* ------------------------------ SWR data layer ------------------------------ */
 

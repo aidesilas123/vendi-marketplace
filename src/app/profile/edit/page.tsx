@@ -9,7 +9,6 @@ import { Modal } from '@/shared/Modal/Modal';
 import { Toast, useToast } from '@/shared/Toast/Toast';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { GalleryPicker } from '@/app/chats/components/GalleryPicker';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { safeBack } from '@/shared/safeBack';
 import { IonIcon } from '@ionic/react';
 import {
@@ -114,7 +113,6 @@ export default function EditProfilePage() {
 
   const isLoading = !authChecked || (!!sessionUser && !profileData);
 
-  useRubberBand(bounceRef, { ready: !isLoading });
 
   /* --- Dirty tracking for the discard guard --- */
   const isDirty =

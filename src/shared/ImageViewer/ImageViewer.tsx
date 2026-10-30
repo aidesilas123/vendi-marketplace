@@ -1,3 +1,4 @@
+// src/shared/ImageViewer/ImageViewer.tsx
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import IonIcon from '@/shared/Icon/Icon';
 import { closeOutline, downloadOutline } from 'ionicons/icons';
@@ -844,7 +845,7 @@ export const ImageViewer = ({ images, isOpen, onClose, initialIndex = 0, originR
       <div ref={chromeRef}>
         <div
           className="pointer-events-none absolute left-0 right-0 top-0 z-20 flex items-center justify-between px-4 pb-2"
-          style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
+          style={{ paddingTop: 'max(0.75rem, var(--sat))' }}
         >
           <div className="pointer-events-auto flex items-center">
             <button

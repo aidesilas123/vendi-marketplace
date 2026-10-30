@@ -74,7 +74,7 @@ export const AppShell = ({ children }: AppShellProps) => {
   // edge. The hook ignores touches inside nested scrollers (e.g. the
   // transactions page's own container), so they never double-bounce.
   const bounceRef = useRef<HTMLDivElement>(null);
-  useRubberBand(bounceRef, { scrollerId: 'main-scroll-container', top: false, bottom: true, ready: showShell });
+  useRubberBand(bounceRef, { scrollerId: 'main-scroll-container', top: true, bottom: true, ready: showShell });
 
   // Browser tab title follows the page. Every page is a client component,
   // so per-page `metadata` exports aren't available — one map covers all.

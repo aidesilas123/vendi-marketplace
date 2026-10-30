@@ -7,7 +7,6 @@ import { supabase } from '@/lib/supabase';
 import { Button } from '@/shared/Button';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { Toast, useToast } from '@/shared/Toast/Toast';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { safeBack } from '@/shared/safeBack';
 import { IonIcon } from '@/shared/Icon/Icon';
 import {
@@ -80,7 +79,6 @@ export default function ReportPage() {
     }
   );
 
-  useRubberBand(bounceRef, { ready: authChecked && !!sessionUser });
 
   const handleSubmitReport = async () => {
     if (!sessionUser || isSubmitting) return;

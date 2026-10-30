@@ -216,15 +216,61 @@ export default function DealRoomChat() {
   /*  optimistic messages (temp_ ids) live in separate local state so a   */
   /*  revalidation can never wipe them while uploading.                  */
   /* ------------------------------------------------------------------ */
+  const [hasEarlierMessages, setHasEarlierMessages] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+
   const fetchHistory = useCallback(async ([, ref]: [string, string]) => {
     const { data, error } = await supabase
       .from('messages')
       .select('*')
       .eq('transaction_ref', ref)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: false })
+      .limit(50);
     if (error) throw error;
-    return (data ?? []) as any[];
+    const list = (data ?? []).reverse();
+    setHasEarlierMessages((data ?? []).length >= 50);
+    return list as any[];
   }, []);
+
+  const loadEarlierMessages = async () => {
+    if (!txRef || loadingEarlier || !hasEarlierMessages) return;
+    const scrollEl = ptrRef.current?.scrollEl();
+    const prevScrollHeight = scrollEl?.scrollHeight ?? 0;
+    const prevScrollTop = scrollEl?.scrollTop ?? 0;
+
+    const oldest = serverMessages?.[0];
+    if (!oldest) return;
+
+    setLoadingEarlier(true);
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('transaction_ref', txRef)
+        .lt('created_at', oldest.created_at)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (error) throw error;
+      const olderList = (data ?? []).reverse();
+      if ((data ?? []).length < 50) {
+        setHasEarlierMessages(false);
+      }
+      if (olderList.length > 0) {
+        await mutate((prev) => [...olderList, ...(prev ?? [])], { revalidate: false });
+        requestAnimationFrame(() => {
+          if (scrollEl) {
+            const heightDiff = scrollEl.scrollHeight - prevScrollHeight;
+            scrollEl.scrollTop = prevScrollTop + heightDiff;
+          }
+        });
+      }
+    } catch (err) {
+      console.error('[chats] failed to load earlier messages:', err);
+    } finally {
+      setLoadingEarlier(false);
+    }
+  };
   const {
     data: serverMessages,
     isLoading: historyLoading,
@@ -982,6 +1028,10 @@ export default function DealRoomChat() {
 
   const handleSendText = async () => {
     if (isDealClosed || !messageText.trim() || !currentUser || !txRef) return;
+    // Keep the keyboard open: tapping send moves focus to the button, which
+    // closes the keyboard. This runs synchronously inside the tap, so the
+    // composer regains focus (and the keyboard) right away.
+    textareaRef.current?.focus();
     const textToSend = messageText.trim();
 
     // Sending clears any in-flight typing presence immediately.
@@ -2378,7 +2428,7 @@ export default function DealRoomChat() {
         {messages.length === 0 && !historyLoading && (
           <>
             <div className="flex justify-center mb-6">
-              <span className="px-3 py-1 bg-white/60 dark:bg-black/60 backdrop-blur-md !rounded-lg text-[10px] font-black uppercase tracking-widest text-gray-500 dark:text-gray-400 shadow-sm">
+              <span className="px-3 py-1 bg-white dark:bg-[#1a1a1a] border border-gray-200/80 dark:border-gray-800 !rounded-lg text-[10px] font-black uppercase tracking-widest text-gray-500 dark:text-gray-400 shadow-sm">
                 Security Notice
               </span>
             </div>
@@ -2391,6 +2441,18 @@ export default function DealRoomChat() {
               </div>
             </div>
           </>
+        )}
+        {hasEarlierMessages && (
+          <div className="flex justify-center my-3">
+            <button
+              type="button"
+              onClick={loadEarlierMessages}
+              disabled={loadingEarlier}
+              className="px-4 py-1.5 text-xs font-bold text-orange-500 bg-orange-100 dark:bg-orange-950/40 rounded-full hover:bg-orange-200 dark:hover:bg-orange-900/50 transition-colors disabled:opacity-50"
+            >
+              {loadingEarlier ? 'Loading earlier messages...' : 'Load earlier messages'}
+            </button>
+          </div>
         )}
         {renderedMessages}
 
@@ -2421,7 +2483,7 @@ export default function DealRoomChat() {
       {showScrollBottom && (
         <button
           onClick={() => scrollToBottom(true)}
-          className="absolute right-4 bottom-24 z-40 !w-10 !h-10 !min-w-[40px] !min-h-[40px] !p-0 !rounded-full bg-white dark:bg-[#1f2937] shadow-lg border border-gray-200/80 dark:border-gray-700 flex items-center justify-center text-gray-700 dark:text-gray-200 active:scale-90 transition-all animate-in fade-in zoom-in-95 duration-150"
+          className="absolute right-4 bottom-[calc(6rem+var(--sab))] z-40 !w-10 !h-10 !min-w-[40px] !min-h-[40px] !p-0 !rounded-full bg-white dark:bg-[#1f2937] shadow-lg border border-gray-200/80 dark:border-gray-700 flex items-center justify-center text-gray-700 dark:text-gray-200 active:scale-90 transition-all animate-in fade-in zoom-in-95 duration-150"
           aria-label="Scroll to bottom"
         >
           <IonIcon icon={chevronDownOutline} className="text-xl pointer-events-none" />
@@ -2429,7 +2491,7 @@ export default function DealRoomChat() {
       )}
 
       {/* --- INPUT AREA --- */}
-      <div className="flex-shrink-0 px-2.5 pt-1 pb-[max(var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)),12px)] mb-1 bg-transparent relative z-50">
+      <div className="flex-shrink-0 px-2.5 pt-1 pb-[max(var(--sab),12px)] mb-1 bg-transparent relative z-50">
         {/* Reply / Edit banner above the composer */}
         {(replyTarget || editingMessageId) && (
           <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between gap-2 bg-white dark:bg-[#1f2937] !rounded-xl px-3 py-2 shadow-md border-l-4 !border-orange-500 animate-in slide-in-from-bottom-2 duration-150">
@@ -2562,6 +2624,7 @@ export default function DealRoomChat() {
                   )}
                   {messageText.trim() ? (
                     <button
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={handleSendText}
                       className="!w-12 !h-12 !min-w-[48px] !min-h-[48px] !p-0 !rounded-full flex-shrink-0 !aspect-square !bg-orange-500 text-white !flex items-center justify-center shadow-lg active:scale-90 transition-transform"
                     >

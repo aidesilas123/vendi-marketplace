@@ -6,7 +6,6 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import useSWR, { mutate as globalMutate } from 'swr';
 import { supabase } from '@/lib/supabase';
 import { safeBack } from '@/shared/safeBack';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { IonIcon } from '@/shared/Icon/Icon';
 import { Button } from '@/shared/Button';
@@ -112,7 +111,6 @@ export default function NotificationDetailPage() {
     { revalidateOnFocus: false }
   );
 
-  useRubberBand(bounceRef, { ready: !isLoading && !!notif });
 
   // Opening the detail counts as reading it.
   useEffect(() => {

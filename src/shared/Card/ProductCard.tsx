@@ -219,7 +219,7 @@ export const ProductCard = ({
         <div className="absolute top-2 left-2 bg-black/70 text-white text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider z-10">{condition}</div>
 
         {status === 'SOLD' && (
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center z-20">
+          <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-20">
             <span className="bg-red-500 text-white font-black text-sm px-4 py-1 rounded-lg border-2 border-white transform -rotate-12 shadow-2xl tracking-widest uppercase">
               Sold
             </span>

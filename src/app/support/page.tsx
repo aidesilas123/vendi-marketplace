@@ -4,7 +4,6 @@
 import React, { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { safeBack } from '@/shared/safeBack';
-import { useRubberBand } from '@/shared/hooks/useRubberBand';
 import { IonIcon } from '@/shared/Icon/Icon';
 import {
   chevronBackOutline,
@@ -68,7 +67,6 @@ export default function SupportPage() {
   const [openSection, setOpenSection] = useState<string | null>("How does the Vendi Escrow system work?");
 
   const bounceRef = useRef<HTMLDivElement>(null);
-  useRubberBand(bounceRef, { ready: true });
 
   const toggleAccordion = (question: string) => {
     setOpenSection(openSection === question ? null : question);

@@ -50,11 +50,13 @@ export function useRubberBand(
     let axis: 'x' | 'y' | null = null;
     let edge: 1 | -1 | 0 = 0; // 1 = pulling down at the top, -1 = pulling up at the bottom
 
+    const isScrollable = () => scroller.scrollHeight > scroller.clientHeight + 1;
     const atTop = () => scroller.scrollTop <= 0;
     const atBottom = () => scroller.scrollTop >= scroller.scrollHeight - scroller.clientHeight - 1;
 
     const onStart = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
+      if (!isScrollable()) return;
       // If the touch starts inside a nested scroller (a page with its own
       // scroll container, e.g. the transactions list or a PullToRefresh
       // body), that scroller owns the gesture — otherwise the page would
@@ -86,6 +88,7 @@ export function useRubberBand(
       if (axis !== 'y') return;
 
       if (edge === 0) {
+        if (!isScrollable()) return;
         if (top && dy > 0 && atTop()) edge = 1;
         else if (bottom && dy < 0 && atBottom()) edge = -1;
         else return;
@@ -96,6 +99,7 @@ export function useRubberBand(
       const pull = (t.clientY - startY) * edge;
       if (pull <= 0) {
         content.style.transform = '';
+        edge = 0;
         return;
       }
       content.style.transform = `translate3d(0, ${edge * Math.min(pull * RESISTANCE, MAX_PULL_PX)}px, 0)`;

@@ -49,6 +49,7 @@ type ChatPreview = {
 /*  Inbox fetcher: latest message per transaction_ref + unread counts  */
 /* ------------------------------------------------------------------ */
 async function fetchInbox([_key, userId]: [string, string]): Promise<ChatPreview[]> {
+  // Bounded query: fetch latest 200 messages for this user
   const { data: msgs, error } = await supabase
     .from('messages')
     .select(
@@ -57,7 +58,8 @@ async function fetchInbox([_key, userId]: [string, string]): Promise<ChatPreview
        receiver:receiver_id(id, full_name, avatar_url, is_verified)`
     )
     .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(200);
 
   if (error) throw error;
 
@@ -134,6 +136,61 @@ async function fetchInbox([_key, userId]: [string, string]): Promise<ChatPreview
       });
     }
   }
+
+  // Preserve all conversations: check if user has other transactions not in the latest 200 msgs
+  try {
+    const { data: userTxs } = await supabase
+      .from('transactions')
+      .select('reference')
+      .or(`buyer_id.eq.${userId},seller_id.eq.${userId}`)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    const missingRefs = (userTxs ?? [])
+      .map((t: any) => t.reference)
+      .filter((ref: string) => ref && !chatMap.has(ref));
+
+    if (missingRefs.length > 0) {
+      const { data: olderMsgs } = await supabase
+        .from('messages')
+        .select(
+          `*,
+           sender:sender_id(id, full_name, avatar_url, is_verified),
+           receiver:receiver_id(id, full_name, avatar_url, is_verified)`
+        )
+        .in('transaction_ref', missingRefs)
+        .order('created_at', { ascending: false });
+
+      for (const msg of olderMsgs ?? []) {
+        if (!chatMap.has(msg.transaction_ref)) {
+          chatMap.set(msg.transaction_ref, {
+            transaction_ref: msg.transaction_ref,
+            partner: msg.sender_id === userId ? msg.receiver : msg.sender,
+            latestMessage: msg,
+            unreadCount: 0,
+            product: productByRef.get(msg.transaction_ref),
+          });
+        }
+      }
+    }
+  } catch {}
+
+  // Fetch full accurate unread counts
+  try {
+    const { data: unreadRows } = await supabase
+      .from('messages')
+      .select('transaction_ref')
+      .eq('receiver_id', userId)
+      .neq('status', 'read');
+
+    if (unreadRows) {
+      unreadByRef.clear();
+      unreadRows.forEach((r: any) => {
+        unreadByRef.set(r.transaction_ref, (unreadByRef.get(r.transaction_ref) ?? 0) + 1);
+      });
+    }
+  } catch {}
+
   for (const chat of chatMap.values()) {
     chat.unreadCount = unreadByRef.get(chat.transaction_ref) ?? 0;
   }
@@ -180,7 +237,7 @@ export default function MessagesList() {
   // header never moves. The strip grows in-flow above the list, pushing it
   // down elastically; nothing ever slides up behind the header.
   const pullZoneRef = useRef<HTMLDivElement>(null);
-  const [stripH, setStripH] = useState(0);
+  const stripRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const dragRef = useRef<{ startY: number; h: number } | null>(null);
@@ -279,7 +336,9 @@ export default function MessagesList() {
     if (refreshingRef.current) return;
     refreshingRef.current = true;
     setRefreshing(true);
-    setStripH(STRIP_REST_H);
+    if (stripRef.current) {
+      stripRef.current.style.height = `${STRIP_REST_H}px`;
+    }
     try {
       await Haptics.impact({ style: ImpactStyle.Light });
     } catch {
@@ -290,7 +349,10 @@ export default function MessagesList() {
     } finally {
       refreshingRef.current = false;
       setRefreshing(false);
-      setStripH(0);
+      if (stripRef.current) {
+        stripRef.current.style.transition = 'height 0.3s cubic-bezier(0.22, 1, 0.36, 1)';
+        stripRef.current.style.height = '0px';
+      }
     }
   }, [mutate]);
 
@@ -316,13 +378,13 @@ export default function MessagesList() {
       if (dy <= 0) {
         if (d.h > 0) {
           d.h = 0;
-          setStripH(0);
+          if (stripRef.current) { stripRef.current.style.height = "0px"; }
         }
         return;
       }
       setDragging(true);
       d.h = rubber(dy);
-      setStripH(d.h);
+      if (stripRef.current) { stripRef.current.style.height = `${d.h}px`; stripRef.current.style.transition = "none"; }
     };
 
     const end = () => {
@@ -331,7 +393,7 @@ export default function MessagesList() {
       setDragging(false);
       if (!d || refreshingRef.current) return;
       if (d.h >= PULL_THRESHOLD) void doRefresh();
-      else setStripH(0);
+      else if (stripRef.current) { stripRef.current.style.height = "0px"; }
     };
 
     const onTouchStart = (e: TouchEvent) => {
@@ -500,19 +562,14 @@ export default function MessagesList() {
       <div ref={pullZoneRef} data-pull-zone className="max-w-md mx-auto min-h-[50dvh]">
         {/* Rubber-band strip: grows elastically above the list while pulling */}
         <div
+          ref={stripRef}
           className="overflow-hidden flex items-center justify-center"
           style={{
-            height: stripH,
+            height: refreshing ? STRIP_REST_H : 0,
             transition: dragging ? 'none' : 'height 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
           }}
         >
-          {(stripH > 4 || refreshing) && (
-            <PullSpinner
-              spinning={refreshing}
-              progress={refreshing ? 1 : Math.min(1, stripH / PULL_THRESHOLD)}
-              size={28}
-            />
-          )}
+          <PullSpinner spinning={refreshing} progress={1} size={28} />
         </div>
         {userId === undefined || isLoading ? (
           <div className="flex flex-col items-center justify-center pt-24 gap-3">

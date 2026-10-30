@@ -1,3 +1,4 @@
+// src/app/page.tsx
 "use client";
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
@@ -24,32 +25,44 @@ const REFRESH_HOLD = 56;     // how far the page stays open while refreshing
 const SEARCH_ROW_HEIGHT = 44; // px: 8px top padding + 36px controls. Update if you resize them.
 const FILTER_DELAY = 350;        // ms the spinner shows before new results appear
 const FILTER_STRIP_HEIGHT = 48;  // px of space the spinner opens below the pills
+const INITIAL_PAGE_SIZE = 30;
 
-const FEED_KEY = 'home-feed';
 const EMPTY: any[] = [];
 
 /**
- * SWR fetcher. Throws on failure so SWR keeps showing the last good data
- * instead of overwriting it with nothing.
+ * SWR fetcher. Fetches products with count aggregation on product_views directly in SQL,
+ * avoiding client-side fetches of all raw view rows.
  */
-async function fetchProducts() {
-  // 1. Fetch ONLY ACTIVE and SOLD items from the database
-  const { data, error } = await supabase
+async function fetchProducts(category: string, query: string, limitCount: number) {
+  let q = supabase
     .from('products')
-    .select('*, seller:users(username, is_verified, average_rating, avatar_url)')
+    .select('*, seller:users(username, is_verified, average_rating, avatar_url), product_views(count)')
     .in('status', ['ACTIVE', 'SOLD'])
     .order('created_at', { ascending: false });
 
+  const isFiltered = category !== 'All' || query.trim() !== '';
+
+  if (category !== 'All') {
+    q = q.eq('category', category);
+  }
+  if (query.trim() !== '') {
+    const s = query.trim();
+    q = q.or(`title.ilike.%${s}%,university_id.ilike.%${s}%,campus.ilike.%${s}%`);
+  }
+  if (!isFiltered) {
+    q = q.limit(limitCount);
+  }
+
+  const { data, error } = await q;
   if (error) throw error;
 
   const now = Date.now();
 
-  // 2. Keep all ACTIVE items, but drop SOLD items if they are > 24 hours old
+  // Keep all ACTIVE items, but drop SOLD items if they are > 24 hours old
   const validProducts = (data ?? []).filter((p: any) => {
     if (p.status === 'ACTIVE') return true;
 
     if (p.status === 'SOLD') {
-      // Fallback to created_at just in case updated_at is null
       const soldDate = new Date(p.updated_at || p.created_at).getTime();
       const hoursSinceSold = (now - soldDate) / (1000 * 60 * 60);
       return hoursSinceSold <= 24;
@@ -57,74 +70,74 @@ async function fetchProducts() {
     return false;
   });
 
-  const productIds = validProducts.map((p: any) => p.id);
-  const viewCounts: Record<string, number> = {};
-
-  if (productIds.length > 0) {
-    const { data: viewsData } = await supabase
-      .from('product_views')
-      .select('product_id')
-      .in('product_id', productIds);
-
-    if (viewsData) {
-      viewsData.forEach((v: any) => {
-        viewCounts[v.product_id] = (viewCounts[v.product_id] || 0) + 1;
-      });
-    }
-  }
-
   return validProducts.map((product: any) => ({
     ...product,
-    views_count: viewCounts[product.id] || 0,
+    views_count: product.product_views?.[0]?.count ?? 0,
   }));
 }
 
 export default function HomeFeed() {
-  // Stale-while-revalidate: cached feed shows instantly, then updates quietly.
-  // `isLoading` is only true when there is NO cached data yet (first ever load),
-  // so the skeleton won't flash when you come back to the feed.
-  const { data, mutate } = useSWR<any[]>(FEED_KEY, fetchProducts, {
-    keepPreviousData: true,
-    revalidateOnFocus: true,
-    revalidateOnReconnect: true,
-    dedupingInterval: 10000,
-  });
-  const products = data ?? EMPTY;
-  const isLoading = data === undefined; // no cache yet
-
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState("All");
 
-  // What the grid actually filters by. These trail searchQuery/activeCategory
-  // by FILTER_DELAY so the spinner has a moment to show.
   const [appliedQuery, setAppliedQuery] = useState("");
   const [appliedCategory, setAppliedCategory] = useState("All");
   const [isFiltering, setIsFiltering] = useState(false);
-  const [stripOpen, setStripOpen] = useState(false); // keeps the spinner mounted while it slides away
+  const [stripOpen, setStripOpen] = useState(false);
 
-  const [pullDistance, setPullDistance] = useState(0);
+  const [limit, setLimit] = useState(INITIAL_PAGE_SIZE);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const isUnfiltered = appliedCategory === 'All' && !appliedQuery.trim();
+  const feedKey = isUnfiltered
+    ? (['home-feed-unfiltered', limit] as const)
+    : (['home-feed-filtered', appliedCategory, appliedQuery.trim()] as const);
+
+  const { data, mutate, isValidating } = useSWR(
+    feedKey,
+    () => {
+      if (isUnfiltered) {
+        return fetchProducts('All', '', limit);
+      }
+      return fetchProducts(appliedCategory, appliedQuery.trim(), 0);
+    },
+    {
+      keepPreviousData: true,
+      revalidateOnReconnect: true,
+      dedupingInterval: 10000,
+    }
+  );
+
+  const products = data ?? EMPTY;
+  const isLoading = data === undefined;
+  const hasMore = isUnfiltered && (data ? data.length >= limit : false);
+
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const startYRef = useRef<number | null>(null);
+  const pullDistanceRef = useRef(0);
   const hapticFiredRef = useRef(false);
 
-  // Lock is 0 because the collapse no longer reflows the grid, so there's
-  // no layout-shift scroll noise to ignore. It reacts the moment you reverse direction.
+  const spinnerContainerRef = useRef<HTMLDivElement>(null);
+  const slidingPageRef = useRef<HTMLDivElement>(null);
+
   const showSearch = useHideOnScroll('main-scroll-container', 12, 0);
 
-  // Pull-to-refresh / explicit refresh: shows the spinner while SWR revalidates
   const refreshFeed = useCallback(async () => {
     setIsRefreshing(true);
     try {
       await mutate();
     } finally {
-      setTimeout(() => setIsRefreshing(false), 500);
+      setTimeout(() => {
+        setIsRefreshing(false);
+        if (slidingPageRef.current) slidingPageRef.current.style.transform = '';
+        if (spinnerContainerRef.current) spinnerContainerRef.current.style.height = '0px';
+      }, 500);
     }
   }, [mutate]);
 
   useEffect(() => {
     const handleGlobalRefresh = () => { refreshFeed(); };
-    // Coming back via the back button: refresh quietly, the cached feed is already on screen
     const handlePopState = () => { mutate(); };
     window.addEventListener('refresh-feed', handleGlobalRefresh);
     window.addEventListener('popstate', handlePopState);
@@ -134,13 +147,9 @@ export default function HomeFeed() {
     };
   }, [refreshFeed, mutate]);
 
-  // Scroll restoration: tapping a card saves your place; coming back restores it.
-  // A fresh visit (or a swap to another tab) starts at the top.
   const feedRef = useRef<HTMLDivElement>(null);
   const { saveScroll } = useScrollRestore(feedRef, 'feed', data !== undefined);
 
-  // System back on the feed: scrolled down -> jump to top + refresh (consumed,
-  // the app does NOT close); near the top -> fall through to the default (exit).
   useEffect(() => registerBackHandler(() => {
     const main = document.getElementById('main-scroll-container');
     if (main && main.scrollTop > 400) {
@@ -150,8 +159,6 @@ export default function HomeFeed() {
     }
   }), []);
 
-  // Typing or changing category: show the spinner, then apply the new filters.
-  // Every keystroke restarts the timer, so results land shortly after you pause.
   useEffect(() => {
     if (searchQuery === appliedQuery && activeCategory === appliedCategory) {
       setIsFiltering(false);
@@ -166,7 +173,6 @@ export default function HomeFeed() {
     return () => clearTimeout(timer);
   }, [searchQuery, activeCategory, appliedQuery, appliedCategory]);
 
-  // Keep the spinner mounted until its slide-away finishes
   useEffect(() => {
     if (isFiltering) {
       setStripOpen(true);
@@ -178,9 +184,8 @@ export default function HomeFeed() {
 
   const handleImagePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    e.target.value = ''; // so picking the same photo twice still fires
+    e.target.value = '';
     if (!file) return;
-    // TODO: image search. Send `file` to whatever backend matches it to products.
     console.log('Image picked for search:', file.name, file.size);
   };
 
@@ -199,52 +204,68 @@ export default function HomeFeed() {
     const main = document.getElementById('main-scroll-container');
     if (main && main.scrollTop > 0) {
       startYRef.current = null;
-      setIsDragging(false);
-      setPullDistance(0);
+      pullDistanceRef.current = 0;
+      if (isDragging) setIsDragging(false);
+      if (spinnerContainerRef.current) spinnerContainerRef.current.style.height = '0px';
+      if (slidingPageRef.current) slidingPageRef.current.style.transform = '';
       return;
     }
 
     const rawDelta = e.touches[0].clientY - startYRef.current;
     if (rawDelta <= 0) {
-      if (pullDistance !== 0) setPullDistance(0);
+      pullDistanceRef.current = 0;
+      if (spinnerContainerRef.current) spinnerContainerRef.current.style.height = '0px';
+      if (slidingPageRef.current) slidingPageRef.current.style.transform = '';
       return;
     }
 
     if (!isDragging) setIsDragging(true);
     const damped = Math.min(rawDelta * PULL_RESISTANCE, PULL_MAX);
-    setPullDistance(damped);
+    pullDistanceRef.current = damped;
+
+    // Direct DOM write to avoid full React re-renders on every frame
+    if (spinnerContainerRef.current) {
+      spinnerContainerRef.current.style.height = `${damped}px`;
+      spinnerContainerRef.current.style.transition = 'none';
+    }
+    if (slidingPageRef.current) {
+      slidingPageRef.current.style.transform = `translateY(${damped}px)`;
+      slidingPageRef.current.style.transition = 'none';
+    }
 
     if (damped >= PULL_THRESHOLD && !hapticFiredRef.current) {
       hapticFiredRef.current = true;
       try { Haptics.impact({ style: ImpactStyle.Light }); } catch (err) {}
+    } else if (damped < PULL_THRESHOLD) {
+      hapticFiredRef.current = false;
     }
   };
 
   const handleTouchEnd = () => {
     if (startYRef.current === null) return;
-    const shouldRefresh = pullDistance >= PULL_THRESHOLD && !isRefreshing;
+    const shouldRefresh = pullDistanceRef.current >= PULL_THRESHOLD && !isRefreshing;
     startYRef.current = null;
+    pullDistanceRef.current = 0;
     setIsDragging(false);
-    setPullDistance(0);
+
+    if (slidingPageRef.current) {
+      slidingPageRef.current.style.transition = 'transform 0.25s ease-out';
+      slidingPageRef.current.style.transform = shouldRefresh ? `translateY(${REFRESH_HOLD}px)` : '';
+    }
+    if (spinnerContainerRef.current) {
+      spinnerContainerRef.current.style.transition = 'height 0.25s ease-out';
+      spinnerContainerRef.current.style.height = shouldRefresh ? `${REFRESH_HOLD}px` : '0px';
+    }
+
     if (shouldRefresh) refreshFeed();
   };
 
-  const filteredProducts = useMemo(() => {
-    const searchLower = appliedQuery.toLowerCase();
-    return products.filter(p => {
-      const matchesSearch = p.title.toLowerCase().includes(searchLower) ||
-                            (p.university_id && p.university_id.toLowerCase().includes(searchLower)) ||
-                            (p.campus && p.campus.toLowerCase().includes(searchLower));
-
-      const matchesCategory = appliedCategory === 'All' || p.category === appliedCategory;
-
-      return matchesSearch && matchesCategory;
-    });
-  }, [products, appliedQuery, appliedCategory]);
-
-  // How far the whole page is slid down right now
-  const offset = isDragging ? pullDistance : isRefreshing ? REFRESH_HOLD : 0;
-  const pullProgress = Math.min(pullDistance / PULL_THRESHOLD, 1);
+  const loadMoreProducts = async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    setLimit((prev) => prev + INITIAL_PAGE_SIZE);
+    setLoadingMore(false);
+  };
 
   return (
     <div
@@ -255,44 +276,34 @@ export default function HomeFeed() {
       onTouchEnd={handleTouchEnd}
       onTouchCancel={handleTouchEnd}
     >
-
-      {/* PULL SPINNER: lives in the gap that opens above the page as it
-          slides down, so nothing can cover it */}
+      {/* PULL SPINNER: directly styled via ref */}
       <div
+        ref={spinnerContainerRef}
         className="absolute top-0 left-0 right-0 flex items-center justify-center pointer-events-none overflow-hidden"
-        style={{
-          height: offset,
-          transition: isDragging ? 'none' : 'height 0.25s ease-out',
-        }}
+        style={{ height: isRefreshing ? REFRESH_HOLD : 0 }}
       >
-        {offset > 0 && (
-          <PullSpinner progress={pullProgress} spinning={isRefreshing && !isDragging} />
-        )}
+        <PullSpinner progress={1} spinning={isRefreshing} />
       </div>
 
-      {/* SLIDING PAGE: header + grid move together */}
+      {/* SLIDING PAGE: header + grid move together via ref */}
       <div
+        ref={slidingPageRef}
         style={{
-          transform: offset > 0 ? `translateY(${offset}px)` : undefined,
+          transform: isRefreshing ? `translateY(${REFRESH_HOLD}px)` : undefined,
           transition: isDragging ? 'none' : 'transform 0.25s ease-out',
-          willChange: isDragging ? 'transform' : undefined,
         }}
       >
-
-        {/* STICKY HEADER AREA: the search row slides away with a transform,
-            so the grid underneath never reflows */}
+        {/* STICKY HEADER AREA */}
         <div
-          className="sticky top-0 z-30 bg-gray-50 dark:bg-background shadow-sm border-b border-gray-200 dark:border-gray-800 mb-3 -mx-4 px-4 md:-mx-8 md:px-8"
+          className="sticky top-0 z-30 bg-gray-50 dark:bg-background shadow-sm border-b border-gray-200 dark:border-gray-800 mb-3 -mx-4 md:-mx-8"
           style={{
             transform: showSearch ? 'translateY(0)' : `translateY(-${SEARCH_ROW_HEIGHT}px)`,
             transition: 'transform 0.22s cubic-bezier(0.22, 1, 0.36, 1)',
             willChange: 'transform',
           }}
         >
-
-          {/* Search + camera row: fixed height, compact controls */}
-          <div className="flex gap-2 items-center pt-2" style={{ height: SEARCH_ROW_HEIGHT }}>
-
+          {/* Search + camera row */}
+          <div className="flex gap-2 items-center pt-2 px-4 md:px-8" style={{ height: SEARCH_ROW_HEIGHT }}>
             <div className="flex-1">
               <Searchbar
                 size="sm"
@@ -302,7 +313,6 @@ export default function HomeFeed() {
               />
             </div>
 
-            {/* A <label>, not a <button>: globals.css forces height:auto on buttons */}
             <label
               htmlFor="image-search-input"
               aria-label="Search with an image"
@@ -319,11 +329,10 @@ export default function HomeFeed() {
               className="hidden"
               onChange={handleImagePicked}
             />
-
           </div>
 
           {/* Categories */}
-          <div className="flex overflow-x-auto scrollbar-hide gap-2 pt-2 pb-2">
+          <div className="flex overflow-x-auto scrollbar-hide gap-2 pt-2 pb-2 px-4 md:px-8">
             {CATEGORIES.map((cat) => (
               <button
                 key={cat}
@@ -339,8 +348,7 @@ export default function HomeFeed() {
             ))}
           </div>
 
-          {/* FILTER SPINNER: hangs below the pills without affecting layout.
-              It opens while filtering and slides shut when results are in. */}
+          {/* FILTER SPINNER */}
           <div
             className="absolute left-0 right-0 top-full flex items-center justify-center overflow-hidden pointer-events-none"
             style={{
@@ -352,7 +360,7 @@ export default function HomeFeed() {
           </div>
         </div>
 
-        {/* FEED GRID: fades out while filtering, fades back in with new results */}
+        {/* FEED GRID */}
         <div
           className={isFiltering ? 'pointer-events-none' : ''}
           style={{ opacity: isFiltering ? 0 : 1, transition: 'opacity 0.2s ease-out' }}
@@ -386,7 +394,7 @@ export default function HomeFeed() {
                 </div>
               ))}
             </div>
-          ) : filteredProducts.length === 0 ? (
+          ) : products.length === 0 ? (
             <div className="pt-10">
               <EmptyState
                 icon={searchOutline}
@@ -400,17 +408,31 @@ export default function HomeFeed() {
               />
             </div>
           ) : (
-            <div onClickCapture={saveScroll} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-5 lg:gap-6">
-              {filteredProducts.map((product) => (
-                <BuyerProductCard
-                  key={product.id}
-                  product={product}
-                />
-              ))}
-            </div>
+            <>
+              <div onClickCapture={saveScroll} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-5 lg:gap-6">
+                {products.map((product: any) => (
+                  <BuyerProductCard
+                    key={product.id}
+                    product={product}
+                  />
+                ))}
+              </div>
+
+              {isUnfiltered && hasMore && (
+                <div className="flex justify-center mt-8 mb-4">
+                  <button
+                    type="button"
+                    onClick={loadMoreProducts}
+                    disabled={loadingMore || isValidating}
+                    className="px-6 py-2.5 text-xs font-bold text-white bg-orange-500 hover:bg-orange-600 active:scale-95 rounded-full shadow-sm transition-all disabled:opacity-50"
+                  >
+                    {loadingMore || isValidating ? 'Loading more items...' : 'Load more items'}
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
-
       </div>
     </div>
   );
