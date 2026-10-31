@@ -604,8 +604,12 @@ export default function BuyPage() {
       {/* BOTTOM ACTION BAR — portaled to <body> so it escapes AppShell's rubber-band
           wrapper: that wrapper gets a CSS transform during overscroll, and a transformed
           ancestor hijacks `fixed` positioning — that is why the bar used to ride up with
-          the page (same fix as the order page's bottom bar). The /buy page keeps its bounce. */}
-      {ready && barMounted && createPortal(
+          the page (same fix as the order page's bottom bar). The /buy page keeps its bounce.
+          Hidden while the checkout sheet, the PIN modal, or the processing overlay is up:
+          the bar is portaled to <body> at z-100, so it paints above in-page sheets and
+          would otherwise cover the sheet's bottom buttons (Top Up Wallet). The sheet has
+          its own buttons, so the bar is redundant while it is open. */}
+      {ready && barMounted && activeModal === 'none' && !isProcessingTx && createPortal(
           <div className="fixed bottom-0 left-0 right-0 z-[100] bg-white dark:bg-black border-t border-gray-200 dark:border-gray-800 px-4 pt-4 pb-[max(1.5rem,var(--sab))] shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pointer-events-auto">
             <div className="max-w-xl mx-auto relative z-[110]">
               <button

@@ -97,10 +97,23 @@ export default function WalletDashboard() {
   // Track if close was already initiated by a popstate event to prevent double-popping history
   const isPoppedByHistory = useRef(false);
 
-  const openView = (target: View) => {
-    if (typeof window !== 'undefined') {
-      window.history.pushState({ ...window.history.state, __vendiWalletOverlay: true, view: target }, '');
+  // Overlay history stays exactly one entry deep: opening an overlay over
+  // another replaces the marker instead of stacking a second one, so the
+  // back button can never need several presses to get out of the dashboard.
+  // (Before this, every open pushed: allTx then receipt meant two presses
+  // just to reach the dashboard, plus a silent press whenever a marker
+  // survived a route change — see the mount effect below.)
+  const pushOverlayState = (patch: Record<string, unknown>) => {
+    if (typeof window === 'undefined') return;
+    if (window.history.state?.__vendiWalletOverlay) {
+      window.history.replaceState({ ...window.history.state, ...patch }, '');
+    } else {
+      window.history.pushState({ ...window.history.state, __vendiWalletOverlay: true, ...patch }, '');
     }
+  };
+
+  const openView = (target: View) => {
+    pushOverlayState({ view: target });
     setView(target);
   };
 
@@ -113,9 +126,7 @@ export default function WalletDashboard() {
   };
 
   const openReceipt = (tx: WalletTx) => {
-    if (typeof window !== 'undefined') {
-      window.history.pushState({ ...window.history.state, __vendiWalletOverlay: true, receiptId: tx.id }, '');
-    }
+    pushOverlayState({ receiptId: tx.id });
     setReceiptTx(tx);
   };
 
@@ -126,6 +137,24 @@ export default function WalletDashboard() {
     isPoppedByHistory.current = false;
     setReceiptTx(null);
   };
+
+  // Clear a stale overlay marker left by a previous visit: if the user left
+  // the wallet while an overlay was open and later returns to that history
+  // entry, the marker is still on top but no overlay is open — pressing back
+  // would then pop a silent entry (nothing visibly happens) before the next
+  // press finally leaves. Strip it on mount so back always does something
+  // visible. Param flows (?topup/?receipt below) push fresh markers after
+  // this runs, so they are unaffected.
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.history.state?.__vendiWalletOverlay) {
+      const next = { ...window.history.state };
+      delete next.__vendiWalletOverlay;
+      delete next.view;
+      delete next.receiptId;
+      window.history.replaceState(next, '');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Deep link from a wallet notification: /wallet?receipt=<reference> opens
   // that exact transaction's receipt once the transactions have loaded.

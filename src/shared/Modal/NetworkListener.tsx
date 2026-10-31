@@ -6,12 +6,22 @@ import { NetworkModal } from './NetworkModal';
 
 export function NetworkListener() {
   const [isOffline, setIsOffline] = useState(false);
+  // Dismissed for the current offline episode only: closing the modal never
+  // means "ignore offline forever". It resets on reconnect and on every new
+  // offline episode, so the modal reappears next time the connection drops.
+  const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
     setIsOffline(!navigator.onLine);
 
-    const handleOffline = () => setIsOffline(true);
-    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => {
+      setIsOffline(true);
+      setDismissed(false);
+    };
+    const handleOnline = () => {
+      setIsOffline(false);
+      setDismissed(false);
+    };
 
     window.addEventListener('offline', handleOffline);
     window.addEventListener('online', handleOnline);
@@ -40,10 +50,11 @@ export function NetworkListener() {
         signal: AbortSignal.timeout(5000),
       });
       setIsOffline(false);
+      setDismissed(false);
     } catch (error) {
       setIsOffline(true);
     }
   };
 
-  return <NetworkModal isOpen={isOffline} onRetry={handleRetry} />;
+  return <NetworkModal isOpen={isOffline && !dismissed} onRetry={handleRetry} onDismiss={() => setDismissed(true)} />;
 }

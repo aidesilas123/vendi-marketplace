@@ -1,12 +1,30 @@
 // src/shared/PageTransition.tsx
 "use client";
 
-import React, { useLayoutEffect, useMemo } from "react";
+import React, { useContext, useLayoutEffect, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { isBackNavigation } from "@/shared/hooks/useScrollRestore";
+import { StackContext } from "@/shared/Navigation/StackOverlay";
 
-export const PageTransition = ({ children }: { children: React.ReactNode }) => {
+export const PageTransition = ({
+  children,
+  // Set by AppShell when this page is rendered as a stack snapshot (the
+  // forward underlay / back overlay): a static copy, no animation, no
+  // scroll effects — it only has to look right for ~300ms.
+  stackStatic,
+  // The route this entry belongs to, set by AppShell. The slide div is keyed
+  // by it (NOT by the global pathname): a kept page's key must stay stable
+  // across navigations, or React would remount it the moment it becomes kept
+  // and the whole keep-alive would be pointless. Outside AppShell this is
+  // undefined and the div falls back to key={pathname}, exactly as before.
+  pagePath,
+}: {
+  children: React.ReactNode;
+  stackStatic?: boolean;
+  pagePath?: string;
+}) => {
   const pathname = usePathname();
+  const stackMode = useContext(StackContext);
 
   // Back direction is decided once per pathname: isBackNavigation() reads a
   // 2.5s popstate window, so calling it on every render could flip the
@@ -23,7 +41,11 @@ export const PageTransition = ({ children }: { children: React.ReactNode }) => {
 
   // Scroll to top whenever a NEW page arrives. Back navigations skip this:
   // scroll restore owns the position there.
+  // Stack-managed navigations skip it entirely: AppShell owns scroll there
+  // (it zeroes on forward, restores the saved position on back reveal), and
+  // this effect running from a kept instance would fight it.
   useLayoutEffect(() => {
+    if (stackStatic || stackMode !== 'stack-none') return;
     if (isBack) return;
     const main = document.getElementById("main-scroll-container");
     if (main) {
@@ -40,6 +62,37 @@ export const PageTransition = ({ children }: { children: React.ReactNode }) => {
     return <>{children}</>;
   }
 
+  // Stack snapshot copies render bare: no animation, no scroll handling.
+  if (stackStatic) {
+    return <>{children}</>;
+  }
+
+  // Stack-managed forward: the new page slides in from the right over the
+  // previous page (vendi-stack-in, wallet timing). Keyed by this entry's own
+  // route, never by the global pathname, so becoming kept can't remount it.
+  // relative z-10 puts it above the forward underlay (z-[5]).
+  if (stackMode === 'stack-enter') {
+    return (
+      <div
+        key={pagePath ?? pathname}
+        className="w-full min-h-full vendi-stack-in relative z-10"
+      >
+        {children}
+      </div>
+    );
+  }
+
+  // Stack-managed back reveal: the kept page is already painted and in
+  // place — it must NOT animate. The outgoing snapshot sliding out over it
+  // is the whole transition.
+  if (stackMode === 'stack-reveal') {
+    return (
+      <div key={pagePath ?? pathname} className="w-full min-h-full">
+        {children}
+      </div>
+    );
+  }
+
   // CSS keyframes, not Motion: Motion's `x` shorthand is not in its
   // WAAPI-accelerated set, so the old slide ran on Motion's JS frame loop
   // while opacity ran on the compositor — a main-thread stall mounting the
@@ -51,7 +104,7 @@ export const PageTransition = ({ children }: { children: React.ReactNode }) => {
   // is no luminance flash and no whole-page group-opacity surface.
   return (
     <div
-      key={pathname}
+      key={pagePath ?? pathname}
       className={`w-full min-h-full ${isBack ? "vendi-page-in-back" : "vendi-page-in-forward"}`}
     >
       {children}

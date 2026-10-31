@@ -245,12 +245,29 @@ html {
 .vendi-step-in-forward { animation: vendi-step-in-forward 300ms ease-out; }
 .vendi-step-in-back { animation: vendi-step-in-back 300ms ease-out; }
 
+/* Wallet-style stack entrance: the new page slides in from the full right
+   edge over the previous page (same 300ms ease-out as the wallet's
+   FullScreenPage slide). Only used for stack-managed forward navigations;
+   stack back reveals animate nothing on the page itself — the outgoing
+   snapshot sliding out over it is the transition. will-change promotes the
+   layer before the first frames, the same reason the splash bar carries it. */
+@keyframes vendi-stack-in {
+  from { transform: translate3d(100%, 0, 0); }
+  to { transform: translate3d(0, 0, 0); }
+}
+.vendi-stack-in {
+  animation: vendi-stack-in 300ms ease-out;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
 /* Reduced motion: no slide anywhere, at the CSS level as well as the JS check. */
 @media (prefers-reduced-motion: reduce) {
   .vendi-page-in-forward,
   .vendi-page-in-back,
   .vendi-step-in-forward,
-  .vendi-step-in-back {
+  .vendi-step-in-back,
+  .vendi-stack-in {
     animation: none !important;
   }
 }

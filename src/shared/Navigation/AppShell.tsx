@@ -1,11 +1,14 @@
 "use client";
 // src/shared/Navigation/AppShell.tsx
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
+import { isBackNavigation } from '@/shared/hooks/useScrollRestore';
+import { StackContext, StackUnderlay, StackBackOverlay, findPageScroller } from './StackOverlay';
+import type { StackMode } from './StackOverlay';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { BottomNav } from './BottomNav';
@@ -20,6 +23,17 @@ import { showGlobalToast } from '@/shared/Toast/Toast';
 interface AppShellProps {
   children: React.ReactNode;
 }
+
+// Server render has no window: mirror useScrollRestore's iso pattern so the
+// stack's scroll effect never warns there.
+const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
+
+// One kept page (depth 1): the route the user came from, still mounted so
+// going back reveals it already painted instead of remounting it.
+type KeptEntry = { pathname: string; element: React.ReactNode };
+type StackTransition =
+  | { kind: 'forward'; underlay: React.ReactNode; underlayScroll: number }
+  | { kind: 'back'; snapshot: React.ReactNode; snapshotScroll: number };
 
 const PAGE_TITLES: Record<string, string> = {
   chats: 'Messages',
@@ -59,6 +73,23 @@ export const AppShell = ({ children }: AppShellProps) => {
   const isAuthPage = pathname === '/login' || pathname === '/signup' || pathname === '/forgot-password' || pathname === '/reset-password' || pathname === '/auth/callback' || pathname === '/complete-profile';
   const isChatRoom = pathname === '/chats' || pathname?.startsWith('/chats');
   const showShell = !isAuthPage && !isChatRoom;
+
+  // ---- Wallet-style page stack (depth 1) ----
+  // Refs only; the transition is computed during render (below, before the
+  // early return) so the overlays exist in the SAME commit as the route
+  // change — an effect would flash one frame without them. The computation
+  // is idempotent (guarded by prevPathRef) so StrictMode's double render
+  // can't apply it twice.
+  const stackModeRef = useRef<StackMode>('stack-none');
+  const stackEntriesRef = useRef<KeptEntry[]>([]);
+  const currentElRef = useRef<React.ReactNode>(null);
+  const transitionRef = useRef<StackTransition | null>(null);
+  const prevPathRef = useRef<string | null>(null);
+  const prevChildrenRef = useRef<React.ReactNode>(null);
+  const prevShellRef = useRef(false);
+  const savedScrollRef = useRef<Record<string, number>>({});
+  const wrapperRefs = useRef(new Map<string, HTMLElement>());
+  const [, setStackTick] = useState(0);
 
   // Connection toasts: offline / back online / slow connection. Fires only on
   // transitions (tracked in refs), never on every render, so it can't spam.
@@ -308,6 +339,118 @@ export const AppShell = ({ children }: AppShellProps) => {
     };
   }, [router]);
 
+  // Drop transition overlays after their animation: 300ms covers the 300ms
+  // forward slide and the 16ms + 280ms back slide-out. Cleanup on the next
+  // navigation so a rapid tap can't leave a stale overlay up.
+  useEffect(() => {
+    if (!transitionRef.current) return;
+    const id = setTimeout(() => {
+      transitionRef.current = null;
+      setStackTick((v) => v + 1);
+    }, 300);
+    return () => clearTimeout(id);
+  }, [pathname]);
+
+  // Stack-managed scroll. PageTransition's own scroll-to-top is gated off in
+  // stack modes, so this owns it — layout effect, before paint, no flash.
+  // Kept pages never remount, so their useScrollRestore hooks don't re-run
+  // and can't fight this; the direct set below is the only positioning.
+  useIsoLayoutEffect(() => {
+    if (stackModeRef.current === 'stack-none') return;
+    if (typeof document === 'undefined') return;
+    const main = document.getElementById('main-scroll-container');
+    if (!main) return;
+    if (stackModeRef.current === 'stack-enter') {
+      main.scrollTop = 0;
+    } else if (stackModeRef.current === 'stack-reveal') {
+      const w = wrapperRefs.current.get(pathname ?? '');
+      const scroller = findPageScroller(w ?? null, main);
+      if (scroller) scroller.scrollTop = savedScrollRef.current[pathname ?? ''] ?? 0;
+    }
+  }, [pathname]);
+
+  // ---- Page-stack transition, computed during render ----
+  // Shell-to-shell navigations only; anything else clears the stack and
+  // falls back to PageTransition's keyframe slide, exactly as before.
+  // Note: query-only changes (?receipt=, ?topup=) don't change pathname, so
+  // they skip this entirely — the wallet's own overlay markers are untouched.
+  let stackMode: StackMode;
+  let renderKept: KeptEntry[];
+  let renderCurrent: React.ReactNode;
+  let transition: StackTransition | null;
+  if (pathname !== prevPathRef.current) {
+    const from = prevPathRef.current;
+    const fromEl = prevChildrenRef.current;
+    const fromShell = prevShellRef.current;
+    // Capture the outgoing page's scroll while its DOM is still laid out
+    // (commit hasn't happened yet). For main-scrolling pages this is main's
+    // scrollTop; for pull-to-refresh / own-scroller pages it's the inner
+    // scroller's — findPageScroller returns whichever actually scrolls.
+    if (from && fromEl && fromShell && typeof document !== 'undefined') {
+      const w = wrapperRefs.current.get(from);
+      const scroller = findPageScroller(w ?? null, document.getElementById('main-scroll-container'));
+      if (scroller) savedScrollRef.current[from] = scroller.scrollTop;
+    }
+    if (from && fromEl && fromShell && showShell) {
+      const keptMatch = stackEntriesRef.current.find((e) => e.pathname === pathname);
+      const back = isBackNavigation();
+      if (keptMatch && back) {
+        // Back to a kept page: reveal it (already mounted, already painted)
+        // while the outgoing page's snapshot slides out over it.
+        stackMode = 'stack-reveal';
+        transition = { kind: 'back', snapshot: fromEl, snapshotScroll: savedScrollRef.current[from] ?? 0 };
+        renderKept = [];
+        renderCurrent = keptMatch.element;
+      } else if (keptMatch) {
+        // Forward tap back to a kept tab: same reveal, but as a slide-in
+        // over the outgoing page's snapshot (it was a push, not a pop).
+        stackMode = 'stack-enter';
+        transition = { kind: 'forward', underlay: fromEl, underlayScroll: savedScrollRef.current[from] ?? 0 };
+        renderKept = [{ pathname: from, element: fromEl }];
+        renderCurrent = keptMatch.element;
+      } else if (back) {
+        // Back to a page that isn't kept (two-step back): today's behavior.
+        stackMode = 'stack-none';
+        transition = null;
+        renderKept = [];
+        renderCurrent = children;
+      } else {
+        // Forward to a new page: keep `from` (depth 1), slide in over its
+        // snapshot.
+        stackMode = 'stack-enter';
+        transition = { kind: 'forward', underlay: fromEl, underlayScroll: savedScrollRef.current[from] ?? 0 };
+        renderKept = [{ pathname: from, element: fromEl }];
+        renderCurrent = children;
+      }
+    } else {
+      // First mount, or a shell boundary (auth / chat room): no stack.
+      stackMode = 'stack-none';
+      transition = null;
+      renderKept = [];
+      renderCurrent = children;
+    }
+    stackEntriesRef.current = renderKept;
+    stackModeRef.current = stackMode;
+    currentElRef.current = renderCurrent;
+    transitionRef.current = transition;
+    prevPathRef.current = pathname;
+    prevChildrenRef.current = children;
+    prevShellRef.current = showShell;
+  } else {
+    stackMode = stackModeRef.current;
+    renderKept = stackEntriesRef.current;
+    renderCurrent = currentElRef.current ?? children;
+    transition = transitionRef.current;
+  }
+
+  // Keyed by route, so React moves (never remounts) an entry when it goes
+  // from current to kept and back. Each entry is cloned with its own
+  // pagePath so PageTransition's slide div keeps a stable key per entry —
+  // keying it by the global pathname would remount the page on every
+  // navigation and defeat the keep-alive. display:none entries take no
+  // space, so main's scroll height is the current page's alone.
+  const renderEntries: KeptEntry[] = [...renderKept, { pathname: pathname ?? '', element: renderCurrent }];
+
   if (!showShell) return <>{children}</>;
 
   const isDashboard = pathname === '/' || pathname === '' || pathname === '/index';
@@ -344,10 +487,49 @@ export const AppShell = ({ children }: AppShellProps) => {
             outside it so a transform never breaks their positioning. */}
         <div ref={bounceRef}>
           <div className="max-w-[1600px] mx-auto w-full px-4 md:px-8">
-            {children}
+            <StackContext.Provider value={stackMode}>
+              {renderEntries.map((e) => (
+                <div
+                  key={e.pathname}
+                  ref={(el) => {
+                    if (el) wrapperRefs.current.set(e.pathname, el);
+                    else wrapperRefs.current.delete(e.pathname);
+                  }}
+                  style={{ display: e.pathname === (pathname ?? '') ? 'block' : 'none' }}
+                >
+                  {React.isValidElement(e.element)
+                    ? React.cloneElement(e.element as React.ReactElement<{ pagePath?: string }>, { pagePath: e.pathname })
+                    : e.element}
+                </div>
+              ))}
+            </StackContext.Provider>
           </div>
         </div>
       </main>
+
+      {/* Stack transition layers (fixed, below the bottom nav at z-50, so
+          the nav never blinks mid-slide). Snapshots are static clones of
+          the outgoing page — they only have to look right for ~300ms. */}
+      {transition?.kind === 'forward' && (
+        <StackUnderlay
+          element={
+            React.isValidElement(transition.underlay)
+              ? React.cloneElement(transition.underlay as React.ReactElement<{ stackStatic?: boolean }>, { stackStatic: true })
+              : transition.underlay
+          }
+          scrollTop={transition.underlayScroll}
+        />
+      )}
+      {transition?.kind === 'back' && (
+        <StackBackOverlay
+          element={
+            React.isValidElement(transition.snapshot)
+              ? React.cloneElement(transition.snapshot as React.ReactElement<{ stackStatic?: boolean }>, { stackStatic: true })
+              : transition.snapshot
+          }
+          scrollTop={transition.snapshotScroll}
+        />
+      )}
 
       <div className="absolute bottom-0 left-0 right-0 w-full z-50 pointer-events-none">
         <div className="pointer-events-auto">

@@ -1,0 +1,127 @@
+// src/shared/Navigation/StackOverlay.tsx
+"use client";
+
+import React, { createContext, useCallback, useEffect, useState } from 'react';
+
+/**
+ * Wallet-style page stack — the transition layer.
+ *
+ * The wallet dashboard feels smooth because its subpages are fixed overlays
+ * sliding over an intact, already-painted dashboard: nothing remounts on the
+ * way back. This module gives App Router pages the same treatment, capped at
+ * depth 1 (only the immediately previous page is kept):
+ *
+ *  - Forward: the new page mounts in main and slides in from the right
+ *    (vendi-stack-in, 300ms ease-out — the wallet's timing) over a static
+ *    snapshot of the previous page. The snapshot lives 300ms, then drops.
+ *  - Back to a kept page: the kept page is unhidden in main (already painted,
+ *    state intact) while a snapshot of the outgoing page slides out to the
+ *    right over 280ms (the wallet's close timing), then drops.
+ *  - Anything else (back to a page that isn't kept, leaving the shell):
+ *    falls back to PageTransition's keyframe slide, exactly as before.
+ *
+ * Stacking, all below the bottom nav (z-50) so the nav never blinks:
+ *  - forward underlay: z-[5] (below the entering page's z-10 wrapper)
+ *  - back snapshot overlay: z-[45] (above page content and the dashboard
+ *    header at z-40, below the nav)
+ * The entering page's wrapper carries `relative z-10` (see PageTransition).
+ */
+
+export type StackMode = 'stack-none' | 'stack-enter' | 'stack-reveal';
+
+export const StackContext = createContext<StackMode>('stack-none');
+
+/** Find the element that actually scrolls a page: the outermost scrollable
+ *  descendant of the page wrapper (e.g. the feed's pull-to-refresh scroller,
+ *  the transactions page's own scroller), or `fallback` (main) when the page
+ *  scrolls in main. Walk is capped: the scroller sits a few levels down, and
+ *  a full-subtree walk of a 90-card feed during render would jank. */
+export function findPageScroller(wrapper: HTMLElement | null, fallback: HTMLElement | null): HTMLElement | null {
+  if (typeof document === 'undefined') return null;
+  if (wrapper) {
+    const queue: Element[] = [...wrapper.children];
+    let visited = 0;
+    while (queue.length > 0 && visited < 400) {
+      const el = queue.shift()!;
+      visited += 1;
+      if (el instanceof HTMLElement) {
+        // scrollHeight first (cheap read); computed style only for candidates.
+        if (el.scrollHeight > el.clientHeight + 1) {
+          const oy = getComputedStyle(el).overflowY;
+          if (oy === 'auto' || oy === 'scroll' || oy === 'overlay') return el;
+        }
+        queue.push(...el.children);
+      }
+    }
+  }
+  return fallback;
+}
+
+/** Shared snapshot shell: a fixed, independently scrolling layer holding a
+ *  static copy of a page (a cloned PageTransition with stackStatic, so it
+ *  renders no animation and runs no scroll effects). `scrollTop` is applied
+ *  to the container and, when the page has its own inner scroller, to that
+ *  scroller too — one of the two is always the right one, the other no-ops. */
+function SnapshotShell({
+  element,
+  scrollTop,
+  className,
+}: {
+  element: React.ReactNode;
+  scrollTop: number;
+  className: string;
+}) {
+  const setScroll = useCallback(
+    (el: HTMLElement | null) => {
+      if (!el) return;
+      el.scrollTop = scrollTop;
+      const inner = findPageScroller(el, el);
+      if (inner && inner !== el) inner.scrollTop = scrollTop;
+    },
+    [scrollTop],
+  );
+
+  return (
+    <div
+      ref={setScroll}
+      aria-hidden
+      className={className}
+      style={{ paddingBottom: 'calc(6rem + var(--sab))' }}
+    >
+      <div className="max-w-[1600px] mx-auto w-full px-4 md:px-8">{element}</div>
+    </div>
+  );
+}
+
+/** Forward underlay: the previous page, frozen, beneath the entering page. */
+export function StackUnderlay({ element, scrollTop }: { element: React.ReactNode; scrollTop: number }) {
+  return (
+    <SnapshotShell
+      element={element}
+      scrollTop={scrollTop}
+      className="fixed inset-0 z-[5] overflow-y-auto bg-gray-50 dark:bg-background"
+    />
+  );
+}
+
+/** Back snapshot: the outgoing page, sliding out to the right over the
+ *  revealed kept page. Same enter/close choreography as the wallet's
+ *  FullScreenPage: mount at x-0, slide out over 280ms once mounted. */
+export function StackBackOverlay({ element, scrollTop }: { element: React.ReactNode; scrollTop: number }) {
+  const [leaving, setLeaving] = useState(false);
+
+  useEffect(() => {
+    const id = setTimeout(() => setLeaving(true), 16);
+    return () => clearTimeout(id);
+  }, []);
+
+  return (
+    <SnapshotShell
+      element={element}
+      scrollTop={scrollTop}
+      className={`fixed inset-0 z-[45] overflow-y-auto bg-gray-50 dark:bg-background transition-transform duration-[280ms] ease-out ${
+        leaving ? 'translate-x-full' : 'translate-x-0'
+      }`}
+    />
+  );
+}

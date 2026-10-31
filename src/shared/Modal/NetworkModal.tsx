@@ -1,3 +1,4 @@
+// src/shared/Modal/NetworkModal.tsx
 "use client";
 
 import React, { useState, useEffect } from 'react';
@@ -10,9 +11,11 @@ import { Haptics, ImpactStyle } from '@capacitor/haptics';
 interface NetworkModalProps {
   isOpen: boolean;
   onRetry: () => Promise<void> | void;
+  /** Dismiss the modal for this offline episode (X, backdrop, or Escape). */
+  onDismiss: () => void;
 }
 
-export const NetworkModal = ({ isOpen, onRetry }: NetworkModalProps) => {
+export const NetworkModal = ({ isOpen, onRetry, onDismiss }: NetworkModalProps) => {
   const [isRetrying, setIsRetrying] = useState(false);
 
   // Trigger double light vibration when modal opens
@@ -42,7 +45,7 @@ export const NetworkModal = ({ isOpen, onRetry }: NetworkModalProps) => {
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={() => {}} maxWidth="max-w-xs">
+    <Modal isOpen={isOpen} onClose={onDismiss} maxWidth="max-w-xs">
       {/* Reduced padding, sizes, and margins for a tighter mobile feel */}
       <div className="flex flex-col items-center text-center py-2">
         <div className="w-16 h-16 bg-red-50 dark:bg-red-900/10 rounded-full flex items-center justify-center mb-4">
