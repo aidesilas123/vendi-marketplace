@@ -1,3 +1,4 @@
+// src/shared/SplashOverlay.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -34,8 +35,15 @@ export function SplashOverlay() {
     const finish = () => {
       if (finished) return;
       finished = true;
-      setFading(true);
-      setTimeout(() => setVisible(false), 450);
+      // Two frames before starting the fade: lets the browser paint the
+      // already-mounted feed once, so the full-screen fade blends over a
+      // settled frame instead of competing with the feed's first layout.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setFading(true);
+          setTimeout(() => setVisible(false), 450);
+        });
+      });
     };
 
     const tryHide = () => {
@@ -71,7 +79,7 @@ export function SplashOverlay() {
   return (
     <div
       aria-hidden
-      className={`fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black transition-opacity duration-500 ${
+      className={`fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black transition-opacity duration-500 will-change-opacity ${
         fading ? "opacity-0" : "opacity-100"
       }`}
     >
@@ -79,14 +87,14 @@ export function SplashOverlay() {
         src="/logo.png"
         alt=""
         draggable={false}
-        className="w-28 h-28 object-contain animate-[splash-logo-in_0.45s_ease-out]"
+        className="w-28 h-28 object-contain"
       />
       <div className="mt-5 text-white text-2xl font-bold tracking-tight">Vendi</div>
       <div className="mt-1 text-white/40 text-[11px] tracking-[0.35em] uppercase">
         Your Trusted Campus Marketplace
       </div>
       <div className="mt-8 h-1 w-24 overflow-hidden rounded-full bg-white/10">
-        <div className="h-full w-1/2 rounded-full bg-orange-500 animate-[splash-slide_1.1s_ease-in-out_infinite]" />
+        <div className="h-full w-1/2 rounded-full bg-orange-500 will-change-transform animate-[splash-slide_1.1s_ease-in-out_infinite_alternate]" />
       </div>
     </div>
   );
