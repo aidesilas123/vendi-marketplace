@@ -21,7 +21,8 @@ const CATEGORIES = ['All', 'Gadgets', 'Electronics', 'Fashion', 'Books', 'Cookin
 const PULL_THRESHOLD = 60;   // slid px needed to commit to a refresh
 const PULL_MAX = 110;        // cap so it can't be dragged forever
 const PULL_RESISTANCE = 0.5; // lower = more "rubber"
-const REFRESH_HOLD = 56;     // how far the page stays open while refreshing
+const BADGE_SIZE = 44; // spinner badge diameter (px)
+const BADGE_HIDDEN = -(BADGE_SIZE + 16); // badge travel when fully hidden above the feed
 const SEARCH_ROW_HEIGHT = 44; // px: 8px top padding + 36px controls. Update if you resize them.
 const FILTER_DELAY = 350;        // ms the spinner shows before new results appear
 const FILTER_STRIP_HEIGHT = 48;  // px of space the spinner opens below the pills
@@ -125,20 +126,29 @@ export default function HomeFeed() {
   const pullDistanceRef = useRef(0);
   const hapticFiredRef = useRef(false);
 
-  const spinnerContainerRef = useRef<HTMLDivElement>(null);
-  const slidingPageRef = useRef<HTMLDivElement>(null);
+  // The badge is the ONLY thing that moves. The page (sticky header + grid)
+  // never translates, so scrolling during a refresh can never leave a gap
+  // between the app header and the search header.
+  const spinnerBadgeRef = useRef<HTMLDivElement>(null);
+
+  const setBadgeY = (y: number, animate: boolean) => {
+    const el = spinnerBadgeRef.current;
+    if (!el) return;
+    el.style.transition = animate ? 'transform 0.25s ease-out' : 'none';
+    el.style.transform = `translateY(${y}px)`;
+  };
 
   const showSearch = useHideOnScroll('main-scroll-container', 12, 0);
 
   const refreshFeed = useCallback(async () => {
     setIsRefreshing(true);
+    setBadgeY(0, true);
     try {
       await mutate();
     } finally {
       setTimeout(() => {
         setIsRefreshing(false);
-        if (slidingPageRef.current) slidingPageRef.current.style.transform = '';
-        if (spinnerContainerRef.current) spinnerContainerRef.current.style.height = '0px';
+        setBadgeY(BADGE_HIDDEN, true);
       }, 500);
     }
   }, [mutate]);
@@ -213,16 +223,14 @@ export default function HomeFeed() {
       startYRef.current = null;
       pullDistanceRef.current = 0;
       if (isDragging) setIsDragging(false);
-      if (spinnerContainerRef.current) spinnerContainerRef.current.style.height = '0px';
-      if (slidingPageRef.current) slidingPageRef.current.style.transform = '';
+      setBadgeY(BADGE_HIDDEN, false);
       return;
     }
 
     const rawDelta = e.touches[0].clientY - startYRef.current;
     if (rawDelta <= 0) {
       pullDistanceRef.current = 0;
-      if (spinnerContainerRef.current) spinnerContainerRef.current.style.height = '0px';
-      if (slidingPageRef.current) slidingPageRef.current.style.transform = '';
+      setBadgeY(BADGE_HIDDEN, false);
       return;
     }
 
@@ -230,15 +238,10 @@ export default function HomeFeed() {
     const damped = Math.min(rawDelta * PULL_RESISTANCE, PULL_MAX);
     pullDistanceRef.current = damped;
 
-    // Direct DOM write to avoid full React re-renders on every frame
-    if (spinnerContainerRef.current) {
-      spinnerContainerRef.current.style.height = `${damped}px`;
-      spinnerContainerRef.current.style.transition = 'none';
-    }
-    if (slidingPageRef.current) {
-      slidingPageRef.current.style.transform = `translateY(${damped}px)`;
-      slidingPageRef.current.style.transition = 'none';
-    }
+    // Direct DOM write to avoid full React re-renders on every frame.
+    // Only the badge travels (from hidden above the feed into view); the
+    // page itself never moves.
+    setBadgeY(BADGE_HIDDEN + damped, false);
 
     if (damped >= PULL_THRESHOLD && !hapticFiredRef.current) {
       hapticFiredRef.current = true;
@@ -255,14 +258,9 @@ export default function HomeFeed() {
     pullDistanceRef.current = 0;
     setIsDragging(false);
 
-    if (slidingPageRef.current) {
-      slidingPageRef.current.style.transition = 'transform 0.25s ease-out';
-      slidingPageRef.current.style.transform = shouldRefresh ? `translateY(${REFRESH_HOLD}px)` : '';
-    }
-    if (spinnerContainerRef.current) {
-      spinnerContainerRef.current.style.transition = 'height 0.25s ease-out';
-      spinnerContainerRef.current.style.height = shouldRefresh ? `${REFRESH_HOLD}px` : '0px';
-    }
+    // Release: badge rests fully in view while refreshing, or slides back
+    // above the feed if the pull fell short. The page never moves.
+    setBadgeY(shouldRefresh ? 0 : BADGE_HIDDEN, true);
 
     if (shouldRefresh) refreshFeed();
   };
@@ -283,23 +281,31 @@ export default function HomeFeed() {
       onTouchEnd={handleTouchEnd}
       onTouchCancel={handleTouchEnd}
     >
-      {/* PULL SPINNER: directly styled via ref */}
+      {/* PULL SPINNER: a floating badge, directly styled via ref. It is
+          sticky with zero height, so it never takes layout space and never
+          pushes the page down: it sticks to the top of the scroller (just
+          under the app header) and floats over the feed while refreshing,
+          however far you scroll. Hidden = translated fully above the feed,
+          where the scroller's overflow clips it. */}
       <div
-        ref={spinnerContainerRef}
-        className="absolute top-0 left-0 right-0 flex items-center justify-center pointer-events-none overflow-hidden"
-        style={{ height: isRefreshing ? REFRESH_HOLD : 0 }}
-      >
-        <PullSpinner progress={1} spinning={isRefreshing} />
-      </div>
-
-      {/* SLIDING PAGE: header + grid move together via ref */}
-      <div
-        ref={slidingPageRef}
+        ref={spinnerBadgeRef}
+        className="sticky top-0 z-40 flex justify-center pointer-events-none"
         style={{
-          transform: isRefreshing ? `translateY(${REFRESH_HOLD}px)` : undefined,
+          height: 0,
+          transform: `translateY(${BADGE_HIDDEN}px)`,
           transition: isDragging ? 'none' : 'transform 0.25s ease-out',
         }}
       >
+        <div
+          className="flex items-center justify-center rounded-full bg-white shadow-lg dark:bg-[#171717]"
+          style={{ width: BADGE_SIZE, height: BADGE_SIZE }}
+        >
+          <PullSpinner progress={1} spinning={isRefreshing} />
+        </div>
+      </div>
+
+      {/* PAGE: header + grid. This never moves — only the spinner badge does. */}
+      <div>
         {/* STICKY HEADER AREA */}
         <div
           className="sticky top-0 z-30 bg-gray-50 dark:bg-background shadow-sm border-b border-gray-200 dark:border-gray-800 mb-3 -mx-4 md:-mx-8"
