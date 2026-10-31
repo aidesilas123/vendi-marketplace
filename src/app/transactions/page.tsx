@@ -142,7 +142,7 @@ export default function TransactionsPage() {
   // `isLoading` is only true when there is no cached data yet (first ever load).
   const { data, mutate } = useSWR(ACTIVITY_KEY, fetchActivity, {
     keepPreviousData: true,
-    revalidateOnFocus: true,
+    revalidateOnFocus: false,
     revalidateOnReconnect: true,
     dedupingInterval: 10000,
   });

@@ -88,6 +88,13 @@ export default function HomeFeed() {
   const [limit, setLimit] = useState(INITIAL_PAGE_SIZE);
   const [loadingMore, setLoadingMore] = useState(false);
 
+  // A new filter (or clearing back to All) restarts the unfiltered feed at 30.
+  // Without this, a Load-more limit sticks across filter changes, so returning
+  // to the unfiltered feed jumps straight to the larger count.
+  useEffect(() => {
+    setLimit(INITIAL_PAGE_SIZE);
+  }, [appliedCategory, appliedQuery]);
+
   const isUnfiltered = appliedCategory === 'All' && !appliedQuery.trim();
   const feedKey = isUnfiltered
     ? (['home-feed-unfiltered', limit] as const)

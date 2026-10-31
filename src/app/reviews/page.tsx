@@ -1,3 +1,4 @@
+// src/app/reviews/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useRef } from 'react';
@@ -91,7 +92,7 @@ function formatDate(dateString: string) {
 export default function MyReviewsPage() {
   const router = useRouter();
   const { data, isLoading } = useSWR<ReviewsData | null>('my-reviews', fetchMyReviews, {
-    revalidateOnFocus: true,
+    revalidateOnFocus: false,
   });
 
   useEffect(() => {

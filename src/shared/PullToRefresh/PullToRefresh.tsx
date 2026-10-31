@@ -85,6 +85,12 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
   const [dragging, setDragging] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Spinner ring fill, quantized to the 12 ticks: at most one re-render per
+  // tick step during a pull, never per touchmove frame. Children are stable
+  // element refs, so these renders stay inside this component.
+  const [spinnerProgress, setSpinnerProgress] = useState(0);
+  const spinnerProgressRef = useRef(0);
+
   const pullRef = useRef(0);
   const bounceRef = useRef(0);
   const draggingRef = useRef(false);
@@ -120,6 +126,13 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
   const applyPull = useCallback((value: number, isDraggingMode = false) => {
     pullRef.current = value;
     updateDOM(value, bounceRef.current, isDraggingMode, refreshingRef.current);
+    // Restore the original growing-ring indicator (progress = pull / HOLD),
+    // quantized to tick steps so a pull costs at most 12 tiny renders.
+    const quantized = Math.round(Math.min(1, value / HOLD) * 12) / 12;
+    if (quantized !== spinnerProgressRef.current) {
+      spinnerProgressRef.current = quantized;
+      setSpinnerProgress(quantized);
+    }
   }, [updateDOM]);
 
   const applyBounce = useCallback((value: number, isDraggingMode = false) => {
@@ -295,7 +308,7 @@ export const PullToRefresh = forwardRef<PullToRefreshHandle, Props>(function Pul
           className="flex items-center justify-center rounded-full bg-white shadow-lg dark:bg-[#171717]"
           style={{ width: BADGE, height: BADGE }}
         >
-          <PullSpinner progress={1} spinning={refreshing} />
+          <PullSpinner progress={spinnerProgress} spinning={refreshing} />
         </div>
       </div>
 

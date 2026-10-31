@@ -1,350 +1,326 @@
+// src/app/disputes/page.tsx
 "use client";
-// src/app/dispute/page.tsx
-
-import React, { useEffect, useRef, useState } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
-import { safeBack } from '@/shared/safeBack';
+import React, { useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
-import { keys, fetchAuthUser, refreshAfterOrderWrite } from '@/lib/swr-orders';
 import { supabase } from '@/lib/supabase';
-import { notify } from '@/lib/notify';
-import { Button } from '@/shared/Button';
-import { Dropdown } from '@/shared/Dropdown';
-import { Skeleton } from '@/shared/Skeleton/Skeleton';
-import { ImageUploader } from '@/shared/ImageUploader/ImageUploader';
-import { Toast, useToast } from '@/shared/Toast/Toast';
+import { EmptyState } from '@/shared/EmptyState';
 import { IonIcon } from '@ionic/react';
-import { chevronBackOutline, warningOutline, alertCircleOutline } from 'ionicons/icons';
-import { DisputeStatus } from './DisputeStatus';
+import {
+  chevronBackOutline,
+  shieldCheckmarkOutline,
+  lockClosedOutline,
+  imageOutline,
+} from 'ionicons/icons';
+import { PullSpinner } from '@/shared/Loaders/PullSpinner';
+import { useScrollRestore } from '@/shared/hooks/useScrollRestore';
+import { safeBack } from '@/shared/safeBack';
 
-const DISPUTE_REASONS = [
-  'Item significantly not as described',
-  'Item is defective or broken',
-  'Seller did not show up to meetup',
-  'Seller refused to hand over item',
-  'Suspected fraud or scam',
-  'Other'
-];
-
-// Lightweight fetcher
-const fetchOrderSlim = async (ref: string) => {
-  const { data: transaction, error: txError } = await supabase
-    .from('transactions')
-    .select('*')
-    .eq('reference', ref)
-    .maybeSingle();
-    
-  if (txError) throw txError;
-  if (!transaction) return null;
-
-  const { data: product } = transaction.product_id
-    ? await supabase.from('products').select('id,title').eq('id', transaction.product_id).maybeSingle()
-    : { data: null };
-
-  return { transaction, product };
+type DisputeRow = {
+  id: string;
+  transaction_ref: string;
+  buyer_id: string;
+  seller_id: string;
+  product_id: string | null;
+  reason: string;
+  description: string | null;
+  images: string | null;
+  status: string;
+  created_at: string;
+  product: {
+    id: string;
+    title: string;
+    images: string[] | string | null;
+  } | null;
 };
 
-export default function DisputePage() {
-  const params = useSearchParams();
-  const txRef = params.get('ref');
+type DisputesData = {
+  userId: string;
+  disputes: DisputeRow[];
+  amounts: Record<string, number>;
+};
+
+async function fetchDisputes(): Promise<DisputesData | null> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { data, error } = await supabase
+    .from('disputes')
+    .select(`
+      id,
+      transaction_ref,
+      buyer_id,
+      seller_id,
+      product_id,
+      reason,
+      description,
+      images,
+      status,
+      created_at,
+      product:product_id (
+        id,
+        title,
+        images
+      )
+    `)
+    .or(`buyer_id.eq.${user.id},seller_id.eq.${user.id}`)
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+
+  const disputes = (data ?? []) as unknown as DisputeRow[];
+
+  // Escrow amounts for the frozen-funds badge (transactions keyed by reference)
+  const refs = [...new Set(disputes.map((d) => d.transaction_ref))];
+  const amounts: Record<string, number> = {};
+  if (refs.length > 0) {
+    const { data: txs } = await supabase
+      .from('transactions')
+      .select('reference, amount')
+      .in('reference', refs);
+    (txs ?? []).forEach((t: any) => {
+      amounts[t.reference] = Math.abs(Number(t.amount) || 0);
+    });
+  }
+
+  return { userId: user.id, disputes, amounts };
+}
+
+// Product/dispute images can be an array, a JSON string, or a plain URL
+function firstImage(images: string[] | string | null): string | null {
+  if (!images) return null;
+  if (Array.isArray(images)) return images[0] ?? null;
+  try {
+    const parsed = JSON.parse(images);
+    return Array.isArray(parsed) ? parsed[0] ?? null : images;
+  } catch {
+    return images;
+  }
+}
+
+function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString('en-GB', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+  } catch {
+    return '';
+  }
+}
+
+function StatusPill({ status }: { status: string }) {
+  const s = status.toLowerCase();
+  const resolved = s === 'resolved';
+  const closed = s === 'withdrawn' || s === 'closed' || s === 'cancelled';
+  const reviewing = s === 'under_review';
+  return (
+    <span
+      className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest ${
+        resolved
+          ? 'bg-green-500/15 text-green-600 dark:text-green-400'
+          : closed
+            ? 'bg-gray-500/15 text-gray-500 dark:text-gray-400'
+            : reviewing
+              ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
+              : 'bg-orange-500/15 text-orange-600 dark:text-orange-400'
+      }`}
+    >
+      {resolved ? 'Resolved' : closed ? s === 'withdrawn' ? 'Withdrawn' : status : reviewing ? 'Under review' : 'Open'}
+    </span>
+  );
+}
+
+function DisputeCard({
+  dispute,
+  role,
+  amount,
+  onOpen,
+}: {
+  dispute: DisputeRow;
+  role: 'buyer' | 'seller';
+  amount: number | undefined;
+  onOpen: () => void;
+}) {
+  const img = firstImage(dispute.product?.images ?? dispute.images);
+  return (
+    <button
+      onClick={onOpen}
+      className="w-full text-left active:opacity-70 transition-opacity py-4 flex gap-3"
+    >
+      {/* Thumb */}
+      <div className="w-16 h-16 rounded-2xl overflow-hidden bg-gray-100 dark:bg-gray-800 flex-shrink-0 flex items-center justify-center">
+        {img ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={img} alt="" className="w-full h-full object-cover" />
+        ) : (
+          <IonIcon icon={imageOutline} className="text-2xl text-gray-300 dark:text-gray-600" />
+        )}
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-sm font-bold text-gray-900 dark:text-white truncate">
+            {dispute.product?.title || 'Item'}
+          </p>
+          <StatusPill status={dispute.status} />
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
+          {dispute.reason}
+        </p>
+        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+          <span
+            className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest ${
+              role === 'seller'
+                ? 'bg-red-500/15 text-red-600 dark:text-red-400'
+                : 'bg-gray-500/15 text-gray-500 dark:text-gray-400'
+            }`}
+          >
+            {role === 'seller' ? 'Against you' : 'You raised'}
+          </span>
+          {amount !== undefined && amount > 0 && (
+            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-gray-500 dark:text-gray-400">
+              <IonIcon icon={lockClosedOutline} className="text-xs" />
+              ₦{amount.toLocaleString()} frozen
+            </span>
+          )}
+        </div>
+        <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-1">
+          {formatDate(dispute.created_at)} · {dispute.transaction_ref}
+        </p>
+      </div>
+    </button>
+  );
+}
+
+export default function DisputesPage() {
   const router = useRouter();
-
-  const { toast, showToast, hideToast } = useToast();
-
-  const [reason, setReason] = useState(DISPUTE_REASONS[0]);
-  const [description, setDescription] = useState('');
-  const [images, setImages] = useState<string[]>([]);
-  
-  const [isImagesUploading, setIsImagesUploading] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // 1) SWR Auth Fetching
-  const { data: currentUser, error: authError, isLoading: userLoading } = useSWR(
-    keys.authUser(), 
-    fetchAuthUser, 
-    { revalidateOnFocus: false }
-  );
-
-  // 2) SWR Order Fetching
-  const orderKey = keys.orderDetails(currentUser?.id, txRef);
-  const { data: order, error: orderError } = useSWR(orderKey, () => fetchOrderSlim(txRef!));
-
-  // 2b) SWR Dispute Fetching — reason, description, evidence for the status view
-  const { data: dispute } = useSWR(
-    txRef ? `dispute-details/${txRef}` : null,
-    async () => {
-      const { data } = await supabase
-        .from('disputes')
-        .select('reason, description, images, status, admin_notes, created_at, buyer_id')
-        .eq('transaction_ref', txRef!)
-        .maybeSingle();
-      return data;
-    }
-  );
-
-  const transaction = order?.transaction ?? null;
-  const product = order?.product ?? null;
-
-  const showSkeleton = 
-    order === undefined && 
-    !orderError && 
-    !authError && 
-    (userLoading || currentUser === null || !!orderKey);
-
-  // 3) iOS Rubber-band effect
-  const bounceRef = useRef<HTMLDivElement>(null);
+  const { data, isLoading } = useSWR<DisputesData | null>('disputes', fetchDisputes, {
+    revalidateOnFocus: false,
+  });
 
   useEffect(() => {
-    if (currentUser === null) router.push('/login');
-  }, [currentUser, router]);
+    if (!isLoading && data === null) router.push('/login');
+  }, [isLoading, data, router]);
 
-  const handleSubmit = async () => {
-    if (!description.trim()) {
-      showToast('Please provide a description of the issue', 'error');
-      return;
-    }
+  const bounceRef = useRef<HTMLDivElement>(null);
 
-    setIsSubmitting(true);
+  const listRef = useRef<HTMLDivElement>(null);
+  const { saveScroll } = useScrollRestore(listRef, 'disputes', !isLoading);
 
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/raise-dispute`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          transactionRef: txRef,
-          reason,
-          description,
-          images
-        })
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to submit dispute');
-
-      // Purge cached data to reflect the new "disputed" status globally
-      refreshAfterOrderWrite(txRef!);
-
-      // Dispute opened -> seller (funds frozen)
-      if (transaction?.seller_id) {
-        void (async () => {
-          let buyerName = 'The buyer';
-          try {
-            const { data: me } = await supabase.from('users').select('full_name').eq('id', currentUser?.id).maybeSingle();
-            if (me?.full_name) buyerName = me.full_name.split(' ')[0];
-          } catch { /* fallback stands; never block the notification */ }
-          const itemTitle = product?.title ?? 'your order';
-          const amount = Math.abs(transaction.amount).toLocaleString();
-          const disputeData = {
-            itemTitle,
-            amount: String(Math.abs(transaction.amount)),
-            reference: txRef ?? '',
-            reason,
-            counterparty: buyerName,
-          };
-          await notify({
-            userId: transaction.seller_id,
-            type: 'dispute',
-            title: 'A dispute was opened on your order',
-            body: `${buyerName} opened a dispute on "${itemTitle}" (₦${amount}). The funds stay locked until it's resolved.`,
-            route: `/dispute?ref=${txRef}`,
-            data: disputeData,
-          });
-          // Confirmation -> buyer (the raiser)
-          if (currentUser?.id) {
-            await notify({
-              userId: currentUser.id,
-              type: 'dispute',
-              title: 'Dispute recorded',
-              body: `Your dispute on "${itemTitle}" is open. The ₦${amount} stays locked until it's resolved.`,
-              route: `/dispute?ref=${txRef}`,
-              data: disputeData,
-            });
-          }
-        })();
-      }
-      
-      showToast('Dispute raised successfully. Funds frozen.', 'success');
-      
-      // Delay routing slightly so the toast is visible
-      setTimeout(() => router.push('/transactions'), 1500);
-      
-    } catch (error: any) {
-      showToast(error.message, 'error');
-      setIsSubmitting(false);
-    }
-  };
-
-  if (showSkeleton) {
+  if (isLoading) {
     return (
-      <div className="w-full min-h-screen bg-gray-50 dark:bg-background pb-32 animate-pulse">
-        <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-background">
-          <div className="flex w-full items-center px-3 h-12">
-            <Skeleton className="w-8 h-8 !rounded-full" />
-            <Skeleton className="w-32 h-3 ml-3 !rounded-md" />
-          </div>
-        </header>
-        <div className="max-w-2xl mx-auto px-4 mt-8 space-y-8">
-          <Skeleton className="w-full h-16 !rounded-2xl" />
-          <Skeleton className="w-full h-12 !rounded-2xl" />
-          <Skeleton className="w-full h-32 !rounded-2xl" />
-        </div>
+      <div className="w-full min-h-screen bg-background flex flex-col items-center justify-center gap-4">
+        <PullSpinner spinning size={36} />
+        <p className="text-sm font-medium text-muted-foreground">Loading disputes…</p>
       </div>
     );
   }
 
-  // --- DISPUTE ROUTING ---
-  // A dispute row existing (any status, including 'withdrawn') means this order
-  // already went through the dispute flow: both parties get the status view and
-  // never the raise form. The raise form is only for the buyer, and only when no
-  // dispute row exists yet. (transaction.status === 'disputed' stays in the
-  // condition so the status view renders immediately while the row loads.)
-  const hasDisputeRow = dispute !== undefined && dispute !== null;
-  if (transaction && (transaction.status === 'disputed' || hasDisputeRow)) {
-    return (
-      <DisputeStatus 
-        transaction={transaction} 
-        product={product} 
-        dispute={dispute ?? null}
-        canCancel={!!dispute && (dispute.status || '').toLowerCase() === 'open' && dispute.buyer_id === currentUser?.id}
-        onBack={() => router.back()} 
-      />
-    );
-  }
+  const userId = data?.userId;
+  const disputes = data?.disputes ?? [];
+  const amounts = data?.amounts ?? {};
 
-  // If it's not pending, it's invalid for this page
-  if (!transaction || transaction.status !== 'pending') {
-    return (
-      <div className="w-full h-screen flex flex-col items-center justify-center text-gray-500 pb-20 px-4 text-center bg-gray-50 dark:bg-background">
-        <IonIcon icon={warningOutline} className="text-5xl mb-4 text-gray-300 dark:text-gray-600" />
-        <p className="text-base font-bold text-gray-800 dark:text-gray-200">Cannot raise dispute.</p>
-        <p className="text-xs text-gray-400 mt-1 max-w-[240px]">
-          This order is marked as "{transaction?.status || 'unknown'}". Only pending orders can be disputed.
-        </p>
-        <Button onClick={() => router.back()} className="mt-6 px-8 !py-3 !rounded-full text-sm">Go Back</Button>
-      </div>
-    );
-  }
+  const isActive = (d: DisputeRow) =>
+    ['open', 'under_review'].includes(d.status.toLowerCase());
+  const againstMe = disputes.filter((d) => isActive(d) && d.seller_id === userId);
+  const raisedByMe = disputes.filter((d) => isActive(d) && d.buyer_id === userId);
+  const resolved = disputes.filter((d) => !isActive(d));
 
-  // No dispute row exists yet: only the buyer (transactions.user_id) may raise one.
-  // Anyone else (e.g. the seller opening an old link) gets a notice instead of the form.
-  const isBuyer = !!currentUser?.id && !!transaction.user_id && currentUser.id === transaction.user_id;
-  if (currentUser && !isBuyer) {
-    return (
-      <div className="w-full h-screen flex flex-col items-center justify-center text-gray-500 pb-20 px-4 text-center bg-gray-50 dark:bg-background">
-        <IonIcon icon={alertCircleOutline} className="text-5xl mb-4 text-gray-300 dark:text-gray-600" />
-        <p className="text-base font-bold text-gray-800 dark:text-gray-200">Only the buyer can raise a dispute.</p>
-        <p className="text-xs text-gray-400 mt-1 max-w-[240px]">
-          Disputes on this order can only be opened by the buyer.
-        </p>
-        <Button onClick={() => router.back()} className="mt-6 px-8 !py-3 !rounded-full text-sm">Go Back</Button>
-      </div>
-    );
-  }
-
-  const itemPrice = Math.abs(transaction.amount);
+  const openDispute = (d: DisputeRow) => router.push(`/dispute?ref=${d.transaction_ref}`);
 
   return (
-    <div className="w-full min-h-screen bg-gray-50 dark:bg-background text-gray-900 dark:text-white pb-32">
-      <Toast {...toast} onClose={hideToast} />
-      
-      {/* HEADER: Solid theme colour, flush to the top, h-12 compact size, strictly frozen */}
-      <header className="sticky top-0 left-0 right-0 z-50 w-full bg-gray-50 dark:bg-background">
-        <div className="flex w-full items-center px-3 h-12 max-w-2xl mx-auto">
-          <button onClick={() => safeBack(router)} aria-label="Back" className="p-1.5 -ml-1.5 text-gray-900 dark:text-white active:scale-95 transition-transform rounded-full">
-            <IonIcon icon={chevronBackOutline} className="text-2xl block" />
+    <div ref={bounceRef} className="min-h-full bg-background text-foreground pb-10 selection:bg-orange-500/30">
+
+      {/* HEADER — solid, no blur, no border, no shadow */}
+      <div className="sticky top-0 z-40 bg-background">
+        <div className="flex items-center gap-3 px-4 py-3">
+          <button onClick={() => safeBack(router)} className="!p-2 -ml-2 text-foreground active:bg-muted transition-colors !rounded-full" aria-label="Go back">
+            <IonIcon icon={chevronBackOutline} className="text-3xl" />
           </button>
-          <h1 className="text-[13px] font-black uppercase tracking-widest leading-tight text-gray-900 dark:text-white ml-2">
-            Raise Dispute
-          </h1>
-        </div>
-      </header>
-
-      {/* Main Content wrapped in Rubber Band ref */}
-      <div ref={bounceRef} className="w-full h-full">
-        <div className="max-w-2xl mx-auto px-4 mt-2 space-y-6">
-          
-          {/* FLOATING HEADER (No BG, No Border) */}
-          <div className="px-2 pt-2">
-            {product?.title && (
-              <h2 className="text-lg font-black leading-snug tracking-tight text-gray-900 dark:text-white mb-1">
-                {product.title}
-              </h2>
-            )}
-            <p className="text-2xl font-black text-orange-500 tracking-tight">₦{itemPrice.toLocaleString()}</p>
-            <p className="text-gray-500 dark:text-gray-400 font-medium text-[13px] leading-relaxed mt-3">
-              If there is a severe issue with your purchase, raising a dispute will immediately freeze the funds in escrow while our admins investigate.
-            </p>
+          <div className="flex flex-col">
+            <h1 className="text-lg font-bold leading-tight">Disputes</h1>
+            <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-widest">Resolutions</p>
           </div>
-
-          <div className="space-y-5 px-1 pt-2">
-            {/* Reason Dropdown */}
-            <div>
-              <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">
-                Why are you raising a dispute?
-              </label>
-              <Dropdown
-                ariaLabel="Dispute Reason"
-                value={reason}
-                options={DISPUTE_REASONS}
-                onChange={setReason}
-              />
-            </div>
-
-            {/* Description TextArea */}
-            <div>
-              <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">
-                Provide details
-              </label>
-              <textarea
-                rows={5}
-                placeholder="Explain exactly what happened..."
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="w-full !bg-transparent border border-orange-500/30 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 px-4 py-3 text-sm rounded-2xl outline-none focus:border-orange-500 transition-colors resize-none leading-snug"
-              />
-            </div>
-
-            {/* Image Uploader */}
-            <div>
-              <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">
-                Attach proof (optional)
-              </label>
-              <ImageUploader
-                images={images}
-                onChange={setImages}
-                onError={(msg) => showToast(msg, 'error')}
-                onUploadingStateChange={setIsImagesUploading}
-                maxImages={3}
-              />
-            </div>
-            
-            {/* Warning Message */}
-            <div className="flex gap-3 mt-6 mb-2">
-              <IonIcon icon={alertCircleOutline} className="text-2xl text-orange-500 flex-shrink-0" />
-              <p className="text-xs text-gray-600 dark:text-gray-400 font-bold leading-relaxed">
-                False disputes or failure to cooperate with admin investigations may result in a permanent ban from the Vendi platform.
-              </p>
-            </div>
-          </div>
-
         </div>
       </div>
 
-      {/* BOTTOM FIXED NAV */}
-      <div className="fixed bottom-0 left-0 right-0 z-[90] bg-gray-50 dark:bg-background border-t border-gray-200 dark:border-gray-800 p-4 pt-3 pb-[max(1rem,var(--sab))]">
-        <div className="max-w-2xl mx-auto flex gap-3">
-          <Button onClick={() => router.back()} className="flex-1 !bg-gray-200 dark:!bg-gray-800 !text-gray-900 dark:!text-white !py-3.5 !rounded-full text-xs font-bold active:scale-[0.98]">
-            Cancel
-          </Button>
-          <Button 
-            onClick={handleSubmit} 
-            disabled={!description.trim() || isSubmitting || isImagesUploading}
-            className={`flex-[2] !py-3.5 !rounded-full text-xs font-bold transition-all duration-300 ${description.trim() ? '!bg-red-500 active:scale-[0.98]' : '!bg-gray-300 dark:!bg-gray-700 !text-gray-500'}`}
-          >
-            {isSubmitting ? 'Submitting...' : 'Submit Dispute'}
-          </Button>
-        </div>
+      <div ref={listRef} onClickCapture={saveScroll} className="max-w-2xl mx-auto px-4 py-6">
+
+        {disputes.length === 0 ? (
+          <EmptyState
+            icon={shieldCheckmarkOutline}
+            title="No disputes"
+            description="If you ever raise a dispute — or one is raised against you — it will show up here with its progress."
+          />
+        ) : (
+          <div className="space-y-8">
+            {againstMe.length > 0 && (
+              <section>
+                <h2 className="text-[13px] font-black text-muted-foreground uppercase tracking-widest px-2 mb-1">
+                  Opened against you
+                </h2>
+                <p className="text-xs text-gray-500 dark:text-gray-400 px-2 mb-2">
+                  A buyer raised these on your sales. Review the claim and cooperate with the admin review.
+                </p>
+                <div className="divide-y divide-gray-100 dark:divide-gray-800/60">
+                  {againstMe.map((d) => (
+                    <DisputeCard
+                      key={d.id}
+                      dispute={d}
+                      role="seller"
+                      amount={amounts[d.transaction_ref]}
+                      onOpen={() => openDispute(d)}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {raisedByMe.length > 0 && (
+              <section>
+                <h2 className="text-[13px] font-black text-muted-foreground uppercase tracking-widest px-2 mb-1">
+                  Opened by you
+                </h2>
+                <p className="text-xs text-gray-500 dark:text-gray-400 px-2 mb-2">
+                  These are under admin review. Funds stay frozen until a final decision.
+                </p>
+                <div className="divide-y divide-gray-100 dark:divide-gray-800/60">
+                  {raisedByMe.map((d) => (
+                    <DisputeCard
+                      key={d.id}
+                      dispute={d}
+                      role="buyer"
+                      amount={amounts[d.transaction_ref]}
+                      onOpen={() => openDispute(d)}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {resolved.length > 0 && (
+              <section>
+                <h2 className="text-[13px] font-black text-muted-foreground uppercase tracking-widest px-2 mb-2">
+                  Resolved
+                </h2>
+                <div className="divide-y divide-gray-100 dark:divide-gray-800/60">
+                  {resolved.map((d) => (
+                    <DisputeCard
+                      key={d.id}
+                      dispute={d}
+                      role={d.seller_id === userId ? 'seller' : 'buyer'}
+                      amount={amounts[d.transaction_ref]}
+                      onOpen={() => openDispute(d)}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

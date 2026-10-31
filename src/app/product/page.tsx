@@ -1,3 +1,4 @@
+// src/app/product/page.tsx
 "use client";
 // src/app/product/page.tsx
 
@@ -562,14 +563,14 @@ export default function ProductDetails() {
   const { data: settings, error: settingsError, mutate: mutateSettings } = useSWR(
     SETTINGS_KEY,
     fetchPlatformSettings,
-    { revalidateOnFocus: true, revalidateOnReconnect: true, dedupingInterval: 10000 }
+    { revalidateOnFocus: false, revalidateOnReconnect: true, dedupingInterval: 10000 }
   );
 
   // The listing itself. undefined = loading, null = not found.
   const { data: product, error: productError, mutate: mutateProduct } = useSWR(
     productId ? (['product', productId] as const) : null,
     ([, id]) => fetchProduct(id),
-    { revalidateOnFocus: true, revalidateOnReconnect: true, dedupingInterval: 10000 }
+    { revalidateOnFocus: false, revalidateOnReconnect: true, dedupingInterval: 10000 }
   );
 
   const { data: viewsCount, mutate: mutateViews } = useSWR(
@@ -620,7 +621,7 @@ export default function ProductDetails() {
   const { data: questionsData, mutate: mutateQuestions } = useSWR(
     productId ? (['product-questions', productId] as const) : null,
     ([, id]) => fetchQuestions(id),
-    { revalidateOnFocus: true, revalidateOnReconnect: true, dedupingInterval: 5000 }
+    { revalidateOnFocus: false, revalidateOnReconnect: true, dedupingInterval: 5000 }
   );
 
   const reviews = reviewsData ?? EMPTY;

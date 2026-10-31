@@ -1,3 +1,4 @@
+// src/features/seller/SellerDashboard.tsx
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -395,7 +396,7 @@ export default function SellerDashboard() {
 
   // Platform settings: cached across visits, refreshed quietly in the background
   const { data: settingsData, error: settingsError } = useSWR(SETTINGS_KEY, fetchPlatformSettings, {
-    revalidateOnFocus: true,
+    revalidateOnFocus: false,
     revalidateOnReconnect: true,
     dedupingInterval: 10000
   });
@@ -433,7 +434,7 @@ export default function SellerDashboard() {
     listingsKey,
     ([, uid, tab]) => fetchSellerListings(uid, tab, pageSizesRef.current[tab] ?? PAGE_SIZE),
     {
-      revalidateOnFocus: true,
+      revalidateOnFocus: false,
       revalidateOnReconnect: true,
       dedupingInterval: 10000
     }
@@ -454,7 +455,7 @@ export default function SellerDashboard() {
   const { data: overview } = useSWR(
     userId ? (['seller-overview', userId] as const) : null,
     ([, uid]) => fetchSellerOverview(uid),
-    { revalidateOnFocus: true, dedupingInterval: 30000 }
+    { revalidateOnFocus: false, dedupingInterval: 30000 }
   );
   const refreshOverview = () =>
     globalMutate((key) => Array.isArray(key) && key[0] === 'seller-overview');

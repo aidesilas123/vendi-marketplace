@@ -1,3 +1,4 @@
+// src/shared/hooks/useSavedIds.ts
 "use client";
 
 // src/shared/hooks/useSavedIds.ts
@@ -29,7 +30,7 @@ async function fetchSavedIds(): Promise<string[]> {
 
 export function useSavedIds() {
   const { data, mutate } = useSWR<string[]>(SAVED_IDS_KEY, fetchSavedIds, {
-    revalidateOnFocus: true,
+    revalidateOnFocus: false,
     dedupingInterval: 30000,
   });
 

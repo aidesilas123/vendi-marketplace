@@ -1,3 +1,4 @@
+// src/app/saved/page.tsx
 "use client";
 import React, { useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
@@ -84,7 +85,7 @@ export default function SavedItemsPage() {
   const { data, isLoading, mutate } = useSWR<SavedProduct[] | null>(
     'saved-items',
     fetchSavedItems,
-    { revalidateOnFocus: true }
+    { revalidateOnFocus: false }
   );
   const { toast, showToast, hideToast } = useToast();
   const { toggle } = useSavedIds();

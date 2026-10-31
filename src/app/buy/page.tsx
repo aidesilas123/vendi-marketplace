@@ -128,15 +128,15 @@ export default function BuyPage() {
   const { data: platformSettings, error: settingsError, mutate: mutateSettings } = useSWR(
     SETTINGS_KEY,
     fetchPlatformSettings,
-    { revalidateOnFocus: true, revalidateOnReconnect: true, dedupingInterval: 10000 }
+    { revalidateOnFocus: false, revalidateOnReconnect: true, dedupingInterval: 10000 }
   );
 
   // The listing. undefined = loading, null = not found.
-  // Refetched on mount and on focus, so a price change or a "sold" status is never stale.
+  // Refetched on mount, so a price change or a "sold" status is never stale.
   const { data: product, error: productError, mutate: mutateProduct } = useSWR(
     productId ? (['product', productId] as const) : null,
     ([, id]) => fetchProduct(id),
-    { revalidateOnFocus: true, revalidateOnReconnect: true, dedupingInterval: 5000 }
+    { revalidateOnFocus: false, revalidateOnReconnect: true, dedupingInterval: 5000 }
   );
 
   const sellerId: string | null = product?.seller_id ?? null;
@@ -146,12 +146,12 @@ export default function BuyPage() {
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
 
-  // The wallet balance decides "Pay" vs "Top up", so it is refetched on mount and on focus.
+  // The wallet balance decides "Pay" vs "Top up", so it is refetched on mount.
   // That way coming back from the wallet page after a top-up always shows the new balance.
   const { data: wallet, error: walletError, mutate: mutateWallet } = useSWR(
     userId ? (['wallet', userId] as const) : null,
     ([, uid]) => fetchWallet(uid),
-    { revalidateOnFocus: true, revalidateOnReconnect: true, revalidateOnMount: true, dedupingInterval: 2000 }
+    { revalidateOnFocus: false, revalidateOnReconnect: true, revalidateOnMount: true, dedupingInterval: 2000 }
   );
 
   /* ------------------------------ guards ------------------------------ */
