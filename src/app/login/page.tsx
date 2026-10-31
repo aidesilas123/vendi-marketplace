@@ -1,4 +1,5 @@
 "use client";
+// src/app/login/page.tsx
 
 import React, { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -25,6 +26,11 @@ function LoginForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  // While Google is connecting, nothing else on this page may be tapped: a
+  // second login attempt racing the token exchange is what these disabled
+  // states prevent. (The Google button already disables itself; the email
+  // form and links did not, so they could be clicked mid-connect.)
+  const formBusy = isLoading || isGoogleLoading;
 
   const searchParams = useSearchParams();
 
@@ -132,24 +138,24 @@ function LoginForm() {
         <form onSubmit={handleLogin} className="space-y-4">
           <div className="relative">
             <IonIcon icon={mailOutline} className="absolute left-4 top-1/2 -translate-y-1/2 text-xl text-gray-400" />
-            <input type="email" placeholder="Email Address" required value={email} onChange={(e) => setEmail(e.target.value)} className={inputClasses} />
+            <input type="email" placeholder="Email Address" required value={email} onChange={(e) => setEmail(e.target.value)} disabled={formBusy} className={inputClasses} />
           </div>
 
           <div className="relative">
             <IonIcon icon={lockClosedOutline} className="absolute left-4 top-1/2 -translate-y-1/2 text-xl text-gray-400" />
-            <input type={showPassword ? "text" : "password"} placeholder="Password" required value={password} onChange={(e) => setPassword(e.target.value)} className={inputClasses} />
-            <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors">
+            <input type={showPassword ? "text" : "password"} placeholder="Password" required value={password} onChange={(e) => setPassword(e.target.value)} disabled={formBusy} className={inputClasses} />
+            <button type="button" onClick={() => setShowPassword(!showPassword)} disabled={formBusy} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors disabled:opacity-40">
               <IonIcon icon={showPassword ? eyeOffOutline : eyeOutline} className="text-xl" />
             </button>
           </div>
 
           <div className="flex justify-end pt-1 mb-6">
-            <Link href="/forgot-password" className="text-sm font-bold text-orange-500 hover:underline">
+            <Link href="/forgot-password" aria-disabled={formBusy} className={`text-sm font-bold text-orange-500 hover:underline${formBusy ? ' pointer-events-none opacity-50' : ''}`}>
               Forgot Password?
             </Link>
           </div>
 
-          <Button type="submit" disabled={isLoading} className="w-full !rounded-2xl !py-4 !text-lg !font-black shadow-md hover:!bg-orange-600">
+          <Button type="submit" disabled={formBusy} className="w-full !rounded-2xl !py-4 !text-lg !font-black shadow-md hover:!bg-orange-600">
             {isLoading ? 'Logging in...' : 'Log In'}
           </Button>
         </form>
@@ -160,13 +166,13 @@ function LoginForm() {
           <div className="h-px flex-1 bg-gray-200 dark:bg-gray-800" />
         </div>
 
-<button type="button" onClick={handleGoogleSignIn} disabled={isLoading || isGoogleLoading} className="w-full flex items-center justify-center gap-3 !rounded-2xl py-4 text-lg font-black bg-transparent text-gray-900 dark:text-white border border-orange-500/50 hover:border-orange-400 transition-colors active:scale-[0.98] disabled:opacity-60 mt-6">
+<button type="button" onClick={handleGoogleSignIn} disabled={formBusy} className="w-full flex items-center justify-center gap-3 !rounded-2xl py-4 text-lg font-black bg-transparent text-gray-900 dark:text-white border border-orange-500/50 hover:border-orange-400 transition-colors active:scale-[0.98] disabled:opacity-60 mt-6">
           <IonIcon icon={logoGoogle} className="text-xl" />
           {isGoogleLoading ? 'Connecting...' : 'Continue with Google'}
         </button>
 
         <p className="text-center text-sm font-bold text-gray-500 mt-8">
-          Don't have an account? <Link href={signupHref} className="text-orange-500 hover:underline">Sign Up</Link>
+          Don't have an account? <Link href={signupHref} aria-disabled={formBusy} className={`text-orange-500 hover:underline${formBusy ? ' pointer-events-none opacity-50' : ''}`}>Sign Up</Link>
         </p>
       </div>
     </div>

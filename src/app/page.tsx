@@ -10,7 +10,7 @@ import { EmptyState } from '@/shared/EmptyState';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import IonIcon from '@/shared/Icon/Icon';
-import { searchOutline, cameraOutline } from 'ionicons/icons';
+import { searchOutline, cameraOutline, cloudOfflineOutline } from 'ionicons/icons';
 import { useHideOnScroll } from '@/shared/hooks/useHideOnScroll';
 import { useScrollRestore } from '@/shared/hooks/useScrollRestore';
 import { registerBackHandler } from '@/shared/HardwareBackButton';
@@ -101,7 +101,7 @@ export default function HomeFeed() {
     ? (['home-feed-unfiltered', limit] as const)
     : (['home-feed-filtered', appliedCategory, appliedQuery.trim()] as const);
 
-  const { data, mutate, isValidating } = useSWR(
+  const { data, error: feedError, mutate, isValidating } = useSWR(
     feedKey,
     () => {
       if (isUnfiltered) {
@@ -113,6 +113,9 @@ export default function HomeFeed() {
       keepPreviousData: true,
       revalidateOnReconnect: true,
       dedupingInterval: 10000,
+      // A bad network must surface as an error panel with Retry, not an
+      // endless skeleton: bounded retries, then the error below takes over.
+      errorRetryCount: 2,
     }
   );
 
@@ -378,7 +381,7 @@ export default function HomeFeed() {
           className={isFiltering ? 'pointer-events-none' : ''}
           style={{ opacity: isFiltering ? 0 : 1, transition: 'opacity 0.2s ease-out' }}
         >
-          {isLoading ? (
+          {isLoading && !feedError ? (
             <div onClickCapture={saveScroll} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-5 lg:gap-6">
               {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((i) => (
                 <div key={i} className="rounded-2xl p-2.5 flex flex-col h-full gap-2">
@@ -406,6 +409,16 @@ export default function HomeFeed() {
                   </div>
                 </div>
               ))}
+            </div>
+          ) : feedError && products.length === 0 ? (
+            <div className="pt-10">
+              <EmptyState
+                icon={cloudOfflineOutline}
+                title="Couldn't load feed"
+                description="Check your connection and try again."
+                actionText="Retry"
+                onAction={() => { void mutate(); }}
+              />
             </div>
           ) : products.length === 0 ? (
             <div className="pt-10">

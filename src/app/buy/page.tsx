@@ -2,6 +2,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { safeBack } from '@/shared/safeBack';
 import useSWR, { useSWRConfig } from 'swr';
@@ -107,6 +108,9 @@ export default function BuyPage() {
 
   // Modal & Pin State
   const [activeModal, setActiveModal] = useState<'none' | 'checkout' | 'pin'>('none');
+  // Client-only mount flag for the portaled bottom bar (avoids SSR mismatch).
+  const [barMounted, setBarMounted] = useState(false);
+  useEffect(() => { setBarMounted(true); }, []);
   const [pin, setPin] = useState('');
   const [pinMode, setPinMode] = useState<'create' | 'confirm' | 'verify'>('create');
   const [tempPin, setTempPin] = useState('');
@@ -386,9 +390,67 @@ export default function BuyPage() {
   } else if (!ready) {
     content = (
       <div className="w-full max-w-xl mx-auto p-4 space-y-6 pt-10">
-        <Skeleton className="w-full h-12 rounded-2xl" />
-        <Skeleton className="w-full h-32 rounded-3xl" />
-        <Skeleton className="w-full h-48 rounded-3xl" />
+        {/* Header row: back button + title */}
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-10 w-10 rounded-full" />
+          <Skeleton className="h-4 w-32 rounded-full" />
+          <div className="w-10" />
+        </div>
+        {/* Safety verification row */}
+        <div className="pt-2">
+          <Skeleton className="h-2.5 w-24 rounded-full mb-3" />
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-10 w-10 rounded-full" />
+            <div className="flex flex-col gap-2 flex-1">
+              <Skeleton className="h-4 w-32 rounded-full" />
+              <Skeleton className="h-3 w-24 rounded-full" />
+            </div>
+            <Skeleton className="h-6 w-16 rounded-full" />
+          </div>
+        </div>
+        {/* Order summary: product row + price rows */}
+        <div className="border-t border-gray-200 dark:border-gray-800 pt-4 space-y-3">
+          <Skeleton className="h-2.5 w-24 rounded-full" />
+          <div className="flex gap-4 items-center">
+            <Skeleton className="w-16 h-16 rounded-2xl shrink-0" />
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-4 w-full rounded-full" />
+              <Skeleton className="h-3 w-2/3 rounded-full" />
+            </div>
+          </div>
+          <div className="border-t border-gray-100 dark:border-gray-800 pt-4 space-y-3">
+            <div className="flex justify-between items-center">
+              <Skeleton className="h-3 w-24 rounded-full" />
+              <Skeleton className="h-3 w-16 rounded-full" />
+            </div>
+            <div className="flex justify-between items-center">
+              <Skeleton className="h-3 w-28 rounded-full" />
+              <Skeleton className="h-3 w-16 rounded-full" />
+            </div>
+            <div className="flex justify-between items-center pt-3 border-t border-gray-200 dark:border-gray-800">
+              <Skeleton className="h-4 w-28 rounded-full" />
+              <Skeleton className="h-6 w-24 rounded-full" />
+            </div>
+          </div>
+        </div>
+        {/* Protection rows */}
+        <div className="border-t border-gray-200 dark:border-gray-800 pt-4 space-y-4">
+          <Skeleton className="h-2.5 w-32 rounded-full" />
+          <div className="flex gap-3 items-start">
+            <Skeleton className="h-5 w-5 rounded-md shrink-0" />
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-3 w-full rounded-full" />
+              <Skeleton className="h-3 w-3/4 rounded-full" />
+            </div>
+          </div>
+          <div className="flex gap-3 items-start">
+            <Skeleton className="h-5 w-5 rounded-md shrink-0" />
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-3 w-full rounded-full" />
+              <Skeleton className="h-3 w-2/3 rounded-full" />
+            </div>
+          </div>
+        </div>
       </div>
     );
   } else {
@@ -539,9 +601,11 @@ export default function BuyPage() {
         {content}
       </div>
 
-      {ready && (
-        <>
-          {/* FULL WIDTH BOTTOM ACTION BAR */}
+      {/* BOTTOM ACTION BAR — portaled to <body> so it escapes AppShell's rubber-band
+          wrapper: that wrapper gets a CSS transform during overscroll, and a transformed
+          ancestor hijacks `fixed` positioning — that is why the bar used to ride up with
+          the page (same fix as the order page's bottom bar). The /buy page keeps its bounce. */}
+      {ready && barMounted && createPortal(
           <div className="fixed bottom-0 left-0 right-0 z-[100] bg-white dark:bg-black border-t border-gray-200 dark:border-gray-800 px-4 pt-4 pb-[max(1.5rem,var(--sab))] shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pointer-events-auto">
             <div className="max-w-xl mx-auto relative z-[110]">
               <button
@@ -553,8 +617,12 @@ export default function BuyPage() {
                 Confirm & Pay • {naira(totalCharge)}
               </button>
             </div>
-          </div>
+          </div>,
+        document.body
+      )}
 
+      {ready && (
+        <>
           {/* Extracted Modals */}
           <CheckoutBottomSheet
             isOpen={activeModal === 'checkout'}
@@ -567,7 +635,7 @@ export default function BuyPage() {
             wallet={wallet}
             hasEnoughFunds={hasEnoughFunds}
             onConfirmPayment={handleProceedToPin}
-            onTopUp={() => router.push('/wallet')}
+            onTopUp={() => router.push('/wallet?topup=1')}
           />
 
           <PinPadModal

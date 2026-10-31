@@ -141,6 +141,18 @@ export default function WalletDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, transactions]);
 
+  // Deep link from the buy page: /wallet?topup=1 opens the fund-wallet sheet
+  // once the wallet itself has loaded, so the sheet never opens on a failed
+  // load. Handled once per mount so closing the sheet doesn't reopen it.
+  const topupParamHandled = useRef(false);
+  useEffect(() => {
+    const t = searchParams.get('topup');
+    if (t !== '1' || topupParamHandled.current || !wallet) return;
+    topupParamHandled.current = true;
+    openView('topup');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, wallet]);
+
   // 1. Hardware Back Button (Capacitor Android native app):
   // When receipt or a subview is open, closing it intercepts the hardware back button instead of leaving the wallet.
   useEffect(() => {
@@ -222,6 +234,19 @@ export default function WalletDashboard() {
       setReloading(false);
     }
   };
+
+  // A transient failure on a cold load (e.g. arriving from /buy with no cached
+  // wallet, where there is nothing to fall back on) must not sit on the error
+  // panel until the user finds Retry: retry once automatically. Guarded by a
+  // ref so a persistent failure never loops; the Retry button stays as the
+  // fallback for anything the single retry doesn't fix.
+  const autoRetriedRef = useRef(false);
+  useEffect(() => {
+    if (wallet || isLoading || !error || autoRetriedRef.current) return;
+    autoRetriedRef.current = true;
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wallet, isLoading, error]);
 
   const toggleBalance = () => {
     const next = !showBalance;

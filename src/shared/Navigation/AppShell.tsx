@@ -15,6 +15,7 @@ import { mutate as globalMutate } from 'swr';
 import { ensurePresence, dropPresence, ensureChannel, dropChannel } from '@/lib/realtime';
 import { registerPushToken } from '@/lib/push';
 import { useUnreadNotifications } from '@/shared/hooks/useUnreadNotifications';
+import { showGlobalToast } from '@/shared/Toast/Toast';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -58,6 +59,51 @@ export const AppShell = ({ children }: AppShellProps) => {
   const isAuthPage = pathname === '/login' || pathname === '/signup' || pathname === '/forgot-password' || pathname === '/reset-password' || pathname === '/auth/callback' || pathname === '/complete-profile';
   const isChatRoom = pathname === '/chats' || pathname?.startsWith('/chats');
   const showShell = !isAuthPage && !isChatRoom;
+
+  // Connection toasts: offline / back online / slow connection. Fires only on
+  // transitions (tracked in refs), never on every render, so it can't spam.
+  // Note: this is separate from the offline modal (NetworkListener), which
+  // only reacts to the browser's online/offline events and misses the
+  // bad-but-not-dead network case — the toast covers that gap.
+  const netStateRef = useRef({ offline: false, slow: false });
+  useEffect(() => {
+    const isSlow = () => {
+      const et = (navigator as Navigator & { connection?: { effectiveType?: string } }).connection?.effectiveType;
+      return et === 'slow-2g' || et === '2g';
+    };
+    const syncSlow = (announce: boolean) => {
+      const slow = isSlow();
+      if (slow && !netStateRef.current.slow && announce) {
+        showGlobalToast('Slow connection — things may take longer to load', 'info');
+      }
+      netStateRef.current.slow = slow;
+    };
+    const goOffline = () => {
+      if (!netStateRef.current.offline) showGlobalToast('No internet connection', 'error');
+      netStateRef.current.offline = true;
+    };
+    const goOnline = () => {
+      if (netStateRef.current.offline) showGlobalToast('Back online', 'success');
+      netStateRef.current.offline = false;
+      syncSlow(true);
+    };
+    const onConnChange = () => syncSlow(true);
+    if (!navigator.onLine) {
+      netStateRef.current.offline = true;
+      showGlobalToast('No internet connection', 'error');
+    } else {
+      syncSlow(false);
+    }
+    window.addEventListener('offline', goOffline);
+    window.addEventListener('online', goOnline);
+    const conn = (navigator as Navigator & { connection?: { addEventListener?: Function; removeEventListener?: Function } }).connection;
+    conn?.addEventListener?.('change', onConnChange);
+    return () => {
+      window.removeEventListener('offline', goOffline);
+      window.removeEventListener('online', goOnline);
+      conn?.removeEventListener?.('change', onConnChange);
+    };
+  }, []);
 
   // Fired once when the shell knows the auth state — the SplashOverlay listens
   // for this to lift (it also has its own safety timeout, so this can't trap).

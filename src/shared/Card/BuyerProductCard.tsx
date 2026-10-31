@@ -12,6 +12,7 @@ import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { calcFees, naira } from '@/lib/pricing';
 import { useSavedIds } from '@/shared/hooks/useSavedIds';
 import { usePlatformSettings } from '@/shared/hooks/usePlatformSettings';
+import { useImpressionTracking } from '@/lib/impressions';
 import { imageOutline, schoolOutline, timeOutline, eyeOutline, bookmarkOutline, bookmark, star } from 'ionicons/icons';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 
@@ -81,6 +82,10 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
   const [useOriginalImage, setUseOriginalImage] = useState(false);
   const savePending = useRef(false);
 
+  // Scroll-pass impression: once this card stays half visible for 500ms.
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  useImpressionTracking(cardRef, product.id);
+
   const isSaved = savedIds.has(product.id);
 
   const coverImage = useMemo<string | null>(() => {
@@ -141,6 +146,7 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
 
   return (
     <div
+      ref={cardRef}
       className="relative flex flex-col h-full bg-transparent transition-transform active:scale-[0.98]"
       style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 300px' }}
     >
