@@ -1,20 +1,26 @@
 "use client";
 // src/app/complete-profile/page.tsx
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { unregisterPushToken } from '@/lib/push';
 import { Button } from '@/shared/Button';
+import { Avatar } from '@/shared/Avatar';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 import { Dropdown } from '@/shared/Dropdown';
 import IonIcon from '@/shared/Icon/Icon';
 import { NIGERIAN_UNIVERSITIES } from '@/constants/universities';
 import {
-  personOutline, callOutline,
+  personOutline, callOutline, cameraOutline,
   checkmarkCircleOutline, closeCircleOutline, syncOutline
 } from 'ionicons/icons';
+
+// --- Cloudinary config — pull from env, unsigned upload preset only
+// (same setup as the edit-profile page).
+const CLOUDINARY_CLOUD_NAME = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+const CLOUDINARY_UPLOAD_PRESET = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
 
 export default function CompleteProfilePage() {
   const router = useRouter();
@@ -25,6 +31,15 @@ export default function CompleteProfilePage() {
   const [campus, setCampus] = useState(NIGERIAN_UNIVERSITIES[0].campuses[0]);
   const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Profile photo: starts as the Google photo (when there is one) so people
+  // who are happy with it change nothing — and people who aren't can pick
+  // their own here instead of living with Google's picture.
+  const [avatarUrl, setAvatarUrl] = useState('');
+  const [avatarFromGoogle, setAvatarFromGoogle] = useState(false);
+  const [photoRemoved, setPhotoRemoved] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const savedTarget = () => {
     const raw = localStorage.getItem('vendi_post_auth_redirect');
@@ -44,6 +59,12 @@ export default function CompleteProfilePage() {
         return;
       }
       setUserId(user.id);
+      // Start from the Google photo when the account has one.
+      const metaAvatar = user.user_metadata?.avatar_url || user.user_metadata?.picture || '';
+      if (metaAvatar) {
+        setAvatarUrl(metaAvatar);
+        setAvatarFromGoogle(true);
+      }
       const { data: profile } = await supabase
         .from('users')
         .select('username')
@@ -88,6 +109,43 @@ export default function CompleteProfilePage() {
     return digits.length === 9 ? `0${digits}` : digits;
   };
 
+  // Uploads straight to Cloudinary (same avatars folder as edit-profile).
+  // The URL is only written to the users row when the form is saved, so
+  // abandoning this page orphans nothing in the database.
+  const uploadPhoto = async (file: File) => {
+    if (!CLOUDINARY_CLOUD_NAME || !CLOUDINARY_UPLOAD_PRESET) {
+      showGlobalToast('Photo uploads are not configured yet.', 'error');
+      return;
+    }
+    setUploadingPhoto(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+      form.append('folder', 'avatars');
+      const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`, {
+        method: 'POST',
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok || !data.secure_url) throw new Error('Upload failed. Please try again.');
+      setAvatarUrl(data.secure_url as string);
+      setAvatarFromGoogle(false);
+      setPhotoRemoved(false);
+      showGlobalToast('Photo uploaded — save to apply it.');
+    } catch (err: any) {
+      showGlobalToast(err.message || 'Upload failed. Please try again.', 'error');
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handlePhotoPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) void uploadPhoto(file);
+    e.target.value = '';
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userId) return;
@@ -114,6 +172,9 @@ export default function CompleteProfilePage() {
         whatsapp: normalized,
         university_id: university,
         campus,
+        // A picked photo (or an explicit removal) is part of the profile;
+        // leaving the key out keeps whatever the row already has.
+        ...(avatarUrl ? { avatar_url: avatarUrl } : photoRemoved ? { avatar_url: null } : {}),
       };
       const { error: saveError } = existing
         ? await supabase.from('users').update(row).eq('id', userId)
@@ -122,6 +183,11 @@ export default function CompleteProfilePage() {
         showGlobalToast(saveError.message, 'error');
         setIsLoading(false);
         return;
+      }
+      // Keep the auth metadata in step so the header fallback agrees with
+      // the row (same as the edit-profile page does).
+      if (avatarUrl || photoRemoved) {
+        void supabase.auth.updateUser({ data: { avatar_url: avatarUrl || null } });
       }
       window.dispatchEvent(new Event('refresh-profile'));
       router.replace(savedTarget());
@@ -150,6 +216,27 @@ export default function CompleteProfilePage() {
 
         <h1 className="text-3xl font-black text-gray-900 dark:text-white mb-2 text-center">Complete Your Profile</h1>
         <p className="text-sm font-bold text-gray-500 mb-8 text-center">You signed in with Google. Add your campus identity to start trading.</p>
+
+        <div className="flex flex-col items-center mb-6">
+          <Avatar src={avatarUrl || undefined} name={username || 'V'} size="lg" />
+          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoPicked} />
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploadingPhoto} className="mt-3 flex items-center gap-1.5 text-sm font-black text-orange-500 disabled:opacity-50">
+            <IonIcon icon={cameraOutline} className="text-lg" />
+            {uploadingPhoto ? 'Uploading…' : avatarUrl ? 'Change photo' : 'Add a photo'}
+          </button>
+          {avatarUrl && !uploadingPhoto && (
+            <button
+              type="button"
+              onClick={() => { setAvatarUrl(''); setAvatarFromGoogle(false); setPhotoRemoved(true); }}
+              className="mt-1 text-xs font-bold text-gray-500"
+            >
+              Remove photo
+            </button>
+          )}
+          <p className="text-xs font-bold text-gray-500 mt-2 text-center">
+            {avatarFromGoogle ? 'Using your Google photo — change it if you prefer your own.' : 'Profile photo (optional).'}
+          </p>
+        </div>
 
         <form onSubmit={handleSave} className="space-y-4">
           <div>
@@ -191,7 +278,7 @@ export default function CompleteProfilePage() {
             ariaLabel="Select campus"
           />
 
-          <Button type="submit" disabled={isLoading || !userId} className="w-full !rounded-2xl !py-4 !text-lg !font-black shadow-md hover:!bg-orange-600 mt-4">
+          <Button type="submit" disabled={isLoading || uploadingPhoto || !userId} className="w-full !rounded-2xl !py-4 !text-lg !font-black shadow-md hover:!bg-orange-600 mt-4">
             {isLoading ? 'Saving...' : 'Save & Continue'}
           </Button>
         </form>

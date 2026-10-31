@@ -3,7 +3,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import useSWR from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 import { supabase } from '@/lib/supabase';
 import { IonIcon } from '@/shared/Icon/Icon';
 import { 
@@ -90,11 +90,26 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
         .select('full_name, avatar_url, email')
         .eq('id', targetId)
         .single();
-        
+
       if (error) throw error;
       return data;
-    }
+    },
+    // Live profile: re-read on app return too, not just on mount.
+    { revalidateOnFocus: true }
   );
+
+  // The sidebar stays mounted inside AppShell, so this key never changes on
+  // its own — without this, an avatar saved on the edit page never showed
+  // up here (the cached row kept winning over AppShell's fresh prop).
+  // Re-read the row whenever any profile save dispatches refresh-profile.
+  const { mutate: mutateProfile } = useSWRConfig();
+  useEffect(() => {
+    const refresh = () => {
+      if (targetId) void mutateProfile(`profile-${targetId}`);
+    };
+    window.addEventListener('refresh-profile', refresh);
+    return () => window.removeEventListener('refresh-profile', refresh);
+  }, [targetId, mutateProfile]);
 
   const realAvatar = profile?.avatar_url || user?.avatarUrl;
   const realName = profile?.full_name || user?.name;

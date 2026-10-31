@@ -62,6 +62,8 @@ export const AppShell = ({ children }: AppShellProps) => {
   // Fired once when the shell knows the auth state — the SplashOverlay listens
   // for this to lift (it also has its own safety timeout, so this can't trap).
   const readyDispatched = useRef(false);
+  // One avatar-backfill attempt per app lifetime (see fetchUser below).
+  const avatarBackfillTriedRef = useRef(false);
   const dispatchAppReady = () => {
     if (!readyDispatched.current && typeof window !== 'undefined') {
       readyDispatched.current = true;
@@ -100,11 +102,28 @@ export const AppShell = ({ children }: AppShellProps) => {
         .eq('id', session.user.id)
         .maybeSingle();
 
+      // Display value: the row first, then the auth metadata (Google's
+      // picture). The row is what cards, the sidebar and the profile page
+      // read, so when it has no avatar, copy the metadata photo into it —
+      // the creation trigger does not always do this for Google sign-ins.
+      // Only ever fills a missing avatar, never overwrites one the user chose.
+      const avatarUrl =
+        profile?.avatar_url ||
+        session.user.user_metadata?.avatar_url ||
+        session.user.user_metadata?.picture;
+      if (!profile?.avatar_url && avatarUrl && !avatarBackfillTriedRef.current) {
+        avatarBackfillTriedRef.current = true;
+        await supabase
+          .from('users')
+          .update({ avatar_url: avatarUrl })
+          .eq('id', session.user.id);
+      }
+
       setUser({
         id: session.user.id,
         name: profile?.full_name || session.user.user_metadata?.full_name || "Campus Student",
         email: session.user.email || "",
-        avatarUrl: profile?.avatar_url || session.user.user_metadata?.avatar_url,
+        avatarUrl,
       });
       dispatchAppReady();
     };
