@@ -221,11 +221,11 @@ export const AppShell = ({ children }: AppShellProps) => {
     };
   }, [user?.id]);
 
+  // Closing the sidebar on navigation only: scroll-to-top belongs to
+  // PageTransition (which owns #main-scroll-container). The old
+  // window.scrollTo here was a no-op anyway — html/body are overflow: clip.
   useEffect(() => {
     setIsSidebarOpen(false);
-    if (typeof window !== 'undefined') {
-      window.scrollTo(0, 0);
-    }
   }, [pathname]);
 
   // Native deep-link return (e.g. Google sign-in): the OS reopens the app with
@@ -290,7 +290,7 @@ export const AppShell = ({ children }: AppShellProps) => {
           gesture-nav phones keep the tighter spacing. */}
       <main
         id="main-scroll-container"
-        className="flex-1 w-full overflow-y-auto overscroll-y-contain scroll-smooth relative"
+        className="flex-1 w-full overflow-y-auto overflow-x-clip overscroll-y-contain relative"
         style={{ paddingBottom: 'calc(6rem + var(--sab))' }}
       >
         {/* Bounce wrapper: the rubber-band transform applies here, around page

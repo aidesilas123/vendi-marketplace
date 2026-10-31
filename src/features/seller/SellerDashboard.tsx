@@ -6,7 +6,6 @@ import useSWR, { useSWRConfig } from 'swr';
 import { useRouter } from 'next/navigation';
 import { IonIcon } from '@/shared/Icon/Icon';
 import { alertCircleOutline, imageOutline, checkmarkCircleOutline, chatbubblesOutline, eyeOutline, bagHandleOutline, layersOutline, chevronForwardOutline } from 'ionicons/icons';
-import { NIGERIAN_UNIVERSITIES } from '@/constants/universities';
 import { Button } from '@/shared/Button';
 import { Modal } from '@/shared/Modal/Modal';
 import { ConfirmModal } from '@/shared/ConfirmModal';
@@ -31,7 +30,6 @@ const QUANTITY_OPTIONS = [...Array.from({ length: 10 }, (_, i) => String(i + 1))
 
 const TOTAL_STEPS = 5;
 const ACTIVE_WINDOW_DAYS = 7;   // a listing is "Active" for its first 7 days
-const STEP_LOADER_MS = 350;     // how long the spinner shows between steps
 const SLIDE_MS = 180;           // swipe slide animation length
 const SWIPE_THRESHOLD = 60;     // px the finger must travel to change tab
 const TAB_STORAGE_KEY = 'seller_active_tab'; // remembers the tab when you come back from a details page
@@ -188,8 +186,6 @@ async function fetchSellerOverview(userId: string) {
 /* -------------------------------------------------------------------------- */
 
 interface FormState {
-  university: string;
-  campus: string;
   location: string;
   title: string;
   category: string;
@@ -204,8 +200,6 @@ interface FormState {
 }
 
 const getEmptyForm = (): FormState => ({
-  university: NIGERIAN_UNIVERSITIES[0].id,
-  campus: NIGERIAN_UNIVERSITIES[0].campuses[0],
   location: '',
   title: '',
   category: CATEGORIES[0],
@@ -229,16 +223,11 @@ const normalizeQuantity = (q: unknown): string => {
 };
 
 const productToForm = (p: any): FormState => {
-  const uni =
-    NIGERIAN_UNIVERSITIES.find(u => u.id.toLowerCase() === p.university_id?.toLowerCase()) ||
-    NIGERIAN_UNIVERSITIES[0];
-  const campus =
-    uni.campuses.find(c => c.toLowerCase() === p.campus?.toLowerCase()) || uni.campuses[0];
+  // Campus is no longer part of the form: listings inherit it from the
+  // seller's account at submit time, so old rows are mapped without it.
   const hasLastPrice = p.last_price !== null && p.last_price !== undefined && Number(p.last_price) > 0;
 
   return {
-    university: uni.id,
-    campus,
     location: p.specific_location || '',
     title: p.title || '',
     category: p.category || CATEGORIES[0],
@@ -368,7 +357,6 @@ export default function SellerDashboard() {
   const [tabHydrated, setTabHydrated] = useState(false); // true once the saved tab has been restored
   const [step, setStep] = useState(1);
   const [stepDirection, setStepDirection] = useState<'forward' | 'back'>('forward');
-  const [isStepLoading, setIsStepLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
 
@@ -378,8 +366,9 @@ export default function SellerDashboard() {
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [formData, setFormData] = useState<FormState>(getEmptyForm());
 
-  // The notification modal is now only for the listing SUBMIT result, settings errors and
-  // image-upload errors. Duplicate / Delete / Mark Sold report through toasts instead.
+  // The notification modal is now only for errors: listing SUBMIT errors,
+  // settings errors and image-upload errors. Successful submits and
+  // Duplicate / Delete / Mark Sold report through toasts instead.
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | null; message: string }>({
     type: null,
     message: ''
@@ -413,6 +402,19 @@ export default function SellerDashboard() {
     });
     return () => sub.subscription.unsubscribe();
   }, [globalMutate]);
+
+  // Auth guard: not logged in -> toast + login, with the dashboard as the
+  // return target (login honours ?redirect=). userId === undefined means
+  // still resolving: never redirect on that, or a logged-in user on a slow
+  // session read gets bounced to login wrongly. Fires once per mount.
+  const guardRedirectedRef = useRef(false);
+  useEffect(() => {
+    if (userId === null && !guardRedirectedRef.current) {
+      guardRedirectedRef.current = true;
+      showGlobalToast('Please log in to access your seller dashboard.');
+      router.replace('/login?redirect=/seller');
+    }
+  }, [userId, router]);
 
   // How many listings each tab loads. The ref is what the fetcher reads (always current);
   // the state is what re-renders the "Load more" button.
@@ -574,22 +576,11 @@ export default function SellerDashboard() {
 
   /* ------------------------------ step navigation ------------------------------ */
 
-  const stepTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    return () => {
-      if (stepTimer.current) clearTimeout(stepTimer.current);
-    };
-  }, []);
-
-  // Shows the pull spinner briefly between steps
+  // Steps change instantly — no artificial loading spinner between steps.
   const goToStep = (next: number) => {
-    if (isStepLoading || next < 1 || next > TOTAL_STEPS) return;
+    if (next < 1 || next > TOTAL_STEPS) return;
     setStepDirection(next > step ? 'forward' : 'back');
-    setIsStepLoading(true);
-    stepTimer.current = setTimeout(() => {
-      setStep(next);
-      setIsStepLoading(false);
-    }, STEP_LOADER_MS);
+    setStep(next);
   };
 
   /* ------------------------------- form lifecycle ------------------------------ */
@@ -631,13 +622,10 @@ export default function SellerDashboard() {
         });
         setActiveTab('Rejected');
       } else if (response.status === 'PENDING_REVIEW') {
-        setNotification({ type: 'success', message: 'Your listing has been submitted and is pending review.' });
+        showGlobalToast('Your listing has been submitted and is pending review.');
         setActiveTab('Pending Review');
       } else {
-        setNotification({
-          type: 'success',
-          message: wasEditing ? 'Listing updated successfully!' : 'Your listing is live!'
-        });
+        showGlobalToast(wasEditing ? 'Listing updated successfully!' : 'Your listing is live!');
         setActiveTab('Approved');
       }
 
@@ -646,6 +634,45 @@ export default function SellerDashboard() {
       resetForm();
     } catch (err: any) {
       setNotification({ type: 'error', message: 'Error saving product: ' + (err?.message || 'Something went wrong.') });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  /* ------------------------------ save as draft ------------------------------- */
+  // Drafts skip AI validation and the full form requirements: only a title
+  // is needed, so a seller can park a half-finished listing and come back.
+  // Submitting from the Draft tab later runs the normal validation + AI flow.
+  const handleSaveDraft = async () => {
+    if (isSubmitting) return;
+    if (!formData.title.trim()) {
+      showGlobalToast('Add a title to save a draft.', 'error');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const response = await submitProductAction(
+        formData,
+        {
+          basePrice: numericPrice,
+          lastPrice: formData.allowNegotiation ? numericLastPrice : null
+        },
+        null,
+        { asDraft: true }
+      );
+
+      if (!response.success) {
+        showGlobalToast('Error saving draft: ' + response.message, 'error');
+        return;
+      }
+
+      showGlobalToast('Draft saved.');
+      setActiveTab('Draft');
+      refreshListings(); refreshOverview();
+      resetForm();
+    } catch (err: any) {
+      showGlobalToast('Error saving draft: ' + (err?.message || 'Something went wrong.'), 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -948,8 +975,6 @@ export default function SellerDashboard() {
   /* --------------------------------- render ------------------------------------ */
 
   const pendingCopy = pendingAction ? CONFIRM_COPY[pendingAction.type] : null;
-  const campusOptions = NIGERIAN_UNIVERSITIES.find(u => u.id === formData.university)?.campuses || [];
-
   return (
     <div className="w-full pb-10">
 
@@ -1092,44 +1117,19 @@ export default function SellerDashboard() {
               </div>
             </div>
 
-            {isStepLoading ? (
-              <div className="flex items-center justify-center min-h-[240px]">
-                <PullSpinner spinning size={32} />
-              </div>
-            ) : (
-              <div
-                key={step}
-                className={`space-y-5 animate-in fade-in ${
-                  stepDirection === 'forward' ? 'slide-in-from-right-4' : 'slide-in-from-left-4'
+            <div
+              key={step}
+                className={`space-y-5 ${
+                  stepDirection === 'forward' ? 'vendi-step-in-forward' : 'vendi-step-in-back'
                 }`}
               >
 
-                {/* STEP 1: where */}
+                {/* STEP 1: where — campus comes from the seller's account,
+                    so only the specific location on campus is asked here */}
                 {step === 1 && (
                   <>
                     <div>
-                      <label className={LABEL_CLASSES}>Institution</label>
-                      <Dropdown
-                        ariaLabel="Institution"
-                        value={formData.university}
-                        options={NIGERIAN_UNIVERSITIES.map(u => ({ value: u.id, label: u.name }))}
-                        onChange={(uniId) => {
-                          const uni = NIGERIAN_UNIVERSITIES.find(u => u.id === uniId);
-                          setFormData({ ...formData, university: uniId, campus: uni?.campuses[0] || '' });
-                        }}
-                      />
-                    </div>
-                    <div>
-                      <label className={LABEL_CLASSES}>Campus</label>
-                      <Dropdown
-                        ariaLabel="Campus"
-                        value={formData.campus}
-                        options={campusOptions}
-                        onChange={(campus) => setFormData({ ...formData, campus })}
-                      />
-                    </div>
-                    <div>
-                      <label className={LABEL_CLASSES}>Specific Location (e.g. Amina Hall)</label>
+                      <label className={LABEL_CLASSES}>Specific Location</label>
                       <input
                         type="text"
                         placeholder="Where can buyers meet you?"
@@ -1341,29 +1341,40 @@ export default function SellerDashboard() {
                   </>
                 )}
               </div>
-            )}
 
             {/* Navigation: same size as the tab pills */}
             <div className="flex items-center justify-between gap-3 mt-6">
-              {step > 1 ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => goToStep(step - 1)}
-                  disabled={isStepLoading}
-                  className="opacity-70"
-                >
-                  Back
-                </Button>
-              ) : (
-                <span />
-              )}
+              <div className="flex items-center gap-2">
+                {step > 1 && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => goToStep(step - 1)}
+                    className="opacity-70"
+                  >
+                    Back
+                  </Button>
+                )}
+                {/* Drafts need only a title: a seller can park a listing
+                    mid-form and finish it later from the Draft tab. Never
+                    offered while editing an existing listing. */}
+                {!editingProductId && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleSaveDraft}
+                    disabled={isSubmitting || !formData.title.trim()}
+                  >
+                    Save as draft
+                  </Button>
+                )}
+              </div>
 
               {step < TOTAL_STEPS ? (
                 <Button
                   size="sm"
                   onClick={() => goToStep(step + 1)}
-                  disabled={isStepLoading || isImagesUploading}
+                  disabled={isImagesUploading}
                 >
                   Next Step
                 </Button>
@@ -1371,7 +1382,7 @@ export default function SellerDashboard() {
                 <Button
                   size="sm"
                   onClick={handleSubmit}
-                  disabled={!isFormValid || isSubmitting || isStepLoading}
+                  disabled={!isFormValid || isSubmitting}
                 >
                   {editingProductId ? 'Submit Update' : 'Submit'}
                 </Button>

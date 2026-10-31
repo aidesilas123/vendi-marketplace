@@ -1,23 +1,38 @@
+// src/shared/PageTransition.tsx
 "use client";
 
-import React, { useLayoutEffect } from "react";
+import React, { useLayoutEffect, useMemo } from "react";
 import { usePathname } from "next/navigation";
-import { motion, useReducedMotion } from "motion/react";
 import { isBackNavigation } from "@/shared/hooks/useScrollRestore";
 
 export const PageTransition = ({ children }: { children: React.ReactNode }) => {
   const pathname = usePathname();
-  const shouldReduceMotion = useReducedMotion();
-  const isBack = isBackNavigation();
+
+  // Back direction is decided once per pathname: isBackNavigation() reads a
+  // 2.5s popstate window, so calling it on every render could flip the
+  // direction (and skip scroll-to-top) for a forward tap made shortly
+  // after a back navigation.
+  const isBack = useMemo(() => isBackNavigation(), [pathname]);
+
+  const shouldReduceMotion = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    []
+  );
 
   // Scroll to top whenever a NEW page arrives. Back navigations skip this:
   // scroll restore owns the position there.
   useLayoutEffect(() => {
     if (isBack) return;
     const main = document.getElementById("main-scroll-container");
-    if (main) main.scrollTo({ top: 0, left: 0, behavior: "instant" as ScrollBehavior });
-    document.body.scrollTop = 0;
-    document.documentElement.scrollTop = 0;
+    if (main) {
+      // Direct assignment, not scrollTo: the scroller no longer has
+      // scroll-smooth, so there is no smooth-scroll behaviour to override,
+      // and the body/document writes were dead (html/body are overflow: clip).
+      main.scrollTop = 0;
+      main.scrollLeft = 0;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
 
@@ -25,19 +40,22 @@ export const PageTransition = ({ children }: { children: React.ReactNode }) => {
     return <>{children}</>;
   }
 
+  // CSS keyframes, not Motion: Motion's `x` shorthand is not in its
+  // WAAPI-accelerated set, so the old slide ran on Motion's JS frame loop
+  // while opacity ran on the compositor — a main-thread stall mounting the
+  // new page froze the position while the fade continued, which reads as
+  // stutter. A keyframe transform animation runs on the compositor
+  // regardless of what the main thread is doing. Keyframes also need no
+  // two-paint enter trick: they run on mount automatically. No opacity:
+  // the page appears fully opaque from frame one (just offset), so there
+  // is no luminance flash and no whole-page group-opacity surface.
   return (
-    <motion.div
+    <div
       key={pathname}
-      initial={{ opacity: 0, x: isBack ? -24 : 24 }}
-      animate={{ opacity: 1, x: 0 }}
-      transition={{
-        duration: 0.22,
-        ease: [0.25, 0.1, 0.25, 1],
-      }}
-      className="w-full min-h-full"
+      className={`w-full min-h-full ${isBack ? "vendi-page-in-back" : "vendi-page-in-forward"}`}
     >
       {children}
-    </motion.div>
+    </div>
   );
 };
 

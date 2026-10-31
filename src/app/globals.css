@@ -1,3 +1,4 @@
+/* src/app/globals.css */
 @import "tailwindcss";
 @custom-variant dark (&:is(.dark *));
 
@@ -201,5 +202,55 @@ html {
     --text-2xl: 1.25rem;
     --text-3xl: 1.375rem;
     --text-4xl: 1.625rem;
+  }
+}
+
+/* ==========================================================================
+   Page + step slide animations (transition fix, Phase 1)
+   --------------------------------------------------------------------------
+   Compositor-only CSS keyframes: transform is the only animated property,
+   so the slide runs on the compositor thread even while React mounts the
+   new page on the main thread. No opacity: the content appears fully
+   opaque from frame one (just offset), so there is no luminance flash and
+   no whole-page group-opacity surface. Fill mode is the default (none),
+   so the transform is gone the instant the animation ends — no lingering
+   transform to re-anchor fixed descendants.
+   Timing matches the wallet FullScreenPage slide (300ms ease-out) so
+   every slide in the app shares one motion language.
+   ========================================================================== */
+@keyframes vendi-page-in-forward {
+  from { transform: translate3d(24px, 0, 0); }
+  to { transform: translate3d(0, 0, 0); }
+}
+@keyframes vendi-page-in-back {
+  from { transform: translate3d(-24px, 0, 0); }
+  to { transform: translate3d(0, 0, 0); }
+}
+@keyframes vendi-step-in-forward {
+  from { transform: translate3d(16px, 0, 0); }
+  to { transform: translate3d(0, 0, 0); }
+}
+@keyframes vendi-step-in-back {
+  from { transform: translate3d(-16px, 0, 0); }
+  to { transform: translate3d(0, 0, 0); }
+}
+.vendi-page-in-forward,
+.vendi-page-in-back,
+.vendi-step-in-forward,
+.vendi-step-in-back {
+  backface-visibility: hidden;
+}
+.vendi-page-in-forward { animation: vendi-page-in-forward 300ms ease-out; }
+.vendi-page-in-back { animation: vendi-page-in-back 300ms ease-out; }
+.vendi-step-in-forward { animation: vendi-step-in-forward 300ms ease-out; }
+.vendi-step-in-back { animation: vendi-step-in-back 300ms ease-out; }
+
+/* Reduced motion: no slide anywhere, at the CSS level as well as the JS check. */
+@media (prefers-reduced-motion: reduce) {
+  .vendi-page-in-forward,
+  .vendi-page-in-back,
+  .vendi-step-in-forward,
+  .vendi-step-in-back {
+    animation: none !important;
   }
 }
