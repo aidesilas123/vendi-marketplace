@@ -215,8 +215,9 @@ html {
    no whole-page group-opacity surface. Fill mode is the default (none),
    so the transform is gone the instant the animation ends — no lingering
    transform to re-anchor fixed descendants.
-   Timing matches the wallet FullScreenPage slide (300ms ease-out) so
-   every slide in the app shares one motion language.
+   Timing: the seller step slides match the wallet FullScreenPage slide
+   (300ms ease-out). Page slides are quicker (200ms, snappier curve) so
+   navigation — back included — settles fast instead of lingering.
    ========================================================================== */
 @keyframes vendi-page-in-forward {
   from { transform: translate3d(24px, 0, 0); }
@@ -240,8 +241,8 @@ html {
 .vendi-step-in-back {
   backface-visibility: hidden;
 }
-.vendi-page-in-forward { animation: vendi-page-in-forward 300ms ease-out; }
-.vendi-page-in-back { animation: vendi-page-in-back 300ms ease-out; }
+.vendi-page-in-forward { animation: vendi-page-in-forward 200ms cubic-bezier(0.22, 1, 0.36, 1); }
+.vendi-page-in-back { animation: vendi-page-in-back 200ms cubic-bezier(0.22, 1, 0.36, 1); }
 .vendi-step-in-forward { animation: vendi-step-in-forward 300ms ease-out; }
 .vendi-step-in-back { animation: vendi-step-in-back 300ms ease-out; }
 

@@ -1376,7 +1376,7 @@ export default function SellerDashboard() {
                   onClick={() => goToStep(step + 1)}
                   disabled={isImagesUploading}
                 >
-                  Next Step
+                  Next
                 </Button>
               ) : (
                 <Button

@@ -379,7 +379,7 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
               onClick={handleSignOut}
               className="flex-1 !rounded-full !py-2.5 !text-sm !bg-red-500 hover:!bg-red-600 shadow-lg shadow-red-500/30 text-white font-black transition-all active:scale-[0.98]"
             >
-              Yes, Sign Out
+              Yes
             </Button>
           </div>
         </div>
