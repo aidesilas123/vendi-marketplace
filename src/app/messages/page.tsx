@@ -142,7 +142,7 @@ async function fetchInbox([_key, userId]: [string, string]): Promise<ChatPreview
     const { data: userTxs } = await supabase
       .from('transactions')
       .select('reference')
-      .or(`buyer_id.eq.${userId},seller_id.eq.${userId}`)
+      .or(`user_id.eq.${userId},seller_id.eq.${userId}`)
       .order('created_at', { ascending: false })
       .limit(50);
 
@@ -278,11 +278,19 @@ export default function MessagesList() {
   const mutateRef = useRef(mutate);
   mutateRef.current = mutate;
 
-  // Realtime: any message change refreshes the inbox
+  // Realtime: any message change refreshes the inbox.
+  // Channel names are unique per mount: supabase-js reuses channels by
+  // topic name, and cleanup removes them asynchronously, so a fast remount
+  // (Fast Refresh in dev, quick back-and-forth in prod) used to hand the
+  // new effect a still-subscribed channel and .on() threw ("cannot add
+  // postgres_changes callbacks after subscribe()"), killing live updates.
+  // A fresh name per mount can never collide with a lingering channel;
+  // removeChannel stays as best-effort cleanup.
   useEffect(() => {
     if (!userId) return;
+    const mountTag = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const channel = supabase
-      .channel(`inbox_${userId}`)
+      .channel(`inbox_${userId}_${mountTag}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
         void mutateRef.current();
       })
@@ -294,7 +302,7 @@ export default function MessagesList() {
 
     // Activity channel: live typing and recording status from partners
     const actChannel = supabase
-      .channel(`inbox_activity_${userId}`)
+      .channel(`inbox_activity_${userId}_${mountTag}`)
       .on('broadcast', { event: 'user_activity' }, (payload: any) => {
         const { txRef, activity } = payload?.payload || {};
         if (!txRef) return;

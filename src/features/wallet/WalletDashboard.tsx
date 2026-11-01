@@ -94,7 +94,14 @@ export default function WalletDashboard() {
   const viewRef = useRef<View>('none');
   viewRef.current = view;
 
-  // Track if close was already initiated by a popstate event to prevent double-popping history
+  // Flag choreography: the flag means "a close already issued
+  // history.back() and its popstate echo is still in flight". It is SET by
+  // closeView/closeReceipt and CONSUMED by handlePopState — never reset by
+  // a close. (The old code reset it in the close, so the following popstate
+  // re-closed the underlying view — over-close — and popstate set it
+  // without consuming, so the next close skipped history.back() and
+  // stranded its marker: one silent press, the back "hook".) A double tap
+  // is safe: the second close sees the flag and skips the second back().
   const isPoppedByHistory = useRef(false);
 
   // Overlay history stays exactly one entry deep: opening an overlay over
@@ -119,9 +126,9 @@ export default function WalletDashboard() {
 
   const closeView = () => {
     if (!isPoppedByHistory.current && typeof window !== 'undefined' && window.history.state?.__vendiWalletOverlay) {
+      isPoppedByHistory.current = true;
       window.history.back();
     }
-    isPoppedByHistory.current = false;
     setView('none');
   };
 
@@ -132,9 +139,9 @@ export default function WalletDashboard() {
 
   const closeReceipt = () => {
     if (!isPoppedByHistory.current && typeof window !== 'undefined' && window.history.state?.__vendiWalletOverlay) {
+      isPoppedByHistory.current = true;
       window.history.back();
     }
-    isPoppedByHistory.current = false;
     setReceiptTx(null);
   };
 
@@ -201,7 +208,14 @@ export default function WalletDashboard() {
   // 2. Browser History (popstate) for Web / PWA / Swipe-back:
   useEffect(() => {
     const handlePopState = () => {
-      isPoppedByHistory.current = true;
+      // If a close already issued history.back(), this popstate is its
+      // echo: that close already closed the layer, so consume the flag and
+      // do NOT close another layer (that was the over-close). Only a
+      // genuine browser/swipe back (flag clear) sync-closes the top layer.
+      if (isPoppedByHistory.current) {
+        isPoppedByHistory.current = false;
+        return;
+      }
       if (receiptTxRef.current) {
         setReceiptTx(null);
       } else if (viewRef.current !== 'none') {

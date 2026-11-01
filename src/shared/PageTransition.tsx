@@ -29,8 +29,9 @@ export const PageTransition = ({
   // Back direction is decided once per pathname: isBackNavigation() reads a
   // 2.5s popstate window, so calling it on every render could flip the
   // direction (and skip scroll-to-top) for a forward tap made shortly
-  // after a back navigation.
-  const isBack = useMemo(() => isBackNavigation(), [pathname]);
+  // after a back navigation. It also requires the popped-to path to match
+  // this pathname, so a quick forward push after a back is not misread.
+  const isBack = useMemo(() => isBackNavigation(pathname), [pathname]);
 
   const shouldReduceMotion = useMemo(
     () =>
@@ -76,6 +77,13 @@ export const PageTransition = ({
       <div
         key={pagePath ?? pathname}
         className="w-full min-h-full vendi-stack-in relative z-10"
+        // First-paint guard against the flash-then-slide: the entering page
+        // must never paint once at its final position before the keyframe's
+        // from-state applies. This inline offset is present from the very
+        // first paint; the running animation overrides it (animations beat
+        // inline styles), and settling removes it, so it can never snap the
+        // page back or stick.
+        style={{ transform: 'translate3d(100%, 0, 0)' }}
       >
         {children}
       </div>
@@ -85,7 +93,13 @@ export const PageTransition = ({
   // Stack-managed back reveal: the kept page is already painted and in
   // place — it must NOT animate. The outgoing snapshot sliding out over it
   // is the whole transition.
-  if (stackMode === 'stack-reveal') {
+  // 'stack-settled' renders the same plain div: once the enter animation
+  // finishes, AppShell settles the mode so the enter classes (will-change
+  // + z-10) don't linger — left in place they become a containing block
+  // and stacking context for every in-page fixed element, which is what
+  // broke sheets (scrolling with the page, capped below the nav, inset by
+  // the page padding).
+  if (stackMode === 'stack-reveal' || stackMode === 'stack-settled') {
     return (
       <div key={pagePath ?? pathname} className="w-full min-h-full">
         {children}

@@ -21,21 +21,38 @@ const MAX_ENTRIES = 40;
 
 const positions = new Map<string, number>();
 let lastPopAt = 0;
+let lastPopPath: string | null = null;
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('popstate', () => { lastPopAt = Date.now(); });
+  window.addEventListener('popstate', () => {
+    lastPopAt = Date.now();
+    // The path the back navigation landed on. A popstate alone must not
+    // prove "back": any forward push made within the window after a back
+    // (back to feed, then immediately tapping a product) would otherwise
+    // be misread as a back navigation — AppShell would drop the stack
+    // slide for the old keyframe slide, which flashes (page appears, then
+    // slides over itself). The popped-to path must match the current route.
+    lastPopPath = window.location.pathname;
+  });
 }
 
 const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 
 /**
  * True when the most recent navigation was a back navigation
- * (browser/Android back or router.back()): a popstate fired within the back window.
- * Used by PageTransition to reverse the slide direction and skip its scroll-to-top
- * (which would otherwise fight this hook's restore).
+ * (browser/Android back or router.back()): a popstate fired within the back
+ * window AND landed on the route given (or the current URL when none is
+ * given). The path check is the point: without it, a forward push made
+ * within 2.5s of a back (back to feed, then tapping a product) reads as a
+ * back navigation, and AppShell falls back to the old keyframe slide.
+ * Used by AppShell to pick the stack transition and by PageTransition to
+ * reverse the slide direction and skip its scroll-to-top (which would
+ * otherwise fight this hook's restore).
  */
-export function isBackNavigation() {
-  return Date.now() - lastPopAt < BACK_WINDOW_MS;
+export function isBackNavigation(currentPath?: string | null) {
+  if (Date.now() - lastPopAt >= BACK_WINDOW_MS) return false;
+  const landed = currentPath ?? (typeof window !== 'undefined' ? window.location.pathname : null);
+  return landed !== null && landed === lastPopPath;
 }
 
 // The element that actually scrolls: the nearest scrollable ancestor, or the document.
@@ -73,7 +90,7 @@ export function useScrollRestore(ref: ElRef, key: string | null, ready: boolean)
     // Decide once per key whether this is a return trip. Kept in a ref so React StrictMode's
     // double-invoked effects don't consume the saved position twice.
     if (plan.current?.key !== key) {
-      const cameBack = Date.now() - lastPopAt < BACK_WINDOW_MS;
+      const cameBack = isBackNavigation();
       const saved = positions.get(key);
       positions.delete(key);
       lastPopAt = 0;

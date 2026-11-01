@@ -2,6 +2,7 @@
 "use client";
 
 import React, { createContext, useCallback, useEffect, useState } from 'react';
+import { VendiLoader } from '@/shared/VendiLoader';
 
 /**
  * Wallet-style page stack — the transition layer.
@@ -27,7 +28,7 @@ import React, { createContext, useCallback, useEffect, useState } from 'react';
  * The entering page's wrapper carries `relative z-10` (see PageTransition).
  */
 
-export type StackMode = 'stack-none' | 'stack-enter' | 'stack-reveal';
+export type StackMode = 'stack-none' | 'stack-enter' | 'stack-reveal' | 'stack-settled';
 
 export const StackContext = createContext<StackMode>('stack-none');
 
@@ -123,5 +124,34 @@ export function StackBackOverlay({ element, scrollTop }: { element: React.ReactN
         leaving ? 'translate-x-full' : 'translate-x-0'
       }`}
     />
+  );
+}
+
+/** Back-to-feed loader: replaces the slide-out cover when the back
+ *  destination is the feed. An opaque loader holds 300ms (the wallet's
+ *  beat) then fades over 300ms; the kept feed is already revealed beneath
+ *  it, scroll restored, so lifting the loader is the whole transition —
+ *  nothing slides. onDone drops the overlay (AppShell clears the
+ *  transition); timers clean up if the user navigates away mid-loader. */
+export function FeedLoaderOverlay({ onDone }: { onDone: () => void }) {
+  const [fading, setFading] = useState(false);
+
+  useEffect(() => {
+    const hold = setTimeout(() => setFading(true), 300);
+    const done = setTimeout(onDone, 600);
+    return () => {
+      clearTimeout(hold);
+      clearTimeout(done);
+    };
+  }, [onDone]);
+
+  return (
+    <div
+      className={`fixed inset-0 z-[100] flex items-center justify-center bg-gray-50 dark:bg-background transition-opacity duration-300 ${
+        fading ? 'opacity-0' : 'opacity-100'
+      }`}
+    >
+      <VendiLoader />
+    </div>
   );
 }

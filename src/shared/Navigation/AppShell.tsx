@@ -1,13 +1,13 @@
 "use client";
 // src/shared/Navigation/AppShell.tsx
 
-import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { isBackNavigation } from '@/shared/hooks/useScrollRestore';
-import { StackContext, StackUnderlay, StackBackOverlay, findPageScroller } from './StackOverlay';
+import { StackContext, StackUnderlay, StackBackOverlay, FeedLoaderOverlay, findPageScroller } from './StackOverlay';
 import type { StackMode } from './StackOverlay';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
@@ -33,7 +33,8 @@ const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : use
 type KeptEntry = { pathname: string; element: React.ReactNode };
 type StackTransition =
   | { kind: 'forward'; underlay: React.ReactNode; underlayScroll: number }
-  | { kind: 'back'; snapshot: React.ReactNode; snapshotScroll: number };
+  | { kind: 'back'; snapshot: React.ReactNode; snapshotScroll: number }
+  | { kind: 'feed-loader' };
 
 const PAGE_TITLES: Record<string, string> = {
   chats: 'Messages',
@@ -87,6 +88,12 @@ export const AppShell = ({ children }: AppShellProps) => {
   const prevPathRef = useRef<string | null>(null);
   const prevChildrenRef = useRef<React.ReactNode>(null);
   const prevShellRef = useRef(false);
+  // Entering-page visibility gate: true from the nav commit until the
+  // layout effect below flips it, before paint. While true, the entering
+  // entry renders hidden, so the previous page (underlay) is all the user
+  // sees — the new page can never flash at its final position before its
+  // slide starts, whatever made it paint early.
+  const enterHiddenRef = useRef(false);
   const savedScrollRef = useRef<Record<string, number>>({});
   const wrapperRefs = useRef(new Map<string, HTMLElement>());
   const [, setStackTick] = useState(0);
@@ -342,13 +349,44 @@ export const AppShell = ({ children }: AppShellProps) => {
   // Drop transition overlays after their animation: 300ms covers the 300ms
   // forward slide and the 16ms + 280ms back slide-out. Cleanup on the next
   // navigation so a rapid tap can't leave a stale overlay up.
+  // Settling matters as much as dropping the overlay: the enter animation's
+  // will-change + z-10 must not linger on the current page, or they become
+  // a containing block and stacking context for every in-page fixed element
+  // (sheets, modals) — sheets would scroll with the page, cap below the
+  // bottom nav, and inset by the page padding. Settled renders plain.
   useEffect(() => {
     if (!transitionRef.current) return;
+    // The feed loader clears itself (holds 300ms, fades 300ms, then calls
+    // back); the 300ms drop below would cut its fade short.
+    if (transitionRef.current.kind === 'feed-loader') return;
     const id = setTimeout(() => {
       transitionRef.current = null;
+      if (stackModeRef.current === 'stack-enter' || stackModeRef.current === 'stack-reveal') {
+        stackModeRef.current = 'stack-settled';
+      }
       setStackTick((v) => v + 1);
     }, 300);
     return () => clearTimeout(id);
+  }, [pathname]);
+
+  // Feed-loader completion: drop the overlay and settle the mode. Stable
+  // (useCallback) so the overlay's timers don't reset on re-renders.
+  const handleFeedLoaderDone = useCallback(() => {
+    transitionRef.current = null;
+    stackModeRef.current = 'stack-settled';
+    setStackTick((v) => v + 1);
+  }, []);
+
+  // Entering-page visibility gate, part 2: flip the entering entry
+  // visible. A layout effect runs before paint, so the hidden→visible
+  // flip lands in the same frame as the nav commit — the user never sees
+  // the hidden state, only the feed, then the new page sliding in over
+  // it. The tick re-renders (the flag is a ref, so it needs one) and the
+  // effect never re-runs without a pathname change, so it can't loop.
+  useIsoLayoutEffect(() => {
+    if (!enterHiddenRef.current) return;
+    enterHiddenRef.current = false;
+    setStackTick((v) => v + 1);
   }, [pathname]);
 
   // Stack-managed scroll. PageTransition's own scroll-to-top is gated off in
@@ -393,8 +431,19 @@ export const AppShell = ({ children }: AppShellProps) => {
     }
     if (from && fromEl && fromShell && showShell) {
       const keptMatch = stackEntriesRef.current.find((e) => e.pathname === pathname);
-      const back = isBackNavigation();
-      if (keptMatch && back) {
+      const back = isBackNavigation(pathname);
+      if (back && pathname === '/') {
+        // Back to the feed uses the loader instead of a slide (Aide's
+        // call): the kept feed is revealed beneath an opaque loader that
+        // holds 300ms then fades over 300ms — no slide-out cover, no
+        // slide-in. Reveal mode still restores the feed's scroll, and the
+        // outgoing page is dropped exactly as in a normal back-to-kept.
+        // (Forward taps to the feed tab still slide in; only BACK changes.)
+        stackMode = 'stack-reveal';
+        transition = { kind: 'feed-loader' };
+        renderKept = [];
+        renderCurrent = keptMatch ? keptMatch.element : children;
+      } else if (keptMatch && back) {
         // Back to a kept page: reveal it (already mounted, already painted)
         // while the outgoing page's snapshot slides out over it.
         stackMode = 'stack-reveal';
@@ -402,10 +451,13 @@ export const AppShell = ({ children }: AppShellProps) => {
         renderKept = [];
         renderCurrent = keptMatch.element;
       } else if (keptMatch) {
-        // Forward tap back to a kept tab: same reveal, but as a slide-in
-        // over the outgoing page's snapshot (it was a push, not a pop).
-        stackMode = 'stack-enter';
-        transition = { kind: 'forward', underlay: fromEl, underlayScroll: savedScrollRef.current[from] ?? 0 };
+        // Forward tap back to a kept tab: reveal it instantly, no slide.
+        // The kept page is already mounted and painted — sliding it in
+        // from the right reads as a repeat ("shows, then slides on
+        // itself"). Tabs switch like native tab bars: instant, scroll
+        // restored (reveal mode), outgoing page kept for the way back.
+        stackMode = 'stack-reveal';
+        transition = null;
         renderKept = [{ pathname: from, element: fromEl }];
         renderCurrent = keptMatch.element;
       } else if (back) {
@@ -436,6 +488,9 @@ export const AppShell = ({ children }: AppShellProps) => {
     prevPathRef.current = pathname;
     prevChildrenRef.current = children;
     prevShellRef.current = showShell;
+    // Entering entry starts hidden; the layout effect below flips it
+    // visible before paint, as its slide starts.
+    enterHiddenRef.current = true;
   } else {
     stackMode = stackModeRef.current;
     renderKept = stackEntriesRef.current;
@@ -495,7 +550,17 @@ export const AppShell = ({ children }: AppShellProps) => {
                     if (el) wrapperRefs.current.set(e.pathname, el);
                     else wrapperRefs.current.delete(e.pathname);
                   }}
-                  style={{ display: e.pathname === (pathname ?? '') ? 'block' : 'none' }}
+                  style={{
+                    display: e.pathname === (pathname ?? '') ? 'block' : 'none',
+                    // Visibility gate: the entering entry is hidden on the
+                    // nav commit and flipped visible pre-paint by the
+                    // layout effect above — it can never flash at full
+                    // position before its slide. Kept entries are
+                    // display:none anyway, so this only ever affects the
+                    // current entry, for one commit.
+                    visibility:
+                      e.pathname === (pathname ?? '') && enterHiddenRef.current ? 'hidden' : 'visible',
+                  }}
                 >
                   {React.isValidElement(e.element)
                     ? React.cloneElement(e.element as React.ReactElement<{ pagePath?: string }>, { pagePath: e.pathname })
@@ -529,6 +594,9 @@ export const AppShell = ({ children }: AppShellProps) => {
           }
           scrollTop={transition.snapshotScroll}
         />
+      )}
+      {transition?.kind === 'feed-loader' && (
+        <FeedLoaderOverlay onDone={handleFeedLoaderDone} />
       )}
 
       <div className="absolute bottom-0 left-0 right-0 w-full z-50 pointer-events-none">
