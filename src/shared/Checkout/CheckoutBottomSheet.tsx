@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { IonIcon } from '@ionic/react';
 import { closeOutline, shieldCheckmarkOutline } from 'ionicons/icons';
 
@@ -21,6 +22,13 @@ export const CheckoutBottomSheet = ({
 }: CheckoutBottomSheetProps) => {
   const [dragY, setDragY] = useState(0);
   const startY = useRef<number | null>(null);
+  // Portaled (see the return below): without this, the sheet's `fixed`
+  // positioning is hijacked by any transformed ancestor (the page-stack
+  // entering wrapper, the rubber-band wrapper) and the panel stops short
+  // of the screen bottom, leaving the Confirm & Pay bar visible beneath
+  // it. Mounted-guard so the server render (null) matches hydration.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
 
   // Reset drag position when opened/closed and lock body scroll
   useEffect(() => {
@@ -65,9 +73,13 @@ export const CheckoutBottomSheet = ({
     startY.current = null;
   };
 
-  // Keep component mounted to allow CSS transitions, but hide it from clicks when closed
-  return (
-    <div 
+  // Keep component mounted to allow CSS transitions, but hide it from clicks when closed.
+  // Portaled to <body> so `fixed inset-0` is truly viewport-relative: the
+  // panel reaches the screen bottom and slides over the Confirm & Pay bar
+  // instead of stopping short of it inside a transformed page wrapper.
+  if (!mounted) return null;
+  return createPortal(
+    <div
       className={`fixed inset-0 z-[200] transition-all duration-300 ${
         isOpen ? 'pointer-events-auto visible' : 'pointer-events-none invisible transition-[visibility] delay-300'
       }`}
@@ -176,6 +188,7 @@ export const CheckoutBottomSheet = ({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };

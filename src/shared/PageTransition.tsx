@@ -12,7 +12,7 @@ export const PageTransition = ({
   // forward underlay / back overlay): a static copy, no animation, no
   // scroll effects — it only has to look right for ~300ms.
   stackStatic,
-  // The route this entry belongs to, set by AppShell. The slide div is keyed
+  // The route this entry belongs to, set by AppShell. The transition div is keyed
   // by it (NOT by the global pathname): a kept page's key must stay stable
   // across navigations, or React would remount it the moment it becomes kept
   // and the whole keep-alive would be pointless. Outside AppShell this is
@@ -68,22 +68,25 @@ export const PageTransition = ({
     return <>{children}</>;
   }
 
-  // Stack-managed forward: the new page slides in from the right over the
-  // previous page (vendi-stack-in, wallet timing). Keyed by this entry's own
+  // Stack-managed forward: the new page fades in over the previous page
+  // (vendi-fade-in, 180ms opacity only). Keyed by this entry's own
   // route, never by the global pathname, so becoming kept can't remount it.
-  // relative z-10 puts it above the forward underlay (z-[5]).
+  // relative z-10 puts it above the forward underlay (z-[5]). Opacity
+  // creates no containing block, so fixed descendants (sheets, modals)
+  // stay viewport-relative even before settling.
   if (stackMode === 'stack-enter') {
     return (
       <div
         key={pagePath ?? pathname}
-        className="w-full min-h-full vendi-stack-in relative z-10"
-        // First-paint guard against the flash-then-slide: the entering page
-        // must never paint once at its final position before the keyframe's
-        // from-state applies. This inline offset is present from the very
-        // first paint; the running animation overrides it (animations beat
-        // inline styles), and settling removes it, so it can never snap the
-        // page back or stick.
-        style={{ transform: 'translate3d(100%, 0, 0)' }}
+        className="w-full min-h-full vendi-fade-in relative z-10"
+        // First-paint guard: the entering page must never paint once at
+        // full opacity before the fade starts. This inline opacity is
+        // present from the very first paint; the running animation
+        // overrides it (animations beat inline styles), and settling
+        // removes it. No visibility gate needed: with a fade, this
+        // inline opacity IS the guard, so there is no second hiding
+        // mechanism to mistime.
+        style={{ opacity: 0 }}
       >
         {children}
       </div>
@@ -91,14 +94,12 @@ export const PageTransition = ({
   }
 
   // Stack-managed back reveal: the kept page is already painted and in
-  // place — it must NOT animate. The outgoing snapshot sliding out over it
+  // place — it must NOT animate. The outgoing snapshot fading out over it
   // is the whole transition.
-  // 'stack-settled' renders the same plain div: once the enter animation
-  // finishes, AppShell settles the mode so the enter classes (will-change
-  // + z-10) don't linger — left in place they become a containing block
-  // and stacking context for every in-page fixed element, which is what
-  // broke sheets (scrolling with the page, capped below the nav, inset by
-  // the page padding).
+  // 'stack-settled' renders the same plain div: once the fade finishes,
+  // AppShell settles the mode so the enter class + z-10 don't linger on
+  // the current page. (With opacity there is no containing-block trap,
+  // but settling still drops the animation class and the underlay.)
   if (stackMode === 'stack-reveal' || stackMode === 'stack-settled') {
     return (
       <div key={pagePath ?? pathname} className="w-full min-h-full">
@@ -107,19 +108,17 @@ export const PageTransition = ({
     );
   }
 
-  // CSS keyframes, not Motion: Motion's `x` shorthand is not in its
-  // WAAPI-accelerated set, so the old slide ran on Motion's JS frame loop
-  // while opacity ran on the compositor — a main-thread stall mounting the
-  // new page froze the position while the fade continued, which reads as
-  // stutter. A keyframe transform animation runs on the compositor
-  // regardless of what the main thread is doing. Keyframes also need no
-  // two-paint enter trick: they run on mount automatically. No opacity:
-  // the page appears fully opaque from frame one (just offset), so there
-  // is no luminance flash and no whole-page group-opacity surface.
+  // Keyframe fallback (non-shell routes, two-step back): the same fade as
+  // stack-enter, so every page transition feels uniform. An opacity
+  // keyframe runs on the compositor regardless of what the main thread is
+  // doing while the new page mounts. No Motion: a CSS opacity keyframe
+  // needs no runtime, and there is no exit animation to overlap — the
+  // outgoing page simply stays beneath until the new one is opaque.
   return (
     <div
       key={pagePath ?? pathname}
-      className={`w-full min-h-full ${isBack ? "vendi-page-in-back" : "vendi-page-in-forward"}`}
+      className="w-full min-h-full vendi-fade-in"
+      style={{ opacity: 0 }}
     >
       {children}
     </div>

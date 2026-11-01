@@ -88,12 +88,10 @@ export const AppShell = ({ children }: AppShellProps) => {
   const prevPathRef = useRef<string | null>(null);
   const prevChildrenRef = useRef<React.ReactNode>(null);
   const prevShellRef = useRef(false);
-  // Entering-page visibility gate: true from the nav commit until the
-  // layout effect below flips it, before paint. While true, the entering
-  // entry renders hidden, so the previous page (underlay) is all the user
-  // sees — the new page can never flash at its final position before its
-  // slide starts, whatever made it paint early.
-  const enterHiddenRef = useRef(false);
+  // Fade build: no entering-page visibility gate. The fade's inline
+  // opacity guard (see PageTransition) covers first paint on its own, so
+  // the gate's hidden→visible flip is redundant — one less mechanism to
+  // mistime. Modes, settling, scroll, and the loader are unchanged.
   const savedScrollRef = useRef<Record<string, number>>({});
   const wrapperRefs = useRef(new Map<string, HTMLElement>());
   const [, setStackTick] = useState(0);
@@ -346,14 +344,13 @@ export const AppShell = ({ children }: AppShellProps) => {
     };
   }, [router]);
 
-  // Drop transition overlays after their animation: 300ms covers the 300ms
-  // forward slide and the 16ms + 280ms back slide-out. Cleanup on the next
-  // navigation so a rapid tap can't leave a stale overlay up.
-  // Settling matters as much as dropping the overlay: the enter animation's
-  // will-change + z-10 must not linger on the current page, or they become
-  // a containing block and stacking context for every in-page fixed element
-  // (sheets, modals) — sheets would scroll with the page, cap below the
-  // bottom nav, and inset by the page padding. Settled renders plain.
+  // Drop transition overlays after their animation: 300ms covers the 180ms
+  // forward fade and the 16ms + 180ms back fade-out, both finished well
+  // inside it. The fade's forwards fill holds the final opacity, so even
+  // a late settle can't blank the page. Cleanup on the next navigation
+  // so a rapid tap can't leave a stale overlay up.
+  // Settling matters as much as dropping the overlay: the enter class +
+  // z-10 must not linger on the current page. Settled renders plain.
   useEffect(() => {
     if (!transitionRef.current) return;
     // The feed loader clears itself (holds 300ms, fades 300ms, then calls
@@ -376,18 +373,6 @@ export const AppShell = ({ children }: AppShellProps) => {
     stackModeRef.current = 'stack-settled';
     setStackTick((v) => v + 1);
   }, []);
-
-  // Entering-page visibility gate, part 2: flip the entering entry
-  // visible. A layout effect runs before paint, so the hidden→visible
-  // flip lands in the same frame as the nav commit — the user never sees
-  // the hidden state, only the feed, then the new page sliding in over
-  // it. The tick re-renders (the flag is a ref, so it needs one) and the
-  // effect never re-runs without a pathname change, so it can't loop.
-  useIsoLayoutEffect(() => {
-    if (!enterHiddenRef.current) return;
-    enterHiddenRef.current = false;
-    setStackTick((v) => v + 1);
-  }, [pathname]);
 
   // Stack-managed scroll. PageTransition's own scroll-to-top is gated off in
   // stack modes, so this owns it — layout effect, before paint, no flash.
@@ -488,9 +473,6 @@ export const AppShell = ({ children }: AppShellProps) => {
     prevPathRef.current = pathname;
     prevChildrenRef.current = children;
     prevShellRef.current = showShell;
-    // Entering entry starts hidden; the layout effect below flips it
-    // visible before paint, as its slide starts.
-    enterHiddenRef.current = true;
   } else {
     stackMode = stackModeRef.current;
     renderKept = stackEntriesRef.current;
@@ -550,17 +532,7 @@ export const AppShell = ({ children }: AppShellProps) => {
                     if (el) wrapperRefs.current.set(e.pathname, el);
                     else wrapperRefs.current.delete(e.pathname);
                   }}
-                  style={{
-                    display: e.pathname === (pathname ?? '') ? 'block' : 'none',
-                    // Visibility gate: the entering entry is hidden on the
-                    // nav commit and flipped visible pre-paint by the
-                    // layout effect above — it can never flash at full
-                    // position before its slide. Kept entries are
-                    // display:none anyway, so this only ever affects the
-                    // current entry, for one commit.
-                    visibility:
-                      e.pathname === (pathname ?? '') && enterHiddenRef.current ? 'hidden' : 'visible',
-                  }}
+                  style={{ display: e.pathname === (pathname ?? '') ? 'block' : 'none' }}
                 >
                   {React.isValidElement(e.element)
                     ? React.cloneElement(e.element as React.ReactElement<{ pagePath?: string }>, { pagePath: e.pathname })
