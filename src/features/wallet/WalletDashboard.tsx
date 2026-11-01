@@ -10,6 +10,7 @@
 // Spacing knobs are the constants right below the imports.
 
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams } from 'next/navigation';
 import { IonIcon } from '@ionic/react';
 import { Clipboard } from '@capacitor/clipboard';
@@ -87,6 +88,12 @@ export default function WalletDashboard() {
   }, []);
 
   const [topupDragY, setTopupDragY] = useState(0);
+  // Mounted guard for the portaled fund sheet (below): portals need
+  // document, so the sheet renders only after mount (matching the server
+  // render of nothing). The sheet is closed initially anyway, so the
+  // first-frame difference is invisible.
+  const [sheetMounted, setSheetMounted] = useState(false);
+  useEffect(() => { setSheetMounted(true); }, []);
   const topupTouchStartY = useRef<number | null>(null);
 
   const receiptTxRef = useRef<WalletTx | null>(null);
@@ -446,13 +453,19 @@ export default function WalletDashboard() {
       </PullToRefresh>
 
       {/* ----------------------------- Top-up sheet ---------------------------- */}
+      {/* Portaled to <body> so the sheet always covers everything (bars,
+          nav, and any transformed page wrapper): in-page `fixed` gets
+          trapped short of the viewport and loses to portaled bars, the
+          same failure the buy sheet and PIN modal had. */}
+      {sheetMounted && createPortal(
+        <>
       <div
         role="button"
         tabIndex={view === 'topup' ? 0 : -1}
         aria-label="Close fund wallet sheet"
         onClick={closeView}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') closeView(); }}
-        className={`fixed inset-0 z-[90] bg-black/50 transition-opacity duration-300 ${
+        className={`fixed inset-0 z-[200] bg-black/50 transition-opacity duration-300 ${
           view === 'topup' ? 'opacity-100' : 'pointer-events-none opacity-0'
         }`}
       />
@@ -467,7 +480,7 @@ export default function WalletDashboard() {
           transform: view === 'topup' ? `translateY(${topupDragY > 0 ? topupDragY : 0}px)` : 'translateY(100%)',
           transition: topupDragY > 0 ? 'none' : 'transform 300ms ease-out',
         }}
-        className="fixed inset-x-0 bottom-0 z-[100] rounded-t-3xl bg-white text-gray-900 dark:bg-[#171717] dark:text-white"
+        className="fixed inset-x-0 bottom-0 z-[210] rounded-t-3xl bg-white text-gray-900 dark:bg-[#171717] dark:text-white"
       >
         <div className="mx-auto max-w-md px-6 pb-[calc(var(--sab)+40px)] pt-3">
           <div className="mx-auto mb-7 h-1.5 w-12 cursor-grab rounded-full bg-gray-300 active:cursor-grabbing dark:bg-gray-700" />
@@ -505,6 +518,9 @@ export default function WalletDashboard() {
           </dl>
         </div>
       </div>
+        </>,
+        document.body,
+      )}
 
       {/* ------------------------ Full-screen pages ------------------------ */}
       {view === 'allTx' && (

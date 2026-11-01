@@ -108,18 +108,16 @@ export const PageTransition = ({
     );
   }
 
-  // Keyframe fallback (non-shell routes, two-step back): the same fade as
-  // stack-enter, so every page transition feels uniform. An opacity
-  // keyframe runs on the compositor regardless of what the main thread is
-  // doing while the new page mounts. No Motion: a CSS opacity keyframe
-  // needs no runtime, and there is no exit animation to overlap — the
-  // outgoing page simply stays beneath until the new one is opaque.
+  // Fallback (non-shell routes, two-step back, first mount): a plain div,
+  // deliberately NOT faded. The fallback has no settle safety net (its
+  // transition is null, so the settle effect never runs) — if the fade
+  // animation ever failed to run here (stale CSS, paused animation), the
+  // inline opacity guard would stick and the page would stay white with
+  // only the header and nav visible. A plain div can never stick: it is
+  // visible no matter what. The main flows (stack-enter/reveal) still
+  // fade; only this rare path renders instantly.
   return (
-    <div
-      key={pagePath ?? pathname}
-      className="w-full min-h-full vendi-fade-in"
-      style={{ opacity: 0 }}
-    >
+    <div key={pagePath ?? pathname} className="w-full min-h-full">
       {children}
     </div>
   );

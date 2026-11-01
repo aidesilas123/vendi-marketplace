@@ -1,4 +1,6 @@
-import React, { useEffect } from 'react';
+// src/shared/Checkout/PinPadModal.tsx
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { IonIcon } from '@ionic/react';
 import { closeOutline, backspaceOutline } from 'ionicons/icons';
 
@@ -19,6 +21,10 @@ const EASE = 'cubic-bezier(0.4, 0, 0.2, 1)';
 const SLIDE = `transform 300ms ${EASE}, translate 300ms ${EASE}`;
 
 export const PinPadModal = ({ isOpen, onClose, pinMode, pin, totalCharge, onPinPress, onBackspace }: PinPadModalProps) => {
+  // Mounted guard for the portal (below): portals need document, so the
+  // modal renders only after mount, matching the server render of nothing.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
   // Support physical keyboards on desktop, iPads, and Android tablets
   useEffect(() => {
     if (!isOpen) return;
@@ -44,14 +50,21 @@ export const PinPadModal = ({ isOpen, onClose, pinMode, pin, totalCharge, onPinP
         ? 'Confirm Your PIN'
         : 'Enter Transaction PIN';
 
-  return (
+  if (!mounted) return null;
+  // Portaled to <body> so the modal always covers everything (the portaled
+  // buy bar, the bottom nav, and any transformed page wrapper): in-page
+  // `fixed` gets trapped short of the viewport and loses to portaled bars
+  // at equal z, which is why the Confirm & Pay bar showed beneath the PIN
+  // sheet. Backdrop z-200 and panel z-210 sit above the bar (z-100) and
+  // the nav (z-50); the panel sits above its own backdrop.
+  return createPortal(
     <>
-      {isOpen && <div className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-sm transition-opacity" onClick={onClose} />}
+      {isOpen && <div className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm transition-opacity" onClick={onClose} />}
       <div
         role="dialog"
         aria-modal="true"
         aria-label={modalTitle}
-        className={`fixed bottom-0 left-0 right-0 z-[100] bg-white dark:bg-[#171717] rounded-t-3xl shadow-2xl ${
+        className={`fixed bottom-0 left-0 right-0 z-[210] bg-white dark:bg-[#171717] rounded-t-3xl shadow-2xl ${
           isOpen ? 'translate-y-0 visible' : 'translate-y-full invisible pointer-events-none'
         }`}
         style={{
@@ -124,6 +137,7 @@ export const PinPadModal = ({ isOpen, onClose, pinMode, pin, totalCharge, onPinP
           </div>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   );
 };
