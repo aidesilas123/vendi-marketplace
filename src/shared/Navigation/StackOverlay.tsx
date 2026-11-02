@@ -1,8 +1,7 @@
 // src/shared/Navigation/StackOverlay.tsx
 "use client";
 
-import React, { createContext, useCallback, useEffect, useState } from 'react';
-import { VendiLoader } from '@/shared/VendiLoader';
+import React, { createContext, useCallback } from 'react';
 
 /**
  * Wallet-style page stack — the transition layer.
@@ -12,14 +11,20 @@ import { VendiLoader } from '@/shared/VendiLoader';
  * way back. This module gives App Router pages the same treatment, capped at
  * depth 1 (only the immediately previous page is kept):
  *
- *  - Forward: the new page mounts in main and fades in (vendi-fade-in,
- *    180ms opacity only) over a static snapshot of the previous page.
- *    The snapshot lives 300ms, then drops.
+ *  - Forward: the new page mounts in main and zooms in (vendi-zoom-in,
+ *    220ms scale + opacity) over a static snapshot of the previous page.
+ *    The snapshot itself recedes with vendi-zoom-out (scale + fade) over
+ *    the same 220ms, so the old page doesn't sit fully visible while the
+ *    new one starts small — the two move together (depth), no flash,
+ *    no shrink-then-grow read. The snapshot lives 300ms, then drops.
  *  - Back to a kept page: the kept page is unhidden in main (already
- *    painted, state intact) and simply appears — no overlay slides out
- *    over it. The old sliding snapshot is removed: it read as the same
- *    page sliding out on itself instead of the current page sliding out.
- *  - Back to the feed: an opaque loader holds, then fades (see below).
+ *    painted, state intact) and zooms in with the same vendi-zoom-in —
+ *    visible and uniform with forward, no overlay sliding out over it.
+ *  - Back to a page that isn't kept (two-step back, back to feed after
+ *    a longer chain): fresh mount, still zooms (stack-back + settle
+ *    marker) so every back nav zooms.
+ *  - Forward tap to a kept tab: instant reveal, no animation (native
+ *    tab bars switch instantly; a zoom here would read as a repeat).
  *  - Anything else (back to a page that isn't kept, leaving the shell):
  *    falls back to PageTransition's plain div (no animation, never stuck).
  *
@@ -28,7 +33,7 @@ import { VendiLoader } from '@/shared/VendiLoader';
  * The entering page's wrapper carries `relative z-10` (see PageTransition).
  */
 
-export type StackMode = 'stack-none' | 'stack-enter' | 'stack-reveal' | 'stack-settled';
+export type StackMode = 'stack-none' | 'stack-enter' | 'stack-reveal' | 'stack-back' | 'stack-settled';
 
 export const StackContext = createContext<StackMode>('stack-none');
 
@@ -99,42 +104,17 @@ function SnapshotShell({
   );
 }
 
-/** Forward underlay: the previous page, frozen, beneath the entering page. */
+/** Forward underlay: the previous page, receding beneath the entering
+ *  page. vendi-zoom-out shrinks + fades it over the same 220ms the
+ *  entering page zooms in, so the old page doesn't sit fully visible
+ *  while the new one starts small (that static-underlay + growing-page
+ *  pair read as a flash, then a shrink, then a grow). */
 export function StackUnderlay({ element, scrollTop }: { element: React.ReactNode; scrollTop: number }) {
   return (
     <SnapshotShell
       element={element}
       scrollTop={scrollTop}
-      className="fixed inset-0 z-[5] overflow-y-auto bg-gray-50 dark:bg-background"
+      className="fixed inset-0 z-[5] overflow-y-auto bg-gray-50 dark:bg-background vendi-zoom-out"
     />
-  );
-}
-
-/** Back-to-feed loader: replaces the slide-out cover when the back
- *  destination is the feed. An opaque loader holds 300ms (the wallet's
- *  beat) then fades over 300ms; the kept feed is already revealed beneath
- *  it, scroll restored, so lifting the loader is the whole transition —
- *  nothing slides. onDone drops the overlay (AppShell clears the
- *  transition); timers clean up if the user navigates away mid-loader. */
-export function FeedLoaderOverlay({ onDone }: { onDone: () => void }) {
-  const [fading, setFading] = useState(false);
-
-  useEffect(() => {
-    const hold = setTimeout(() => setFading(true), 300);
-    const done = setTimeout(onDone, 600);
-    return () => {
-      clearTimeout(hold);
-      clearTimeout(done);
-    };
-  }, [onDone]);
-
-  return (
-    <div
-      className={`fixed inset-0 z-[100] flex items-center justify-center bg-gray-50 dark:bg-background transition-opacity duration-300 ${
-        fading ? 'opacity-0' : 'opacity-100'
-      }`}
-    >
-      <VendiLoader />
-    </div>
   );
 }

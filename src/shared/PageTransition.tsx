@@ -68,22 +68,22 @@ export const PageTransition = ({
     return <>{children}</>;
   }
 
-  // Stack-managed forward: the new page fades in over the previous page
-  // (vendi-fade-in, 180ms opacity only). Keyed by this entry's own
+  // Stack-managed forward: the new page zooms in over the previous page
+  // (vendi-zoom-in, 220ms scale + opacity). Keyed by this entry's own
   // route, never by the global pathname, so becoming kept can't remount it.
-  // relative z-10 puts it above the forward underlay (z-[5]). Opacity
-  // creates no containing block, so fixed descendants (sheets, modals)
-  // stay viewport-relative even before settling.
+  // relative z-10 puts it above the forward underlay (z-[5]). The scale
+  // transform is a containing block only until settling (300ms) removes
+  // the class, so sheets opened after settling are viewport-relative.
   if (stackMode === 'stack-enter') {
     return (
       <div
         key={pagePath ?? pathname}
-        className="w-full min-h-full vendi-fade-in relative z-10"
+        className="w-full min-h-full vendi-zoom-in relative z-10"
         // First-paint guard: the entering page must never paint once at
-        // full opacity before the fade starts. This inline opacity is
-        // present from the very first paint; the running animation
+        // full size and opacity before the zoom starts. This inline opacity
+        // is present from the very first paint; the running animation
         // overrides it (animations beat inline styles), and settling
-        // removes it. No visibility gate needed: with a fade, this
+        // removes it. No visibility gate needed: with a zoom, this
         // inline opacity IS the guard, so there is no second hiding
         // mechanism to mistime.
         style={{ opacity: 0 }}
@@ -93,13 +93,33 @@ export const PageTransition = ({
     );
   }
 
-  // Stack-managed back reveal: the kept page is already painted and in
-  // place — it must NOT animate. The outgoing snapshot fading out over it
-  // is the whole transition.
-  // 'stack-settled' renders the same plain div: once the fade finishes,
+  // Stack-managed back to a kept page: the kept page zooms in with the
+  // same vendi-zoom-in as forward, so back feels like forward (visible,
+  // native) instead of an instant cut. No z-10 (no underlay beneath a
+  // back reveal). The inline guard is safe here (unlike the fallback):
+  // back carries a settle marker (transition kind 'back-zoom'), so
+  // settling removes class + guard at 300ms even if the animation
+  // never runs.
+  if (stackMode === 'stack-back') {
+    return (
+      <div
+        key={pagePath ?? pathname}
+        className="w-full min-h-full vendi-zoom-in"
+        style={{ opacity: 0 }}
+      >
+        {children}
+      </div>
+    );
+  }
+
+  // Kept-tab reveal (forward tap to a kept tab): the kept page is already
+  // painted and in place — it must NOT animate. Native tab bars switch
+  // instantly; a zoom here would read as a repeat. Back uses stack-back
+  // (above), not this branch.
+  // 'stack-settled' renders the same plain div: once the zoom finishes,
   // AppShell settles the mode so the enter class + z-10 don't linger on
-  // the current page. (With opacity there is no containing-block trap,
-  // but settling still drops the animation class and the underlay.)
+  // the current page. Settling still drops the animation class and the
+  // underlay.
   if (stackMode === 'stack-reveal' || stackMode === 'stack-settled') {
     return (
       <div key={pagePath ?? pathname} className="w-full min-h-full">

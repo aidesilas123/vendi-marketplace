@@ -71,7 +71,7 @@ function ClientIcon({ icon, className }: { icon: string; className?: string }) {
 }
 
 export default function WalletDashboard() {
-  const { wallet, transactions, error, isLoading, refresh } = useWallet();
+  const { wallet, transactions, error, isLoading, isValidating, refresh } = useWallet();
 
   const [showBalance, setShowBalance] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -267,11 +267,19 @@ export default function WalletDashboard() {
       lastErrorRef.current = '';
       return;
     }
+    // Still retrying (SWR bounded retries): don't toast yet — the retry
+    // may succeed a second later, and a premature error toast is what made
+    // a blip feel like being offline. Clear the dedupe flag so the toast
+    // still fires once if retries exhaust with the same message.
+    if (isValidating) {
+      lastErrorRef.current = '';
+      return;
+    }
     const message = friendlyError(error, 'Could not sync your wallet');
     if (message === lastErrorRef.current) return;
     lastErrorRef.current = message;
     showGlobalToast(message, 'error');
-  }, [error]);
+  }, [error, isValidating]);
 
   const reload = async () => {
     if (reloading) return;

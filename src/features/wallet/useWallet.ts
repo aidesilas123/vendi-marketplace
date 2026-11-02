@@ -111,9 +111,19 @@ export function useWallet() {
       revalidateOnFocus: true,
       focusThrottleInterval: 15_000,
       dedupingInterval: 4000,
-      // A failed load (e.g. the bank provider is down) must NOT silently retry in a loop.
-      // The user retries with the Retry button / pull-to-refresh.
-      shouldRetryOnError: false,
+      // Transient failures (mobile network switching, Supabase/edge cold
+      // starts) used to fail the whole wallet load on first blip: with
+      // shouldRetryOnError off, one blip meant the error panel at once,
+      // even though a second later the same fetch succeeds. Bounded
+      // retries absorb blips — 3 attempts with backoff (1s, 2s, 3s) —
+      // and the error panel only shows after they all fail, which is a
+      // real failure, not a blip. Bounded, never a loop; auth errors
+      // fail fast through the same 3 attempts and surface as before.
+      shouldRetryOnError: true,
+      onErrorRetry: (_error, _key, _config, revalidate, { retryCount }) => {
+        if (retryCount >= 3) return;
+        setTimeout(() => revalidate({ retryCount }), 1000 * (retryCount + 1));
+      },
       keepPreviousData: true,
     }
   );

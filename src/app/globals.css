@@ -205,27 +205,22 @@ html {
 }
 
 /* ==========================================================================
-   Page + step slide animations (transition fix, Phase 1)
+   Page zoom + step slide animations (zoom navigation)
    --------------------------------------------------------------------------
-   Compositor-only CSS keyframes: transform is the only animated property,
-   so the slide runs on the compositor thread even while React mounts the
-   new page on the main thread. No opacity: the content appears fully
-   opaque from frame one (just offset), so there is no luminance flash and
-   no whole-page group-opacity surface. Fill mode is the default (none),
-   so the transform is gone the instant the animation ends — no lingering
-   transform to re-anchor fixed descendants.
-   Timing: the seller step slides match the wallet FullScreenPage slide
-   (300ms ease-out). Page slides sit just under that (250ms, snappier
-   curve) so navigation — back included — settles fast without feeling rushed.
+   Page transitions are a scale + opacity keyframe: the entering page
+   zooms in from 0.96 to 1 while fading in. Scale + opacity are both
+   compositor properties (no layout, no re-raster), so the zoom runs
+   cleanly even while React mounts the new page on the main thread and
+   even on low-end phones — and unlike a pure opacity fade, the scale
+   makes the transition actually visible. Fill mode is forwards, so the
+   final state holds if settling runs late — the page can never blank
+   out. will-change promotes the layer for the first zoom frame; settling
+   (300ms) removes the class, so it can't linger into a containing-block
+   trap for fixed descendants (sheets, modals).
+   Timing: page zooms run 220ms ease-out so navigation settles fast
+   without feeling rushed, but slow enough to see. The seller step slides
+   (small in-page transitions) keep their 300ms ease-out transform slides.
    ========================================================================== */
-@keyframes vendi-page-in-forward {
-  from { transform: translate3d(24px, 0, 0); }
-  to { transform: translate3d(0, 0, 0); }
-}
-@keyframes vendi-page-in-back {
-  from { transform: translate3d(-24px, 0, 0); }
-  to { transform: translate3d(0, 0, 0); }
-}
 @keyframes vendi-step-in-forward {
   from { transform: translate3d(16px, 0, 0); }
   to { transform: translate3d(0, 0, 0); }
@@ -234,40 +229,47 @@ html {
   from { transform: translate3d(-16px, 0, 0); }
   to { transform: translate3d(0, 0, 0); }
 }
-.vendi-page-in-forward,
-.vendi-page-in-back,
 .vendi-step-in-forward,
 .vendi-step-in-back {
   backface-visibility: hidden;
 }
-.vendi-page-in-forward { animation: vendi-page-in-forward 250ms cubic-bezier(0.22, 1, 0.36, 1); }
-.vendi-page-in-back { animation: vendi-page-in-back 250ms cubic-bezier(0.22, 1, 0.36, 1); }
 .vendi-step-in-forward { animation: vendi-step-in-forward 300ms ease-out; }
 .vendi-step-in-back { animation: vendi-step-in-back 300ms ease-out; }
 
-/* Wallet-style stack entrance: the new page slides in from the full right
-   edge over the previous page (same 300ms ease-out as the wallet's
-   FullScreenPage slide). Only used for stack-managed forward navigations;
-   stack back reveals animate nothing on the page itself — the outgoing
-   snapshot sliding out over it is the transition. will-change promotes the
-   layer before the first frames, the same reason the splash bar carries it. */
-@keyframes vendi-stack-in {
-  from { transform: translate3d(100%, 0, 0); }
-  to { transform: translate3d(0, 0, 0); }
+/* Page zoom: the new page zooms in over the previous page (220ms ease-out,
+   scale 0.96→1 + opacity 0→1). Used for stack-managed forward navigations
+   AND back-to-kept reveals, so every page arrival feels uniform. Kept-tab
+   reveals stay instant (plain div, native tab behaviour); the keyframe
+   fallback stays plain too (robustness over uniformity on that rare path). */
+@keyframes vendi-zoom-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
 }
-.vendi-stack-in {
-  animation: vendi-stack-in 300ms ease-out;
+.vendi-zoom-in {
+  animation: vendi-zoom-in 220ms ease-out forwards;
   will-change: transform;
-  backface-visibility: hidden;
 }
 
-/* Reduced motion: no slide anywhere, at the CSS level as well as the JS check. */
+/* Outgoing page receding: shrinks + fades over the same 220ms the
+   entering page zooms in (forward underlay only). Paired with
+   vendi-zoom-in, the two move together as a depth transition instead
+   of the old page sitting static and fully visible while the new one
+   starts small. Dropped at settle (300ms), after the animation ends. */
+@keyframes vendi-zoom-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.96); }
+}
+.vendi-zoom-out {
+  animation: vendi-zoom-out 220ms ease-out forwards;
+  will-change: transform;
+}
+
+/* Reduced motion: no animation anywhere, at the CSS level as well as the JS check. */
 @media (prefers-reduced-motion: reduce) {
-  .vendi-page-in-forward,
-  .vendi-page-in-back,
   .vendi-step-in-forward,
   .vendi-step-in-back,
-  .vendi-stack-in {
+  .vendi-zoom-in,
+  .vendi-zoom-out {
     animation: none !important;
   }
 }

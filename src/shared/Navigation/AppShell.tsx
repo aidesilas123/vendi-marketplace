@@ -1,13 +1,13 @@
 "use client";
 // src/shared/Navigation/AppShell.tsx
 
-import React, { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { isBackNavigation } from '@/shared/hooks/useScrollRestore';
-import { StackContext, StackUnderlay, FeedLoaderOverlay, findPageScroller } from './StackOverlay';
+import { StackContext, StackUnderlay, findPageScroller } from './StackOverlay';
 import type { StackMode } from './StackOverlay';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
@@ -33,7 +33,7 @@ const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : use
 type KeptEntry = { pathname: string; element: React.ReactNode };
 type StackTransition =
   | { kind: 'forward'; underlay: React.ReactNode; underlayScroll: number }
-  | { kind: 'feed-loader' };
+  | { kind: 'back-zoom' };
 
 const PAGE_TITLES: Record<string, string> = {
   chats: 'Messages',
@@ -392,35 +392,27 @@ export const AppShell = ({ children }: AppShellProps) => {
     };
   }, [router]);
 
-  // Drop transition overlays after their animation: 300ms covers the 180ms
-  // forward fade and the 16ms + 180ms back fade-out, both finished well
-  // inside it. The fade's forwards fill holds the final opacity, so even
-  // a late settle can't blank the page. Cleanup on the next navigation
-  // so a rapid tap can't leave a stale overlay up.
+  // Drop transition overlays after their animation: 300ms covers the 220ms
+  // forward zoom and the 220ms back zoom, both finished well inside it.
+  // The zoom's forwards fill holds the final state, so even a late settle
+  // can't blank the page. Cleanup on the next navigation so a rapid tap
+  // can't leave a stale overlay up. The back-zoom marker (no overlay)
+  // exists so settle runs for back reveals too — without it, settle
+  // would early-return on the null transition and the zoom class +
+  // guard would linger.
   // Settling matters as much as dropping the overlay: the enter class +
   // z-10 must not linger on the current page. Settled renders plain.
   useEffect(() => {
     if (!transitionRef.current) return;
-    // The feed loader clears itself (holds 300ms, fades 300ms, then calls
-    // back); the 300ms drop below would cut its fade short.
-    if (transitionRef.current.kind === 'feed-loader') return;
     const id = setTimeout(() => {
       transitionRef.current = null;
-      if (stackModeRef.current === 'stack-enter' || stackModeRef.current === 'stack-reveal') {
+      if (stackModeRef.current === 'stack-enter' || stackModeRef.current === 'stack-reveal' || stackModeRef.current === 'stack-back') {
         stackModeRef.current = 'stack-settled';
       }
       setStackTick((v) => v + 1);
     }, 300);
     return () => clearTimeout(id);
   }, [pathname]);
-
-  // Feed-loader completion: drop the overlay and settle the mode. Stable
-  // (useCallback) so the overlay's timers don't reset on re-renders.
-  const handleFeedLoaderDone = useCallback(() => {
-    transitionRef.current = null;
-    stackModeRef.current = 'stack-settled';
-    setStackTick((v) => v + 1);
-  }, []);
 
   // Stack-managed scroll. PageTransition's own scroll-to-top is gated off in
   // stack modes, so this owns it — layout effect, before paint, no flash.
@@ -433,7 +425,7 @@ export const AppShell = ({ children }: AppShellProps) => {
     if (!main) return;
     if (stackModeRef.current === 'stack-enter') {
       main.scrollTop = 0;
-    } else if (stackModeRef.current === 'stack-reveal') {
+    } else if (stackModeRef.current === 'stack-reveal' || stackModeRef.current === 'stack-back') {
       const w = wrapperRefs.current.get(pathname ?? '');
       const scroller = findPageScroller(w ?? null, main);
       if (scroller) scroller.scrollTop = savedScrollRef.current[pathname ?? ''] ?? 0;
@@ -442,7 +434,7 @@ export const AppShell = ({ children }: AppShellProps) => {
 
   // ---- Page-stack transition, computed during render ----
   // Shell-to-shell navigations only; anything else clears the stack and
-  // falls back to PageTransition's keyframe slide, exactly as before.
+  // falls back to PageTransition's plain div (no animation, never stuck).
   // Note: query-only changes (?receipt=, ?topup=) don't change pathname, so
   // they skip this entirely — the wallet's own overlay markers are untouched.
   let stackMode: StackMode;
@@ -465,47 +457,43 @@ export const AppShell = ({ children }: AppShellProps) => {
     if (from && fromEl && fromShell && showShell) {
       const keptMatch = stackEntriesRef.current.find((e) => e.pathname === pathname);
       const back = isBackNavigation(pathname);
-      if (back && pathname === '/') {
-        // Back to the feed uses the loader instead of a slide (Aide's
-        // call): the kept feed is revealed beneath an opaque loader that
-        // holds 300ms then fades over 300ms — no slide-out cover, no
-        // slide-in. Reveal mode still restores the feed's scroll, and the
-        // outgoing page is dropped exactly as in a normal back-to-kept.
-        // (Forward taps to the feed tab still slide in; only BACK changes.)
-        stackMode = 'stack-reveal';
-        transition = { kind: 'feed-loader' };
-        renderKept = [];
-        renderCurrent = keptMatch ? keptMatch.element : children;
-      } else if (keptMatch && back) {
-        // Back to a kept page: reveal it instantly, no overlay. The kept
-        // page is already mounted and painted, so it simply appears —
-        // exactly like a tab tap. The old sliding snapshot over it is
-        // gone: that snapshot (a fresh mount, misaligned by the missing
-        // top inset) is what read as the same page sliding out on
-        // itself instead of the current page sliding out. Back-to-feed
-        // still uses the loader (below); scroll is still restored.
-        stackMode = 'stack-reveal';
-        transition = null;
+      if (keptMatch && back) {
+        // Back to a kept page: the kept page zooms in (stack-back mode,
+        // same vendi-zoom-in as forward) — visible and uniform with
+        // forward, no overlay sliding out over it. The kept page is
+        // already mounted and painted; scroll is still restored.
+        // transition 'back-zoom' renders NO overlay: it is only a settle
+        // marker, so the settle timer runs and drops the zoom class +
+        // guard at 300ms (without a non-null transition, settle would
+        // early-return and the zoom transform would linger). Outgoing
+        // is dropped. Back to feed uses this same branch (no loader).
+        stackMode = 'stack-back';
+        transition = { kind: 'back-zoom' };
         renderKept = [];
         renderCurrent = keptMatch.element;
       } else if (keptMatch) {
-        // Forward tap back to a kept tab: reveal it instantly, no slide.
-        // The kept page is already mounted and painted — sliding it in
-        // from the right reads as a repeat ("shows, then slides on
-        // itself"). Tabs switch like native tab bars: instant, scroll
-        // restored (reveal mode), outgoing page kept for the way back.
+        // Forward tap back to a kept tab: reveal it instantly, no animation.
+        // The kept page is already mounted and painted — animating it in
+        // reads as a repeat ("shows, then slides on itself"). Tabs switch
+        // like native tab bars: instant, scroll restored (reveal mode),
+        // outgoing page kept for the way back.
         stackMode = 'stack-reveal';
         transition = null;
         renderKept = [{ pathname: from, element: fromEl }];
         renderCurrent = keptMatch.element;
       } else if (back) {
-        // Back to a page that isn't kept (two-step back): today's behavior.
-        stackMode = 'stack-none';
-        transition = null;
+        // Back to a page that isn't kept (two-step back, or back to feed
+        // after a longer chain dropped it): fresh mount, but still zooms
+        // (stack-back + settle marker) so every back nav zooms, not just
+        // kept ones. Scroll restores from the last saved position for
+        // this route (or top if never visited) — better than leaving
+        // the outgoing page's scroll in place, which plain mode did.
+        stackMode = 'stack-back';
+        transition = { kind: 'back-zoom' };
         renderKept = [];
         renderCurrent = children;
       } else {
-        // Forward to a new page: keep `from` (depth 1), slide in over its
+        // Forward to a new page: keep `from` (depth 1), zoom in over its
         // snapshot.
         stackMode = 'stack-enter';
         transition = { kind: 'forward', underlay: fromEl, underlayScroll: savedScrollRef.current[from] ?? 0 };
@@ -610,10 +598,6 @@ export const AppShell = ({ children }: AppShellProps) => {
           scrollTop={transition.underlayScroll}
         />
       )}
-      {transition?.kind === 'feed-loader' && (
-        <FeedLoaderOverlay onDone={handleFeedLoaderDone} />
-      )}
-
       <div className="absolute bottom-0 left-0 right-0 w-full z-50 pointer-events-none">
         <div className="pointer-events-auto">
           <BottomNav />
