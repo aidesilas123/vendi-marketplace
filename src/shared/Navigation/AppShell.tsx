@@ -7,7 +7,7 @@ import { supabase } from '@/lib/supabase';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { isBackNavigation } from '@/shared/hooks/useScrollRestore';
-import { StackContext, StackUnderlay, StackBackOverlay, FeedLoaderOverlay, findPageScroller } from './StackOverlay';
+import { StackContext, StackUnderlay, FeedLoaderOverlay, findPageScroller } from './StackOverlay';
 import type { StackMode } from './StackOverlay';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
@@ -33,7 +33,6 @@ const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : use
 type KeptEntry = { pathname: string; element: React.ReactNode };
 type StackTransition =
   | { kind: 'forward'; underlay: React.ReactNode; underlayScroll: number }
-  | { kind: 'back'; snapshot: React.ReactNode; snapshotScroll: number }
   | { kind: 'feed-loader' };
 
 const PAGE_TITLES: Record<string, string> = {
@@ -102,6 +101,55 @@ export const AppShell = ({ children }: AppShellProps) => {
   // only reacts to the browser's online/offline events and misses the
   // bad-but-not-dead network case — the toast covers that gap.
   const netStateRef = useRef({ offline: false, slow: false });
+
+  // Safe-area insets surviving a full page reload: MainActivity bridges
+  // --native-sat/--native-sab via an insets listener that only fires on
+  // inset CHANGES (plus a forced dispatch in onStart). A full WebView
+  // reload (e.g. the error page's Reload button) recreates the document
+  // WITHOUT restarting the Activity, so onStart doesn't run, no inset
+  // change fires, and the vars reset to 0 — every header then sits under
+  // the status bar. Fixed here, not natively: overriding Capacitor's
+  // WebViewClient to re-inject on load would break the bridge, so instead
+  // persist the last native values this app saw, restore them on mount
+  // before paint if native hasn't set them yet, and keep saving whenever
+  // native updates them. On a fresh launch native sets the true values
+  // (onStart) so the restore is a no-op; on a reload it fills the gap.
+  useIsoLayoutEffect(() => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    const read = (name: string) => getComputedStyle(root).getPropertyValue(name).trim();
+    const save = () => {
+      try {
+        const sat = read('--native-sat');
+        const sab = read('--native-sab');
+        // Only save real values: an empty/0 top inset means native hasn't
+        // reported yet (saving it would persist the broken state). Bottom
+        // may legitimately be 0 (gesture nav), so save it whenever present.
+        if (sat && sat !== '0px') localStorage.setItem('vendi-native-sat', sat);
+        if (sab) localStorage.setItem('vendi-native-sab', sab);
+      } catch { /* storage unavailable — native values still apply */ }
+    };
+    try {
+      // Restore before paint if native hasn't set them yet (reload case).
+      // Top restores even from a reported 0 (a status bar always exists);
+      // bottom restores only when unset (0 is valid for gesture nav).
+      if (!read('--native-sat') || read('--native-sat') === '0px') {
+        const sat = localStorage.getItem('vendi-native-sat');
+        if (sat) root.style.setProperty('--native-sat', sat);
+      }
+      if (!read('--native-sab')) {
+        const sab = localStorage.getItem('vendi-native-sab');
+        if (sab) root.style.setProperty('--native-sab', sab);
+      }
+    } catch { /* ignore */ }
+    save();
+    // Keep stored values fresh whenever native updates them (rotation,
+    // nav-mode switch): native writes via inline style on documentElement.
+    const observer = new MutationObserver(save);
+    observer.observe(root, { attributes: true, attributeFilter: ['style'] });
+    return () => observer.disconnect();
+  }, []);
+
   useEffect(() => {
     const isSlow = () => {
       const et = (navigator as Navigator & { connection?: { effectiveType?: string } }).connection?.effectiveType;
@@ -429,10 +477,15 @@ export const AppShell = ({ children }: AppShellProps) => {
         renderKept = [];
         renderCurrent = keptMatch ? keptMatch.element : children;
       } else if (keptMatch && back) {
-        // Back to a kept page: reveal it (already mounted, already painted)
-        // while the outgoing page's snapshot slides out over it.
+        // Back to a kept page: reveal it instantly, no overlay. The kept
+        // page is already mounted and painted, so it simply appears —
+        // exactly like a tab tap. The old sliding snapshot over it is
+        // gone: that snapshot (a fresh mount, misaligned by the missing
+        // top inset) is what read as the same page sliding out on
+        // itself instead of the current page sliding out. Back-to-feed
+        // still uses the loader (below); scroll is still restored.
         stackMode = 'stack-reveal';
-        transition = { kind: 'back', snapshot: fromEl, snapshotScroll: savedScrollRef.current[from] ?? 0 };
+        transition = null;
         renderKept = [];
         renderCurrent = keptMatch.element;
       } else if (keptMatch) {
@@ -555,16 +608,6 @@ export const AppShell = ({ children }: AppShellProps) => {
               : transition.underlay
           }
           scrollTop={transition.underlayScroll}
-        />
-      )}
-      {transition?.kind === 'back' && (
-        <StackBackOverlay
-          element={
-            React.isValidElement(transition.snapshot)
-              ? React.cloneElement(transition.snapshot as React.ReactElement<{ stackStatic?: boolean }>, { stackStatic: true })
-              : transition.snapshot
-          }
-          scrollTop={transition.snapshotScroll}
         />
       )}
       {transition?.kind === 'feed-loader' && (

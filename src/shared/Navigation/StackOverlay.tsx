@@ -12,19 +12,19 @@ import { VendiLoader } from '@/shared/VendiLoader';
  * way back. This module gives App Router pages the same treatment, capped at
  * depth 1 (only the immediately previous page is kept):
  *
- *  - Forward: the new page mounts in main and slides in from the right
- *    (vendi-stack-in, 300ms ease-out — the wallet's timing) over a static
- *    snapshot of the previous page. The snapshot lives 300ms, then drops.
- *  - Back to a kept page: the kept page is unhidden in main (already painted,
- *    state intact) while a snapshot of the outgoing page slides out to the
- *    right over 280ms (the wallet's close timing), then drops.
+ *  - Forward: the new page mounts in main and fades in (vendi-fade-in,
+ *    180ms opacity only) over a static snapshot of the previous page.
+ *    The snapshot lives 300ms, then drops.
+ *  - Back to a kept page: the kept page is unhidden in main (already
+ *    painted, state intact) and simply appears — no overlay slides out
+ *    over it. The old sliding snapshot is removed: it read as the same
+ *    page sliding out on itself instead of the current page sliding out.
+ *  - Back to the feed: an opaque loader holds, then fades (see below).
  *  - Anything else (back to a page that isn't kept, leaving the shell):
- *    falls back to PageTransition's keyframe slide, exactly as before.
+ *    falls back to PageTransition's plain div (no animation, never stuck).
  *
  * Stacking, all below the bottom nav (z-50) so the nav never blinks:
  *  - forward underlay: z-[5] (below the entering page's z-10 wrapper)
- *  - back snapshot overlay: z-[45] (above page content and the dashboard
- *    header at z-40, below the nav)
  * The entering page's wrapper carries `relative z-10` (see PageTransition).
  */
 
@@ -87,7 +87,12 @@ function SnapshotShell({
       ref={setScroll}
       aria-hidden
       className={className}
-      style={{ paddingBottom: 'calc(6rem + var(--sab))' }}
+      // Bottom inset lifts the snapshot above the nav (same as the real
+      // page's main padding). Top inset is just as important: real pages
+      // sit below AppShell's pt-safe, so without it the snapshot's heading
+      // starts under the status bar and appears to slide down to its real
+      // position when the snapshot drops.
+      style={{ paddingTop: 'var(--sat)', paddingBottom: 'calc(6rem + var(--sab))' }}
     >
       <div className="max-w-[1600px] mx-auto w-full px-4 md:px-8">{element}</div>
     </div>
@@ -101,28 +106,6 @@ export function StackUnderlay({ element, scrollTop }: { element: React.ReactNode
       element={element}
       scrollTop={scrollTop}
       className="fixed inset-0 z-[5] overflow-y-auto bg-gray-50 dark:bg-background"
-    />
-  );
-}
-
-/** Back snapshot: the outgoing page, sliding out to the right over the
- *  revealed kept page. Same enter/close choreography as the wallet's
- *  FullScreenPage: mount at x-0, slide out over 280ms once mounted. */
-export function StackBackOverlay({ element, scrollTop }: { element: React.ReactNode; scrollTop: number }) {
-  const [leaving, setLeaving] = useState(false);
-
-  useEffect(() => {
-    const id = setTimeout(() => setLeaving(true), 16);
-    return () => clearTimeout(id);
-  }, []);
-
-  return (
-    <SnapshotShell
-      element={element}
-      scrollTop={scrollTop}
-      className={`fixed inset-0 z-[45] overflow-y-auto bg-gray-50 dark:bg-background transition-transform duration-[280ms] ease-out ${
-        leaving ? 'translate-x-full' : 'translate-x-0'
-      }`}
     />
   );
 }
