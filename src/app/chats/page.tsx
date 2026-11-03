@@ -196,7 +196,6 @@ export default function DealRoomChat() {
   const waveformCacheRef = useRef<Record<string, number[]>>({});
 
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const [partnerInfo, setPartnerInfo] = useState<any>(null);
   const [isPartnerOnline, setIsPartnerOnline] = useState(false);
   const [partnerLastSeen, setPartnerLastSeen] = useState<string | null>(null);
   const [txData, setTxData] = useState<any>(null);
@@ -279,6 +278,33 @@ export default function DealRoomChat() {
     revalidateOnFocus: false,
     dedupingInterval: 20000,
   });
+
+  // Partner header (name/avatar above the chat) loads through SWR, not
+  // the init effect: on a recent revisit the cached profile renders
+  // instantly instead of resetting to "Loading..." on every mount and
+  // refetching. Profile data rarely changes, so a 60s dedupe + no
+  // focus refetch keeps revisits instant; background revalidation
+  // updates it without ever blanking the header. On error, returns
+  // null (header falls back to "Loading..." as before, never crashes).
+  const { data: partnerInfo } = useSWR(
+    partnerId ? ['chat-partner', partnerId] : null,
+    async ([, id]: string[]) => {
+      const { data, error } = await supabase
+        .from('users')
+        .select('id, full_name, avatar_url, is_verified')
+        .eq('id', id)
+        .single();
+      if (error) {
+        console.warn("[Chat] Could not load the other user's profile (usually an RLS policy blocking reads of other users' rows):", error.message);
+        return null;
+      }
+      return data;
+    },
+    {
+      dedupingInterval: 60000,
+      revalidateOnFocus: false,
+    }
+  );
   const [optimisticMsgs, setOptimisticMsgs] = useState<any[]>([]);
   const messages = useMemo(() => {
     const server = serverMessages ?? [];
@@ -462,18 +488,8 @@ export default function DealRoomChat() {
           if (!cancelled && txRecord) setTxData(txRecord);
         }
 
-        if (partnerId) {
-          const { data: partnerData, error: partnerError } = await supabase
-            .from('users')
-            .select('id, full_name, avatar_url, is_verified')
-            .eq('id', partnerId)
-            .single();
-
-          if (partnerError) {
-            console.warn("[Chat] Could not load the other user's profile (usually an RLS policy blocking reads of other users' rows):", partnerError.message);
-          }
-          if (!cancelled && partnerData) setPartnerInfo(partnerData);
-        }
+        // Partner header is loaded by SWR (see the chat-partner hook
+        // above) — no manual fetch here, so revisits render from cache.
 
         // History is loaded by SWR (see fetchHistory above) — no manual fetch here.
 
@@ -2652,11 +2668,35 @@ export default function DealRoomChat() {
         )}
       </div>
 
-      {/* Initial loading overlay — same PullSpinner as the inbox */}
+      {/* Initial loading detail skeleton — replaces the "Loading chat…"
+          spinner. A spinner gave no sense of the page arriving (and hid
+          the transition, since the content popped in after it finished);
+          a skeleton shaped like the chat detail (header, bubbles,
+          composer) reads as the page itself loading in place. */}
       {(!currentUser || historyLoading) && !initError && (
-        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-3 bg-[#e5ddd5] dark:bg-background">
-          <PullSpinner spinning size={36} />
-          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Loading chat…</p>
+        <div className="absolute inset-0 z-[60] flex flex-col gap-3 bg-[#e5ddd5] p-4 dark:bg-background">
+          {/* Header skeleton: avatar + name/status bars */}
+          <div className="flex items-center gap-2">
+            <div className="h-10 w-10 shrink-0 rounded-full bg-black/10 animate-pulse dark:bg-white/10" />
+            <div className="flex flex-col gap-1.5">
+              <div className="h-4 w-32 rounded bg-black/10 animate-pulse dark:bg-white/10" />
+              <div className="h-3 w-20 rounded bg-black/10 animate-pulse dark:bg-white/10" />
+            </div>
+          </div>
+          {/* Bubble skeletons, stacked at the bottom like a real chat */}
+          <div className="flex flex-1 flex-col justify-end gap-3">
+            <div className="h-10 w-3/5 self-start rounded-2xl bg-black/10 animate-pulse dark:bg-white/10" />
+            <div className="h-10 w-2/5 self-end rounded-2xl bg-orange-500/10 animate-pulse" />
+            <div className="h-14 w-1/2 self-start rounded-2xl bg-black/10 animate-pulse dark:bg-white/10" />
+            <div className="h-10 w-2/3 self-end rounded-2xl bg-orange-500/10 animate-pulse" />
+            <div className="h-10 w-1/3 self-start rounded-2xl bg-black/10 animate-pulse dark:bg-white/10" />
+            <div className="h-10 w-1/2 self-end rounded-2xl bg-orange-500/10 animate-pulse" />
+          </div>
+          {/* Composer skeleton: input bar + send button */}
+          <div className="flex items-center gap-2">
+            <div className="h-11 flex-1 rounded-full bg-black/10 animate-pulse dark:bg-white/10" />
+            <div className="h-11 w-11 shrink-0 rounded-full bg-orange-500/10 animate-pulse" />
+          </div>
         </div>
       )}
 

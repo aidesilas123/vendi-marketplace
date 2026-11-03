@@ -265,12 +265,36 @@ html {
   will-change: transform;
 }
 
+/* Drill-in slide for messages ↔ chats only: inbox → room slides in from
+   the right, room → inbox from the left. Slightly longer than the zoom
+   (280ms) because a full-width slide needs more time to read as smooth
+   rather than abrupt. Same fade as the zoom, so it never pops in hard.
+   The local 300ms settle drops the class after the animation ends. */
+@keyframes vendi-slide-in-right {
+  from { opacity: 0; transform: translateX(100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.vendi-slide-in-right {
+  animation: vendi-slide-in-right 280ms ease-out forwards;
+  will-change: transform;
+}
+@keyframes vendi-slide-in-left {
+  from { opacity: 0; transform: translateX(-100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.vendi-slide-in-left {
+  animation: vendi-slide-in-left 280ms ease-out forwards;
+  will-change: transform;
+}
+
 /* Reduced motion: no animation anywhere, at the CSS level as well as the JS check. */
 @media (prefers-reduced-motion: reduce) {
   .vendi-step-in-forward,
   .vendi-step-in-back,
   .vendi-zoom-in,
-  .vendi-shrink-in {
+  .vendi-shrink-in,
+  .vendi-slide-in-right,
+  .vendi-slide-in-left {
     animation: none !important;
   }
 }

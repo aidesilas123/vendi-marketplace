@@ -11,7 +11,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { IonIcon } from '@ionic/react';
 import { Clipboard } from '@capacitor/clipboard';
 import {
@@ -71,7 +71,8 @@ function ClientIcon({ icon, className }: { icon: string; className?: string }) {
 }
 
 export default function WalletDashboard() {
-  const { wallet, transactions, error, isLoading, isValidating, refresh } = useWallet();
+  const router = useRouter();
+  const { wallet, transactions, error, isLoading, isValidating, isRetrying, userId, refresh } = useWallet();
 
   const [showBalance, setShowBalance] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -82,9 +83,20 @@ export default function WalletDashboard() {
   const [reloading, setReloading] = useState(false);
   const lastErrorRef = useRef('');
 
+  // If the user is definitely signed out, route to login once auth resolution settles
   useEffect(() => {
-    const stored = localStorage.getItem('vendi_show_balance');
-    if (stored !== null) setShowBalance(stored === 'true');
+    if (userId === null) {
+      router.replace('/login?redirect=/wallet');
+    }
+  }, [userId, router]);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('vendi_show_balance');
+      if (stored !== null) setShowBalance(stored === 'true');
+    } catch {
+      /* storage unavailable or blocked */
+    }
   }, []);
 
   const [topupDragY, setTopupDragY] = useState(0);
@@ -271,7 +283,7 @@ export default function WalletDashboard() {
     // may succeed a second later, and a premature error toast is what made
     // a blip feel like being offline. Clear the dedupe flag so the toast
     // still fires once if retries exhaust with the same message.
-    if (isValidating) {
+    if (isValidating || isRetrying) {
       lastErrorRef.current = '';
       return;
     }
@@ -279,7 +291,7 @@ export default function WalletDashboard() {
     if (message === lastErrorRef.current) return;
     lastErrorRef.current = message;
     showGlobalToast(message, 'error');
-  }, [error, isValidating]);
+  }, [error, isValidating, isRetrying]);
 
   const reload = async () => {
     if (reloading) return;
@@ -297,19 +309,25 @@ export default function WalletDashboard() {
   // wallet, where there is nothing to fall back on) must not sit on the error
   // panel until the user finds Retry: retry once automatically. Guarded by a
   // ref so a persistent failure never loops; the Retry button stays as the
-  // fallback for anything the single retry doesn't fix.
+  // fallback for anything the single retry doesn't fix. Gated on
+  // !(isValidating || isRetrying) so this is a true attempt AFTER SWR's retries
+  // exhaust — firing during SWR retries would just duplicate them.
   const autoRetriedRef = useRef(false);
   useEffect(() => {
-    if (wallet || isLoading || !error || autoRetriedRef.current) return;
+    if (wallet || isLoading || isValidating || isRetrying || !error || autoRetriedRef.current) return;
     autoRetriedRef.current = true;
     void reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wallet, isLoading, error]);
+  }, [wallet, isLoading, error, isValidating, isRetrying]);
 
   const toggleBalance = () => {
     const next = !showBalance;
     setShowBalance(next);
-    localStorage.setItem('vendi_show_balance', String(next));
+    try {
+      localStorage.setItem('vendi_show_balance', String(next));
+    } catch {
+      /* storage unavailable or blocked */
+    }
   };
 
   const handleCopyAccount = async () => {
@@ -341,8 +359,11 @@ export default function WalletDashboard() {
   };
 
   const balanceText = showBalance ? formatNaira(wallet?.balance ?? 0) : '₦ ••••••';
-  const showSkeleton = (isLoading || reloading) && !wallet;
-  const hasNothingToShow = !wallet && !isLoading;
+  // Skeleton while loading, reloading, validating, or during pending retries.
+  // The error panel ONLY appears when loading and retries have completely exhausted
+  // AND an actual error was caught.
+  const showSkeleton = (isLoading || reloading || isValidating || isRetrying) && !wallet;
+  const hasError = !wallet && !showSkeleton && Boolean(error);
 
   return (
     <>
@@ -358,7 +379,7 @@ export default function WalletDashboard() {
           {/* ------------------------------ Balance ------------------------------ */}
           {showSkeleton ? (
             <div className="h-48 animate-pulse rounded-3xl bg-orange-50 dark:bg-orange-500/10" />
-          ) : hasNothingToShow ? (
+          ) : hasError ? (
             <div className="rounded-3xl bg-orange-50 px-6 py-12 text-center dark:bg-orange-500/10">
               <p className="text-base font-bold">We couldn&apos;t load your wallet</p>
               <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Check your connection and try again.</p>
@@ -452,6 +473,8 @@ export default function WalletDashboard() {
             <div className="mt-2">
               {showSkeleton ? (
                 <TransactionListSkeleton />
+              ) : hasError ? (
+                <p className="text-center py-6 text-xs text-gray-400">Could not load transactions</p>
               ) : (
                 <TransactionList txs={transactions} limit={3} onSelect={openReceipt} />
               )}

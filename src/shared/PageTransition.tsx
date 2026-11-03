@@ -35,32 +35,43 @@ export const PageTransition = ({
     []
   );
 
-  // Self-contained zoom for navigations the stack can't reach: auth
+  // Self-contained animation for navigations the stack can't reach: auth
   // pages, the /chats room, and any shell boundary all render with
   // stack-none (AppShell returns them bare, no settle marker), so the
-  // stack branches below never fire for them. This covers them with
-  // the same zoom, direction-matched (back shrinks in, forward grows
-  // out — see the render branches): on a pathname change that is NOT
-  // the first mount, zoom in, then drop the class + guard after 300ms
-  // (local settle — the stack's settle never runs for stack-none). Keyed by
-  // pathname so the animation restarts cleanly on every nav (pagePath
-  // is undefined outside the shell). First mount never zooms (prev is
-  // null) — the app must not animate its first paint. Shell navigations
-  // never reach this (stackMode is enter/back/reveal there, not none),
-  // so a page can never zoom twice. Same-pathname changes (query params,
-  // e.g. switching chat rooms) don't zoom either — that's a content
-  // change, not a page nav.
+  // stack branches below never fire for them. This covers them: the
+  // messages ↔ chats drill-in slides (inbox → room from the right,
+  // room → inbox from the left), everything else uses the directional
+  // zoom (back shrinks in, forward grows out). On a pathname change
+  // that is NOT the first mount, animate, then drop the class + guard
+  // after 300ms (local settle — the stack's settle never runs for
+  // stack-none). Keyed by pathname so the animation restarts cleanly
+  // on every nav (pagePath is undefined outside the shell). First mount
+  // never animates (prev is null) — the app must not animate its first
+  // paint. Shell navigations never reach this (stackMode is
+  // enter/back/reveal there, not none), so a page can never animate
+  // twice. Same-pathname changes (query params, e.g. switching chat
+  // rooms) don't animate either — that's a content change, not a
+  // page nav.
   const prevPathRef = useRef<string | null>(null);
-  const [shellFreeZoom, setShellFreeZoom] = useState(false);
+  const [shellFreeAnim, setShellFreeAnim] = useState<null | 'zoom-in' | 'shrink-in' | 'slide-right' | 'slide-left'>(null);
   useEffect(() => {
     const prev = prevPathRef.current;
     prevPathRef.current = pathname;
     if (prev === null || prev === pathname) return;
     if (stackMode !== 'stack-none') return;
-    setShellFreeZoom(true);
-    const id = setTimeout(() => setShellFreeZoom(false), 300);
+    // Messages ↔ chats slides instead of zooming: the zoom wasn't visible
+    // here because the room showed a spinner while it played, then the
+    // content popped in after it finished. A drill-in slide reads as
+    // depth (list → detail) where a zoom read as nothing.
+    const isChatNav =
+      (prev === '/messages' && pathname === '/chats') ||
+      (prev === '/chats' && pathname === '/messages');
+    setShellFreeAnim(
+      isChatNav ? (isBack ? 'slide-left' : 'slide-right') : isBack ? 'shrink-in' : 'zoom-in'
+    );
+    const id = setTimeout(() => setShellFreeAnim(null), 300);
     return () => clearTimeout(id);
-  }, [pathname, stackMode]);
+  }, [pathname, stackMode, isBack]);
 
   // Scroll to top whenever a NEW page arrives. Back navigations skip this:
   // scroll restore owns the position there.
@@ -144,18 +155,26 @@ export const PageTransition = ({
     );
   }
 
-  // Self-contained zoom for non-shell navigations (auth pages, the
-  // /chats room, shell boundaries — see the effect above). Direction
-  // matches the stack: back shrinks in, forward grows out, same
-  // 220ms + fade. The local 300ms timer drops class + guard. Safe if
-  // the timer ever fails: the animation's forwards fill holds the
-  // final state (opacity 1, scale 1), which beats the inline guard,
-  // so the page can never stick invisible.
-  if (shellFreeZoom) {
+  // Self-contained animation for non-shell navigations (auth pages, the
+  // /chats room, shell boundaries — see the effect above): messages ↔
+  // chats slides, everything else uses the directional zoom (back
+  // shrinks, forward grows). The local 300ms timer drops class + guard.
+  // Safe if the timer ever fails: the animation's forwards fill holds
+  // the final state (opacity 1, scale/translate at rest), which beats
+  // the inline guard, so the page can never stick invisible.
+  if (shellFreeAnim) {
+    const animClass =
+      shellFreeAnim === 'slide-right'
+        ? 'vendi-slide-in-right'
+        : shellFreeAnim === 'slide-left'
+          ? 'vendi-slide-in-left'
+          : shellFreeAnim === 'shrink-in'
+            ? 'vendi-shrink-in'
+            : 'vendi-zoom-in';
     return (
       <div
         key={pathname}
-        className={`w-full min-h-full ${isBack ? 'vendi-shrink-in' : 'vendi-zoom-in'}`}
+        className={`w-full min-h-full ${animClass}`}
         style={{ opacity: 0 }}
       >
         {children}

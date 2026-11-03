@@ -3,7 +3,7 @@
 // src/features/wallet/useWallet.ts
 // SWR hooks for the wallet page: cached per user, background revalidation, optional realtime.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import useSWR from 'swr';
 import { supabase } from '@/lib/supabase';
 import { callEdge } from './walletApi';
@@ -33,12 +33,28 @@ export function useSessionUserId() {
 
   useEffect(() => {
     let active = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (active) setUserId(data.session?.user.id ?? null);
-    });
+
+    // onAuthStateChange is the definitive real-time authority in Supabase v2.
+    // 'INITIAL_SESSION' fires as soon as the client has resolved local storage.
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUserId(session?.user.id ?? null);
+      if (active) setUserId(session?.user.id ?? null);
     });
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      if (data.session?.user.id) {
+        setUserId(data.session.user.id);
+      } else {
+        // If getSession returns null initially (e.g. storage async restore in progress),
+        // give onAuthStateChange a moment to fire INITIAL_SESSION before claiming signed out.
+        setTimeout(() => {
+          if (active) {
+            setUserId((prev) => (prev === undefined ? null : prev));
+          }
+        }, 200);
+      }
+    });
+
     return () => {
       active = false;
       sub.subscription.unsubscribe();
@@ -70,11 +86,24 @@ async function fetchWalletData(userId: string): Promise<WalletData> {
     .select('*')
     .eq('user_id', userId)
     .maybeSingle();
-  if (error) throw new Error(error.message);
+  if (error) {
+    // Logged (not just thrown): until now a wallet failure left nothing
+    // in the console — only the generic panel — so a first-visit failure
+    // could never be traced to its step. The step tag tells which query
+    // or edge call failed; the message tells why (network, session,
+    // RLS, edge status).
+    console.error('[wallet] wallets query failed:', error.message);
+    throw new Error(error.message);
+  }
 
   let wallet = data as Wallet | null;
   if (!wallet) {
-    wallet = await createWalletOnce(userId);
+    try {
+      wallet = await createWalletOnce(userId);
+    } catch (e) {
+      console.error('[wallet] create-wallet failed:', e instanceof Error ? e.message : e);
+      throw e;
+    }
   } else if (!wallet.virtual_account_number) {
     // Row exists but the virtual account was never provisioned (e.g. created
     // before virtual accounts existed, or Monnify was down at creation).
@@ -87,22 +116,40 @@ async function fetchWalletData(userId: string): Promise<WalletData> {
   }
 
   // wallet_id OR user_id: a row written without a wallet_id still shows up.
-  const txFilter = wallet?.id
-    ? `wallet_id.eq.${wallet.id},user_id.eq.${userId}`
-    : `user_id.eq.${userId}`;
-  const { data: txs, error: txError } = await supabase
-    .from('transactions')
-    .select('*')
-    .or(txFilter)
-    .order('created_at', { ascending: false })
-    .limit(100);
-  if (txError) throw new Error(txError.message);
+  // We keep wallet balance visible even if transactions query experiences a hiccup.
+  let transactions: WalletTx[] = [];
+  try {
+    const txFilter = wallet?.id
+      ? `wallet_id.eq.${wallet.id},user_id.eq.${userId}`
+      : `user_id.eq.${userId}`;
+    const { data: txs, error: txError } = await supabase
+      .from('transactions')
+      .select('*')
+      .or(txFilter)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (txError) {
+      console.warn('[wallet] transactions query failed, continuing with empty list:', txError.message);
+    } else {
+      transactions = (txs ?? []) as WalletTx[];
+    }
+  } catch (err) {
+    console.warn('[wallet] transactions query threw:', err);
+  }
 
-  return { wallet: wallet ?? null, transactions: (txs ?? []) as WalletTx[] };
+  return { wallet: wallet ?? null, transactions };
 }
 
 export function useWallet() {
   const userId = useSessionUserId();
+  const [isRetrying, setIsRetrying] = useState(false);
+  const retryTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
+  }, []);
 
   const { data, error, isLoading, isValidating, mutate } = useSWR<WalletData>(
     userId ? ['wallet', userId] : null,
@@ -120,9 +167,25 @@ export function useWallet() {
       // real failure, not a blip. Bounded, never a loop; auth errors
       // fail fast through the same 3 attempts and surface as before.
       shouldRetryOnError: true,
-      onErrorRetry: (_error, _key, _config, revalidate, { retryCount }) => {
-        if (retryCount >= 3) return;
-        setTimeout(() => revalidate({ retryCount }), 1000 * (retryCount + 1));
+      onErrorRetry: (err, _key, _config, revalidate, { retryCount }) => {
+        // Logged per attempt: without this, retries were silent, so a
+        // failure that exhausted all 4 attempts looked identical to one
+        // that failed once. Attempt 1 is the initial fetch; attempts 2-4
+        // are the retries (1s, 2s, 3s backoff).
+        if (retryCount >= 3) {
+          setIsRetrying(false);
+          console.error('[wallet] load failed after 3 retries, giving up:', err instanceof Error ? err.message : err);
+          return;
+        }
+        setIsRetrying(true);
+        console.error(`[wallet] load failed (attempt ${retryCount + 1}/4), retrying in ${retryCount + 1}s:`, err instanceof Error ? err.message : err);
+        if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = setTimeout(() => {
+          revalidate({ retryCount });
+        }, 1000 * (retryCount + 1));
+      },
+      onSuccess: () => {
+        setIsRetrying(false);
       },
       keepPreviousData: true,
     }
@@ -153,8 +216,12 @@ export function useWallet() {
     transactions: data?.transactions ?? [],
     error: error as Error | undefined,
     isLoading: userId === undefined || isLoading,
-    isValidating,
-    refresh: () => mutate(),
+    isValidating: isValidating || isRetrying,
+    isRetrying,
+    refresh: () => {
+      setIsRetrying(false);
+      return mutate();
+    },
   };
 }
 
