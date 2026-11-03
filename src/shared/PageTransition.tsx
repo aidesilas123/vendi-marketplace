@@ -1,17 +1,13 @@
 // src/shared/PageTransition.tsx
 "use client";
 
-import React, { useContext, useLayoutEffect, useMemo } from "react";
+import React, { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { isBackNavigation } from "@/shared/hooks/useScrollRestore";
 import { StackContext } from "@/shared/Navigation/StackOverlay";
 
 export const PageTransition = ({
   children,
-  // Set by AppShell when this page is rendered as a stack snapshot (the
-  // forward underlay / back overlay): a static copy, no animation, no
-  // scroll effects — it only has to look right for ~300ms.
-  stackStatic,
   // The route this entry belongs to, set by AppShell. The transition div is keyed
   // by it (NOT by the global pathname): a kept page's key must stay stable
   // across navigations, or React would remount it the moment it becomes kept
@@ -20,7 +16,6 @@ export const PageTransition = ({
   pagePath,
 }: {
   children: React.ReactNode;
-  stackStatic?: boolean;
   pagePath?: string;
 }) => {
   const pathname = usePathname();
@@ -40,13 +35,40 @@ export const PageTransition = ({
     []
   );
 
+  // Self-contained zoom for navigations the stack can't reach: auth
+  // pages, the /chats room, and any shell boundary all render with
+  // stack-none (AppShell returns them bare, no settle marker), so the
+  // stack branches below never fire for them. This covers them with
+  // the same zoom, direction-matched (back shrinks in, forward grows
+  // out — see the render branches): on a pathname change that is NOT
+  // the first mount, zoom in, then drop the class + guard after 300ms
+  // (local settle — the stack's settle never runs for stack-none). Keyed by
+  // pathname so the animation restarts cleanly on every nav (pagePath
+  // is undefined outside the shell). First mount never zooms (prev is
+  // null) — the app must not animate its first paint. Shell navigations
+  // never reach this (stackMode is enter/back/reveal there, not none),
+  // so a page can never zoom twice. Same-pathname changes (query params,
+  // e.g. switching chat rooms) don't zoom either — that's a content
+  // change, not a page nav.
+  const prevPathRef = useRef<string | null>(null);
+  const [shellFreeZoom, setShellFreeZoom] = useState(false);
+  useEffect(() => {
+    const prev = prevPathRef.current;
+    prevPathRef.current = pathname;
+    if (prev === null || prev === pathname) return;
+    if (stackMode !== 'stack-none') return;
+    setShellFreeZoom(true);
+    const id = setTimeout(() => setShellFreeZoom(false), 300);
+    return () => clearTimeout(id);
+  }, [pathname, stackMode]);
+
   // Scroll to top whenever a NEW page arrives. Back navigations skip this:
   // scroll restore owns the position there.
   // Stack-managed navigations skip it entirely: AppShell owns scroll there
   // (it zeroes on forward, restores the saved position on back reveal), and
   // this effect running from a kept instance would fight it.
   useLayoutEffect(() => {
-    if (stackStatic || stackMode !== 'stack-none') return;
+    if (stackMode !== 'stack-none') return;
     if (isBack) return;
     const main = document.getElementById("main-scroll-container");
     if (main) {
@@ -63,22 +85,17 @@ export const PageTransition = ({
     return <>{children}</>;
   }
 
-  // Stack snapshot copies render bare: no animation, no scroll handling.
-  if (stackStatic) {
-    return <>{children}</>;
-  }
-
-  // Stack-managed forward: the new page zooms in over the previous page
-  // (vendi-zoom-in, 220ms scale + opacity). Keyed by this entry's own
-  // route, never by the global pathname, so becoming kept can't remount it.
-  // relative z-10 puts it above the forward underlay (z-[5]). The scale
-  // transform is a containing block only until settling (300ms) removes
-  // the class, so sheets opened after settling are viewport-relative.
+  // Stack-managed forward: the new page grows out (vendi-zoom-in,
+  // 220ms scale 0.96→1 + opacity 0→1) over blank, single layer. Keyed
+  // by this entry's own route, never by the global pathname, so
+  // becoming kept can't remount it. The scale transform is a containing
+  // block only until settling (300ms) removes the class, so sheets
+  // opened after settling are viewport-relative.
   if (stackMode === 'stack-enter') {
     return (
       <div
         key={pagePath ?? pathname}
-        className="w-full min-h-full vendi-zoom-in relative z-10"
+        className="w-full min-h-full vendi-zoom-in"
         // First-paint guard: the entering page must never paint once at
         // full size and opacity before the zoom starts. This inline opacity
         // is present from the very first paint; the running animation
@@ -93,18 +110,18 @@ export const PageTransition = ({
     );
   }
 
-  // Stack-managed back to a kept page: the kept page zooms in with the
-  // same vendi-zoom-in as forward, so back feels like forward (visible,
-  // native) instead of an instant cut. No z-10 (no underlay beneath a
-  // back reveal). The inline guard is safe here (unlike the fallback):
-  // back carries a settle marker (transition kind 'back-zoom'), so
-  // settling removes class + guard at 300ms even if the animation
-  // never runs.
+  // Stack-managed back: the page you return to shrinks in
+  // (vendi-shrink-in, 220ms scale 1.04→1 + opacity 0→1) — the reverse of
+  // forward's grow, same duration, same fade, so direction is readable
+  // by feel: forward grows toward you, back settles back to normal.
+  // The inline guard is safe here: back carries a settle marker
+  // (transition kind 'back-zoom'), so settling removes class + guard
+  // at 300ms even if the animation never runs.
   if (stackMode === 'stack-back') {
     return (
       <div
         key={pagePath ?? pathname}
-        className="w-full min-h-full vendi-zoom-in"
+        className="w-full min-h-full vendi-shrink-in"
         style={{ opacity: 0 }}
       >
         {children}
@@ -117,9 +134,8 @@ export const PageTransition = ({
   // instantly; a zoom here would read as a repeat. Back uses stack-back
   // (above), not this branch.
   // 'stack-settled' renders the same plain div: once the zoom finishes,
-  // AppShell settles the mode so the enter class + z-10 don't linger on
-  // the current page. Settling still drops the animation class and the
-  // underlay.
+  // AppShell settles the mode so the enter class doesn't linger on
+  // the current page.
   if (stackMode === 'stack-reveal' || stackMode === 'stack-settled') {
     return (
       <div key={pagePath ?? pathname} className="w-full min-h-full">
@@ -128,14 +144,29 @@ export const PageTransition = ({
     );
   }
 
-  // Fallback (non-shell routes, two-step back, first mount): a plain div,
-  // deliberately NOT faded. The fallback has no settle safety net (its
-  // transition is null, so the settle effect never runs) — if the fade
-  // animation ever failed to run here (stale CSS, paused animation), the
-  // inline opacity guard would stick and the page would stay white with
-  // only the header and nav visible. A plain div can never stick: it is
-  // visible no matter what. The main flows (stack-enter/reveal) still
-  // fade; only this rare path renders instantly.
+  // Self-contained zoom for non-shell navigations (auth pages, the
+  // /chats room, shell boundaries — see the effect above). Direction
+  // matches the stack: back shrinks in, forward grows out, same
+  // 220ms + fade. The local 300ms timer drops class + guard. Safe if
+  // the timer ever fails: the animation's forwards fill holds the
+  // final state (opacity 1, scale 1), which beats the inline guard,
+  // so the page can never stick invisible.
+  if (shellFreeZoom) {
+    return (
+      <div
+        key={pathname}
+        className={`w-full min-h-full ${isBack ? 'vendi-shrink-in' : 'vendi-zoom-in'}`}
+        style={{ opacity: 0 }}
+      >
+        {children}
+      </div>
+    );
+  }
+
+  // Fallback: first mount (never animate the first paint) and
+  // same-page re-renders. Navigations to non-shell routes zoom via the
+  // self-contained branch above; shell routes zoom via the stack. A
+  // plain div can never stick: it is visible no matter what.
   return (
     <div key={pagePath ?? pathname} className="w-full min-h-full">
       {children}

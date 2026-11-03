@@ -236,11 +236,13 @@ html {
 .vendi-step-in-forward { animation: vendi-step-in-forward 300ms ease-out; }
 .vendi-step-in-back { animation: vendi-step-in-back 300ms ease-out; }
 
-/* Page zoom: the new page zooms in over the previous page (220ms ease-out,
-   scale 0.96→1 + opacity 0→1). Used for stack-managed forward navigations
-   AND back-to-kept reveals, so every page arrival feels uniform. Kept-tab
-   reveals stay instant (plain div, native tab behaviour); the keyframe
-   fallback stays plain too (robustness over uniformity on that rare path). */
+/* Page zoom: forward grows out (scale 0.96→1 + opacity 0→1), back
+   shrinks in (scale 1.04→1 + opacity 0→1) — same 220ms ease-out, same
+   fade, opposite scale direction, so direction is readable by feel.
+   Applies to stack navigations and non-shell navigations (auth pages,
+   the /chats room) alike. Kept-tab reveals stay instant (plain div,
+   native tab behaviour); the first-mount fallback stays plain too
+   (robustness over uniformity on that rare path). */
 @keyframes vendi-zoom-in {
   from { opacity: 0; transform: scale(0.96); }
   to { opacity: 1; transform: scale(1); }
@@ -250,17 +252,16 @@ html {
   will-change: transform;
 }
 
-/* Outgoing page receding: shrinks + fades over the same 220ms the
-   entering page zooms in (forward underlay only). Paired with
-   vendi-zoom-in, the two move together as a depth transition instead
-   of the old page sitting static and fully visible while the new one
-   starts small. Dropped at settle (300ms), after the animation ends. */
-@keyframes vendi-zoom-out {
-  from { opacity: 1; transform: scale(1); }
-  to { opacity: 0; transform: scale(0.96); }
+/* Back entrance: starts slightly larger than the screen and settles to
+   normal. Edges sit a touch off-screen for the first frames, then slide
+   into view as it shrinks — that slide is part of the motion, not a
+   clip bug. Same duration and fade as vendi-zoom-in, reversed scale. */
+@keyframes vendi-shrink-in {
+  from { opacity: 0; transform: scale(1.04); }
+  to { opacity: 1; transform: scale(1); }
 }
-.vendi-zoom-out {
-  animation: vendi-zoom-out 220ms ease-out forwards;
+.vendi-shrink-in {
+  animation: vendi-shrink-in 220ms ease-out forwards;
   will-change: transform;
 }
 
@@ -269,7 +270,7 @@ html {
   .vendi-step-in-forward,
   .vendi-step-in-back,
   .vendi-zoom-in,
-  .vendi-zoom-out {
+  .vendi-shrink-in {
     animation: none !important;
   }
 }

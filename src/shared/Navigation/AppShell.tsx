@@ -7,7 +7,7 @@ import { supabase } from '@/lib/supabase';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { isBackNavigation } from '@/shared/hooks/useScrollRestore';
-import { StackContext, StackUnderlay, findPageScroller } from './StackOverlay';
+import { StackContext, findPageScroller } from './StackOverlay';
 import type { StackMode } from './StackOverlay';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
@@ -32,7 +32,7 @@ const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : use
 // going back reveals it already painted instead of remounting it.
 type KeptEntry = { pathname: string; element: React.ReactNode };
 type StackTransition =
-  | { kind: 'forward'; underlay: React.ReactNode; underlayScroll: number }
+  | { kind: 'forward' }
   | { kind: 'back-zoom' };
 
 const PAGE_TITLES: Record<string, string> = {
@@ -493,10 +493,15 @@ export const AppShell = ({ children }: AppShellProps) => {
         renderKept = [];
         renderCurrent = children;
       } else {
-        // Forward to a new page: keep `from` (depth 1), zoom in over its
-        // snapshot.
+        // Forward to a new page: keep `from` (depth 1, hidden) for the
+        // way back, and zoom the new page in exactly like a back nav —
+        // single layer over blank, NO snapshot of the previous page
+        // beneath it. The snapshot (two layers moving at once) read as
+        // "shows the next page, then zooms on it again"; back was smooth
+        // precisely because it had nothing beneath it, so forward does
+        // the same now. transition 'forward' is only a settle marker.
         stackMode = 'stack-enter';
-        transition = { kind: 'forward', underlay: fromEl, underlayScroll: savedScrollRef.current[from] ?? 0 };
+        transition = { kind: 'forward' };
         renderKept = [{ pathname: from, element: fromEl }];
         renderCurrent = children;
       }
@@ -585,19 +590,6 @@ export const AppShell = ({ children }: AppShellProps) => {
         </div>
       </main>
 
-      {/* Stack transition layers (fixed, below the bottom nav at z-50, so
-          the nav never blinks mid-slide). Snapshots are static clones of
-          the outgoing page — they only have to look right for ~300ms. */}
-      {transition?.kind === 'forward' && (
-        <StackUnderlay
-          element={
-            React.isValidElement(transition.underlay)
-              ? React.cloneElement(transition.underlay as React.ReactElement<{ stackStatic?: boolean }>, { stackStatic: true })
-              : transition.underlay
-          }
-          scrollTop={transition.underlayScroll}
-        />
-      )}
       <div className="absolute bottom-0 left-0 right-0 w-full z-50 pointer-events-none">
         <div className="pointer-events-auto">
           <BottomNav />
