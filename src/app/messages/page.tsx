@@ -1,8 +1,9 @@
 "use client";
+// src/app/messages/page.tsx
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import useSWR from 'swr';
+import useSWR, { mutate as globalMutate } from 'swr';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { supabase } from '@/lib/supabase';
 import { Avatar } from '@/shared/Avatar';
@@ -601,9 +602,12 @@ export default function MessagesList() {
           filteredChats.map((chat) => (
             <div
               key={chat.transaction_ref}
-              onClick={() =>
-                router.push(`/chats?seller=${chat.partner?.id}&ref=${chat.transaction_ref}`)
-              }
+              onClick={() => {
+                if (chat.partner?.id) {
+                  void globalMutate(['chat-partner', chat.partner.id], chat.partner, false);
+                }
+                router.push(`/chats?seller=${chat.partner?.id}&ref=${chat.transaction_ref}`);
+              }}
               className="w-full flex items-center gap-3 px-4 py-2.5 text-left active:bg-gray-100 dark:active:bg-white/5 transition-colors cursor-pointer"
             >
               {/* Product Thumbnail — click opens ImageViewer, shows product image instead of user avatar */}

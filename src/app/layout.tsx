@@ -1,3 +1,4 @@
+// src/app/layout.tsx
 import type { Metadata } from "next";
 import IonicProvider from "./providers";
 import { NetworkListener } from "@/shared/Modal/NetworkListener";

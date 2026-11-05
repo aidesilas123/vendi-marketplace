@@ -36,12 +36,12 @@ export const PageTransition = ({
   );
 
   // Self-contained animation for navigations the stack can't reach: auth
-  // pages, the /chats room, and any shell boundary all render with
-  // stack-none (AppShell returns them bare, no settle marker), so the
-  // stack branches below never fire for them. This covers them: the
-  // messages ↔ chats drill-in slides (inbox → room from the right,
-  // room → inbox from the left), everything else uses the directional
-  // zoom (back shrinks in, forward grows out). On a pathname change
+  // pages and any shell boundary all render with stack-none (AppShell
+  // returns them bare, no settle marker), so the stack branches below
+  // never fire for them. This covers them with the directional zoom
+  // (back shrinks in, forward grows out). The /chats room no longer
+  // uses this path: it is a shell page now, so it goes through the
+  // stack branches like every other page. On a pathname change
   // that is NOT the first mount, animate, then drop the class + guard
   // after 300ms (local settle — the stack's settle never runs for
   // stack-none). Keyed by pathname so the animation restarts cleanly
@@ -53,22 +53,13 @@ export const PageTransition = ({
   // rooms) don't animate either — that's a content change, not a
   // page nav.
   const prevPathRef = useRef<string | null>(null);
-  const [shellFreeAnim, setShellFreeAnim] = useState<null | 'zoom-in' | 'shrink-in' | 'slide-right' | 'slide-left'>(null);
+  const [shellFreeAnim, setShellFreeAnim] = useState<null | 'zoom-in' | 'shrink-in'>(null);
   useEffect(() => {
     const prev = prevPathRef.current;
     prevPathRef.current = pathname;
     if (prev === null || prev === pathname) return;
     if (stackMode !== 'stack-none') return;
-    // Messages ↔ chats slides instead of zooming: the zoom wasn't visible
-    // here because the room showed a spinner while it played, then the
-    // content popped in after it finished. A drill-in slide reads as
-    // depth (list → detail) where a zoom read as nothing.
-    const isChatNav =
-      (prev === '/messages' && pathname === '/chats') ||
-      (prev === '/chats' && pathname === '/messages');
-    setShellFreeAnim(
-      isChatNav ? (isBack ? 'slide-left' : 'slide-right') : isBack ? 'shrink-in' : 'zoom-in'
-    );
+    setShellFreeAnim(isBack ? 'shrink-in' : 'zoom-in');
     const id = setTimeout(() => setShellFreeAnim(null), 300);
     return () => clearTimeout(id);
   }, [pathname, stackMode, isBack]);
@@ -155,22 +146,14 @@ export const PageTransition = ({
     );
   }
 
-  // Self-contained animation for non-shell navigations (auth pages, the
-  // /chats room, shell boundaries — see the effect above): messages ↔
-  // chats slides, everything else uses the directional zoom (back
-  // shrinks, forward grows). The local 300ms timer drops class + guard.
-  // Safe if the timer ever fails: the animation's forwards fill holds
-  // the final state (opacity 1, scale/translate at rest), which beats
-  // the inline guard, so the page can never stick invisible.
+  // Self-contained animation for non-shell navigations (auth pages,
+  // shell boundaries — see the effect above): directional zoom only
+  // (back shrinks, forward grows). The local 300ms timer drops class +
+  // guard. Safe if the timer ever fails: the animation's forwards fill
+  // holds the final state (opacity 1, scale/translate at rest), which
+  // beats the inline guard, so the page can never stick invisible.
   if (shellFreeAnim) {
-    const animClass =
-      shellFreeAnim === 'slide-right'
-        ? 'vendi-slide-in-right'
-        : shellFreeAnim === 'slide-left'
-          ? 'vendi-slide-in-left'
-          : shellFreeAnim === 'shrink-in'
-            ? 'vendi-shrink-in'
-            : 'vendi-zoom-in';
+    const animClass = shellFreeAnim === 'shrink-in' ? 'vendi-shrink-in' : 'vendi-zoom-in';
     return (
       <div
         key={pathname}

@@ -71,8 +71,11 @@ export const AppShell = ({ children }: AppShellProps) => {
   const [user, setUser] = useState<{ id?: string; name: string; email: string; avatarUrl?: string } | null>(null);
 
   const isAuthPage = pathname === '/login' || pathname === '/signup' || pathname === '/forgot-password' || pathname === '/reset-password' || pathname === '/auth/callback' || pathname === '/complete-profile';
-  const isChatRoom = pathname === '/chats' || pathname?.startsWith('/chats');
-  const showShell = !isAuthPage && !isChatRoom;
+  // /chats uses the same shell mechanism as every other page now: no
+  // chat-room bypass. It goes through the stack and PageTransition
+  // like feed, product, checkout and transactions do. BottomNav is
+  // the exception: it slides down while a room is open (BottomNav).
+  const showShell = !isAuthPage;
 
   // ---- Wallet-style page stack (depth 1) ----
   // Refs only; the transition is computed during render (below, before the
@@ -443,6 +446,8 @@ export const AppShell = ({ children }: AppShellProps) => {
   let transition: StackTransition | null;
   if (pathname !== prevPathRef.current) {
     const from = prevPathRef.current;
+    // reaches here and never animates.
+
     const fromEl = prevChildrenRef.current;
     const fromShell = prevShellRef.current;
     // Capture the outgoing page's scroll while its DOM is still laid out
@@ -506,7 +511,7 @@ export const AppShell = ({ children }: AppShellProps) => {
         renderCurrent = children;
       }
     } else {
-      // First mount, or a shell boundary (auth / chat room): no stack.
+      // First mount, or a shell boundary (auth only): no stack.
       stackMode = 'stack-none';
       transition = null;
       renderKept = [];
@@ -559,32 +564,45 @@ export const AppShell = ({ children }: AppShellProps) => {
 
       {/* Content clearance = nav height + bottom inset, so the last row never
           hides behind the bottom nav on 3-button phones (larger inset) while
-          gesture-nav phones keep the tighter spacing. */}
+          gesture-nav phones keep the tighter spacing. /chats is the one
+          exception: its nav slides down while the room is open, so it
+          needs only the bottom inset — the room fills the rest. */}
       <main
         id="main-scroll-container"
         className="flex-1 w-full overflow-y-auto overflow-x-clip overscroll-y-contain relative"
-        style={{ paddingBottom: 'calc(6rem + var(--sab))' }}
+        style={{ paddingBottom: pathname === '/chats' ? 'calc(var(--sab))' : 'calc(6rem + var(--sab))' }}
       >
         {/* Bounce wrapper: the rubber-band transform applies here, around page
             content only. Fixed elements (bottom nav, modals, toasts) live
             outside it so a transform never breaks their positioning. */}
         <div ref={bounceRef}>
-          <div className="max-w-[1600px] mx-auto w-full px-4 md:px-8">
+          <div className={`max-w-[1600px] mx-auto w-full ${stackMode === 'stack-enter' ? 'relative grid grid-cols-1 grid-rows-1 [&>*]:col-start-1 [&>*]:row-start-1' : ''}`}>
             <StackContext.Provider value={stackMode}>
-              {renderEntries.map((e) => (
-                <div
-                  key={e.pathname}
-                  ref={(el) => {
-                    if (el) wrapperRefs.current.set(e.pathname, el);
-                    else wrapperRefs.current.delete(e.pathname);
-                  }}
-                  style={{ display: e.pathname === (pathname ?? '') ? 'block' : 'none' }}
-                >
-                  {React.isValidElement(e.element)
-                    ? React.cloneElement(e.element as React.ReactElement<{ pagePath?: string }>, { pagePath: e.pathname })
-                    : e.element}
-                </div>
-              ))}
+              {renderEntries.map((e) => {
+                const isCurrent = e.pathname === (pathname ?? '');
+                const isKept = !isCurrent;
+                // During stack-enter, keep the outgoing (kept) page visible underneath the entering page!
+                // The entering page zooms in on top (z-10), while the previous page stays visible (z-0).
+                const isVisible = isCurrent || (stackMode === 'stack-enter' && isKept);
+                return (
+                  <div
+                    key={e.pathname}
+                    ref={(el) => {
+                      if (el) wrapperRefs.current.set(e.pathname, el);
+                      else wrapperRefs.current.delete(e.pathname);
+                    }}
+                    className={`${e.pathname === '/chats' ? 'w-full px-0' : 'w-full px-4 md:px-8'} ${isCurrent ? 'relative z-10' : 'relative z-0'}`}
+                    style={{
+                      display: isVisible ? 'block' : 'none',
+                      pointerEvents: isCurrent ? 'auto' : 'none',
+                    }}
+                  >
+                    {React.isValidElement(e.element)
+                      ? React.cloneElement(e.element as React.ReactElement<{ pagePath?: string }>, { pagePath: e.pathname })
+                      : e.element}
+                  </div>
+                );
+              })}
             </StackContext.Provider>
           </div>
         </div>

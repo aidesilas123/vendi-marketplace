@@ -48,7 +48,10 @@ async function fetchSellerBadges(userId: string) {
 export const BottomNav = () => {
   const pathname = usePathname();
   const router = useRouter();
-  const isVisible = useHideOnScroll('main-scroll-container');
+  const isChatRoom = pathname === '/chats' || pathname?.startsWith('/chats');
+  // Rooms hide the nav with the same slide-down (not just cover it): the
+  // slide is visible through the room's zoom-in fade.
+  const isVisible = useHideOnScroll('main-scroll-container') && !isChatRoom;
   // undefined = session still being checked, null = signed out, string = signed in
   const sessionUserId = useSessionUserId();
 
@@ -124,7 +127,7 @@ export const BottomNav = () => {
     // phones stay full-screen. Don't add a bottom offset or safe-area padding to
     // the wrapper that renders <BottomNav />, or the gap will come back.
     <div
-      className={`fixed bottom-0 inset-x-0 z-50 bg-white dark:bg-black border-t border-gray-200 dark:border-gray-800 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pt-2 px-2 sm:px-6 rounded-t-3xl sm:rounded-none select-none ${isVisible ? 'translate-y-0' : 'translate-y-[150%] transition-transform duration-300 ease-in-out'}`}
+      className={`fixed bottom-0 inset-x-0 z-50 bg-white dark:bg-black border-t border-gray-200 dark:border-gray-800 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] pt-2 px-2 sm:px-6 rounded-t-3xl sm:rounded-none select-none transition-transform duration-300 ease-in-out ${isVisible ? 'translate-y-0' : 'translate-y-[150%]'}`}
       style={{ paddingBottom: "var(--sab)" }}
     >
       {/* max-w-lg keeps spacing tight on tablets; a single justify-between flex wrapper */}

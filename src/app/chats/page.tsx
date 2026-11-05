@@ -71,7 +71,7 @@
     revisit with a non-portal approach (e.g. normal-flow layout).
   ============================================================================
 */
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import useSWR, { mutate as globalMutate } from 'swr';
 import { supabase } from '@/lib/supabase';
@@ -81,10 +81,12 @@ import { Badge } from '@/shared/Badge';
 import IonIcon from '@/shared/Icon/Icon';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { PullToRefresh, type PullToRefreshHandle } from '@/shared/PullToRefresh/PullToRefresh';
-import { CameraCapture } from './components/CameraCapture';
-import { GalleryPicker } from './components/GalleryPicker';
-import { PhotoPreview } from './components/PhotoPreview';
-import { ImageViewer } from '@/shared/ImageViewer/ImageViewer';
+import dynamic from 'next/dynamic';
+
+const CameraCapture = dynamic(() => import('./components/CameraCapture').then((m) => m.CameraCapture), { ssr: false });
+const GalleryPicker = dynamic(() => import('./components/GalleryPicker').then((m) => m.GalleryPicker), { ssr: false });
+const PhotoPreview = dynamic(() => import('./components/PhotoPreview').then((m) => m.PhotoPreview), { ssr: false });
+const ImageViewer = dynamic(() => import('@/shared/ImageViewer/ImageViewer').then((m) => m.ImageViewer), { ssr: false });
 import { VoiceNotePlayer } from './components/VoiceNotePlayer';
 import { hapticImpact, ImpactStyle } from '@/shared/haptics';
 import {
@@ -148,7 +150,7 @@ const safePlay = (audio: HTMLAudioElement) => {
   }
 };
 
-export default function DealRoomChat() {
+function DealRoomChat() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const txRef = searchParams.get('ref') || searchParams.get('id');
@@ -177,6 +179,16 @@ export default function DealRoomChat() {
 
   // --- Realtime channel + presence refs ---
   const chatChannelRef = useRef<any>(null);
+  // Deferred-removal refs (channel guard family, restored): cleanup no
+  // longer removes the channel synchronously. It schedules removal on a
+  // 0ms timeout, so a StrictMode/Fast Refresh re-invoke (which runs
+  // synchronously after cleanup) can cancel the timeout and reuse the
+  // live channel instead of creating a second, already-subscribed
+  // instance and throwing on .on(). A different room never reuses
+  // (txRef check); a real unmount has no re-invoke, so the timeout
+  // fires and the channel is removed (no leak).
+  const chatRemovalTimeoutRef = useRef<any>(null);
+  const chatChannelTxRef = useRef<string | null>(null);
   const myActivityRef = useRef<PartnerActivity>(null);
   const typingStopTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const partnerActivityWatchdogRef = useRef<NodeJS.Timeout | null>(null);
@@ -276,7 +288,8 @@ export default function DealRoomChat() {
     mutate,
   } = useSWR(txRef ? ['chat-history', txRef] : null, fetchHistory, {
     revalidateOnFocus: false,
-    dedupingInterval: 20000,
+    revalidateOnMount: false,
+    dedupingInterval: 60000,
   });
 
   // Partner header (name/avatar above the chat) loads through SWR, not
@@ -286,7 +299,7 @@ export default function DealRoomChat() {
   // focus refetch keeps revisits instant; background revalidation
   // updates it without ever blanking the header. On error, returns
   // null (header falls back to "Loading..." as before, never crashes).
-  const { data: partnerInfo } = useSWR(
+  const { data: partnerInfo, isLoading: partnerLoading } = useSWR(
     partnerId ? ['chat-partner', partnerId] : null,
     async ([, id]: string[]) => {
       const { data, error } = await supabase
@@ -453,10 +466,18 @@ export default function DealRoomChat() {
         if (!user) { router.push('/login'); return; }
 
         const uniqueChannelName = `chat_${txRef}`;
+        if (cancelled) return;
+        // Clean up any existing channel with this topic so we start fresh with no join-race errors
+        const existingChannels = (supabase as any).getChannels?.() || [];
+        const staleCh = existingChannels.find((c: any) => c.topic === `realtime:${uniqueChannelName}` || c.topic === uniqueChannelName);
+        if (staleCh) {
+          try { void supabase.removeChannel(staleCh); } catch {}
+        }
         chatChannel = supabase.channel(uniqueChannelName, {
           config: { presence: { key: user.id } }
         });
         chatChannelRef.current = chatChannel;
+        chatChannelTxRef.current = txRef;
 
         const { data: userProfile, error: profileError } = await supabase
           .from('users')
@@ -494,6 +515,11 @@ export default function DealRoomChat() {
         // History is loaded by SWR (see fetchHistory above) — no manual fetch here.
 
         // 1. Chat Room Channel
+        // Skip the whole chain on reuse: handlers are already attached
+        // and the channel already subscribed — .on() after subscribe()
+        // throws, and .subscribe() twice throws "tried to join multiple
+        // times". The if body is the entire multi-line chain (through
+        // ).subscribe();), so no re-indent is needed.
         chatChannel.on(
           'postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'messages', filter: `transaction_ref=eq.${txRef}` },
@@ -600,7 +626,24 @@ export default function DealRoomChat() {
               partnerActivityWatchdogRef.current = setTimeout(() => setPartnerActivity(null), PARTNER_ACTIVITY_WATCHDOG_MS);
             }
           }
-        ).subscribe();
+        ).subscribe((status: string) => {
+            if (status !== 'SUBSCRIBED' || !txRef) return;
+            // Mount refresh: catch messages sent while this room was unmounted.
+            // The channel was removed on unmount, so realtime missed them, and SWR
+            // deduping may skip a mount refetch. Cached data shows instantly;
+            // this background merge adds gap messages without wiping earlier
+            // loaded messages (Map keeps older ids, fresh wins) or optimistic
+            // temps (which live outside the SWR cache).
+            void fetchHistory(['chat-history', txRef]).then((fresh) => {
+              if (!fresh || fresh.length === 0) return;
+              updateMessages((prev) => {
+                const byId = new Map();
+                for (const m of prev) byId.set(m.id, m);
+                for (const m of fresh) byId.set(m.id, m);
+                return Array.from(byId.values());
+              });
+            }).catch(() => {});
+          });
 
         // 2. Global presence is single-owned by AppShell (src/lib/realtime.ts).
         //    This page used to create the same 'global_presence' topic and call
@@ -609,6 +652,16 @@ export default function DealRoomChat() {
         //    ensurePresence is idempotent: a no-op when AppShell already owns it.
         ensurePresence(user.id);
       } catch (err: any) {
+        // Already-live guard (backstop): if the channel is already
+        // subscribed (StrictMode/Fast Refresh race that reuse + adapter
+        // missed), the channel IS live via the first invoke — so treat
+        // it as success (warn, no error panel) instead of showing
+        // "Couldn't open this chat" for a channel that actually works.
+        if (/after `subscribe\(\)`|join multiple times/i.test(err?.message || '')) {
+          console.warn('[Chat] Channel already live (StrictMode race), continuing:', err?.message);
+          if (!cancelled) setInitError(null);
+          return;
+        }
         console.error('[Chat] Initialization failed:', err);
         if (!cancelled) setInitError(err?.message || 'Could not load this chat. Please try again.');
       }
@@ -622,7 +675,10 @@ export default function DealRoomChat() {
       if (chatChannel) {
         try { void supabase.removeChannel(chatChannel); } catch {}
       }
-      chatChannelRef.current = null;
+      if (chatChannelRef.current === chatChannel) {
+        chatChannelRef.current = null;
+        chatChannelTxRef.current = null;
+      }
       if (partnerActivityWatchdogRef.current) clearTimeout(partnerActivityWatchdogRef.current);
       void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
     };
@@ -790,7 +846,7 @@ export default function DealRoomChat() {
       id: msg.id,
       type: msg.message_type,
       content: getPreviewLabel(msg),
-      senderLabel: msg.sender_id === currentUser?.id ? 'You' : (partnerInfo?.full_name || 'Them'),
+      senderLabel: (currentUser ? msg.sender_id === currentUser.id : (partnerId ? msg.sender_id !== partnerId : false)) ? 'You' : (partnerInfo?.full_name || 'Them'),
       mediaUrl: msg.media_url
     });
     setOpenMenuFor(null);
@@ -2000,7 +2056,7 @@ export default function DealRoomChat() {
   // ==========================================================================
   const renderedMessages = useMemo(() => {
     return messages.map((msg) => {
-      const isMe = msg.sender_id === currentUser?.id;
+      const isMe = currentUser ? msg.sender_id === currentUser.id : (partnerId ? msg.sender_id !== partnerId : false);
       const msgTime = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const isActiveSearchMatch = !!searchQuery.trim() && searchMatches[searchIndex] === msg.id;
       const setBubbleRef = (el: HTMLDivElement | null) => { messageRefs.current[msg.id] = el; };
@@ -2204,7 +2260,7 @@ export default function DealRoomChat() {
       return null;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, currentUser, partnerInfo, playback, audioDurations, uploadProgress, searchQuery, searchMatches, searchIndex, highlightedMsgId, loadedMedia, reactions]);
+  }, [messages, currentUser, partnerId, partnerInfo, playback, audioDurations, uploadProgress, searchQuery, searchMatches, searchIndex, highlightedMsgId, loadedMedia, reactions]);
 
   // Cancel-drag opacity fade: full opacity at rest, fading toward ~30% as
   // the mic button is dragged toward the cancel threshold.
@@ -2212,11 +2268,17 @@ export default function DealRoomChat() {
     ? Math.max(0.3, 1 + dragOffset.x / CANCEL_DRAG_PX)
     : 1;
 
-  // NOTE: previously portaled to document.body to escape PageTransition's
-  // transformed ancestor. The portal blanked the page, so we render in place.
-  // If mobile cropping returns, revisit (e.g. non-fixed flow layout).
+  // Same mechanism as every other page now: in-flow inside AppShell,
+  // NOT a fixed full-screen page. The stack (keep-alive + zoom) applies
+  // here exactly as it does on feed, product, checkout and transactions.
+  // The BottomNav is the one room-only piece: it slides down when the
+  // room opens, so it is not visible in the room, and the room fills
+  // the shell main area above the bottom inset only (AppShell drops
+  // the 6rem nav clearance on /chats for the same reason). -mx cancels
+  // the shell's px so the room stays edge-to-edge like the messages
+  // inbox.
   return (
-    <div className="fixed inset-0 z-[999] flex flex-col w-full h-[100dvh] bg-[#e5ddd5] dark:bg-[#121212] overflow-hidden">
+    <div className="relative flex flex-col w-full h-[calc(100dvh-var(--sat)-var(--sab))] bg-[#e5ddd5] dark:bg-[#121212] overflow-hidden">
       {/* Background wallpaper with faded Vendi logos pattern */}
       <div
         className="absolute inset-0 pointer-events-none z-0 opacity-[0.05] dark:opacity-[0.06]"
@@ -2247,7 +2309,7 @@ export default function DealRoomChat() {
       {openMenuFor && menuAnchor && (() => {
         const msg = messages.find((m) => m.id === openMenuFor);
         if (!msg) return null;
-        const isMineMsg = msg.sender_id === currentUser?.id;
+        const isMineMsg = currentUser ? msg.sender_id === currentUser.id : (partnerId ? msg.sender_id !== partnerId : false);
         const isVoice = msg.message_type === 'audio';
         const msgAgeMs = Date.now() - new Date(msg.created_at).getTime();
         const canEditOrDelete = msgAgeMs <= 30 * 60 * 1000; // 30 minutes cutoff
@@ -2314,7 +2376,7 @@ export default function DealRoomChat() {
       })()}
 
       {/* STICKY HEADER */}
-      <div className="flex-shrink-0 w-full bg-white dark:bg-black border-b border-gray-200 dark:border-gray-800/60 pt-safe transition-all shadow-sm z-50">
+      <div className="flex-shrink-0 w-full bg-white dark:bg-black border-b border-gray-200 dark:border-gray-800/60 transition-all shadow-sm z-50">
         <div className="flex items-center justify-between px-2 py-2">
           <div className="flex items-center gap-2 min-w-0">
             <button onClick={() => router.back()} className="!p-2 -ml-1 text-gray-900 dark:text-white active:scale-95 transition-transform !rounded-full flex-shrink-0">
@@ -2323,33 +2385,45 @@ export default function DealRoomChat() {
             {/* Avatar + name/status are one clickable group that routes to
                 the partner's profile. */}
             <div
-              className="flex items-center gap-2 cursor-pointer active:opacity-70 transition-opacity min-w-0"
+              className="flex items-center gap-2.5 cursor-pointer active:opacity-70 transition-opacity min-w-0"
               onClick={() => partnerId && router.push(`/profile?id=${partnerId}`)}
             >
-              <Avatar src={partnerInfo?.avatar_url || ""} name={partnerInfo?.full_name || "Vendi User"} size="md" />
-              <div className="flex flex-col justify-center min-w-0">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <h2 className="text-base font-bold leading-tight text-gray-900 dark:text-white truncate">
-                    {partnerInfo ? partnerInfo.full_name : "Loading..."}
-                  </h2>
-                  {partnerInfo?.is_verified && <Badge isVerified={true} />}
-                </div>
-                {partnerActivity === 'typing' ? (
-                  <p className="text-[11px] font-black !text-orange-500 animate-pulse tracking-wide">typing...</p>
-                ) : partnerActivity === 'recording' ? (
-                  <p className="text-[11px] font-black !text-orange-500 tracking-wide flex items-center gap-1">
-                    <IonIcon icon={micOutline} className="text-xs animate-pulse" /> recording voice note...
-                  </p>
-                ) : isPartnerOnline ? (
-                  <p className="text-[11px] font-bold text-emerald-500 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Online
-                  </p>
-                ) : (
-                  <p className="text-[11px] font-medium text-gray-400">
-                    Last seen {partnerLastSeen ? formatLastSeen(partnerLastSeen) : 'recently'}
-                  </p>
-                )}
-              </div>
+              {partnerLoading && !partnerInfo ? (
+                <>
+                  <div className="h-10 w-10 shrink-0 rounded-full bg-black/10 dark:bg-white/10 animate-pulse" />
+                  <div className="flex flex-col justify-center gap-1.5 min-w-0">
+                    <div className="h-4 w-28 rounded bg-black/10 dark:bg-white/10 animate-pulse" />
+                    <div className="h-3 w-20 rounded bg-black/10 dark:bg-white/10 animate-pulse" />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <Avatar src={partnerInfo?.avatar_url || ""} name={partnerInfo?.full_name || "Vendi User"} size="md" />
+                  <div className="flex flex-col justify-center min-w-0">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <h2 className="text-base font-bold leading-tight text-gray-900 dark:text-white truncate">
+                        {partnerInfo ? partnerInfo.full_name : "User"}
+                      </h2>
+                      {partnerInfo?.is_verified && <Badge isVerified={true} />}
+                    </div>
+                    {partnerActivity === 'typing' ? (
+                      <p className="text-[11px] font-black !text-orange-500 animate-pulse tracking-wide">typing...</p>
+                    ) : partnerActivity === 'recording' ? (
+                      <p className="text-[11px] font-black !text-orange-500 tracking-wide flex items-center gap-1">
+                        <IonIcon icon={micOutline} className="text-xs animate-pulse" /> recording voice note...
+                      </p>
+                    ) : isPartnerOnline ? (
+                      <p className="text-[11px] font-bold text-emerald-500 flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Online
+                      </p>
+                    ) : (
+                      <p className="text-[11px] font-medium text-gray-400">
+                        Last seen {partnerLastSeen ? formatLastSeen(partnerLastSeen) : 'recently'}
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-0.5 flex-shrink-0">
@@ -2470,7 +2544,14 @@ export default function DealRoomChat() {
             </button>
           </div>
         )}
-        {renderedMessages}
+        {historyLoading && messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center pt-28 gap-3">
+            <PullSpinner spinning size={32} />
+            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Loading chat...</p>
+          </div>
+        ) : (
+          renderedMessages
+        )}
 
         {/* TYPING / RECORDING STATUS BUBBLE — w-fit keeps it small and
             left-aligned like an incoming message, never full width. */}
@@ -2499,7 +2580,7 @@ export default function DealRoomChat() {
       {showScrollBottom && (
         <button
           onClick={() => scrollToBottom(true)}
-          className="absolute right-4 bottom-[calc(6rem+var(--sab))] z-40 !w-10 !h-10 !min-w-[40px] !min-h-[40px] !p-0 !rounded-full bg-white dark:bg-[#1f2937] shadow-lg border border-gray-200/80 dark:border-gray-700 flex items-center justify-center text-gray-700 dark:text-gray-200 active:scale-90 transition-all animate-in fade-in zoom-in-95 duration-150"
+          className="absolute right-4 bottom-20 z-40 !w-10 !h-10 !min-w-[40px] !min-h-[40px] !p-0 !rounded-full bg-white dark:bg-[#1f2937] shadow-lg border border-gray-200/80 dark:border-gray-700 flex items-center justify-center text-gray-700 dark:text-gray-200 active:scale-90 transition-all animate-in fade-in zoom-in-95 duration-150"
           aria-label="Scroll to bottom"
         >
           <IonIcon icon={chevronDownOutline} className="text-xl pointer-events-none" />
@@ -2574,8 +2655,8 @@ export default function DealRoomChat() {
                   </button>
                 </div>
                 <button
-                  onClick={stopAndSendAction}
-                  className="!w-12 !h-12 !min-w-[48px] !min-h-[48px] !p-0 !rounded-full flex-shrink-0 !aspect-square !bg-orange-500 text-white !flex items-center justify-center shadow-lg active:scale-90 transition-transform"
+                  onClick={stopAndSendAction} disabled={!currentUser}
+                  className="!w-12 !h-12 !min-w-[48px] !min-h-[48px] !p-0 !rounded-full flex-shrink-0 !aspect-square !bg-orange-500 text-white !flex items-center justify-center shadow-lg active:scale-90 transition-transform disabled:opacity-50"
                 >
                   <IonIcon icon={sendOutline} className="text-xl ml-1" />
                 </button>
@@ -2641,8 +2722,8 @@ export default function DealRoomChat() {
                   {messageText.trim() ? (
                     <button
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={handleSendText}
-                      className="!w-12 !h-12 !min-w-[48px] !min-h-[48px] !p-0 !rounded-full flex-shrink-0 !aspect-square !bg-orange-500 text-white !flex items-center justify-center shadow-lg active:scale-90 transition-transform"
+                      onClick={handleSendText} disabled={!currentUser}
+                      className="!w-12 !h-12 !min-w-[48px] !min-h-[48px] !p-0 !rounded-full flex-shrink-0 !aspect-square !bg-orange-500 text-white !flex items-center justify-center shadow-lg active:scale-90 transition-transform disabled:opacity-50"
                     >
                       <IonIcon icon={sendOutline} className="text-xl ml-1" />
                     </button>
@@ -2651,7 +2732,7 @@ export default function DealRoomChat() {
                       onPointerDown={handlePointerDown}
                       onPointerMove={handlePointerMove}
                       onPointerUp={handlePointerUp}
-                      onPointerCancel={handlePointerUp}
+                      onPointerCancel={handlePointerUp} disabled={!currentUser}
                       style={{
                         transform: `translate(${dragOffset.x}px, ${dragOffset.y}px) ${recordState === 'holding' ? 'scale(1.3)' : 'scale(1)'}`,
                         opacity: micDragOpacity
@@ -2668,37 +2749,7 @@ export default function DealRoomChat() {
         )}
       </div>
 
-      {/* Initial loading detail skeleton — replaces the "Loading chat…"
-          spinner. A spinner gave no sense of the page arriving (and hid
-          the transition, since the content popped in after it finished);
-          a skeleton shaped like the chat detail (header, bubbles,
-          composer) reads as the page itself loading in place. */}
-      {(!currentUser || historyLoading) && !initError && (
-        <div className="absolute inset-0 z-[60] flex flex-col gap-3 bg-[#e5ddd5] p-4 dark:bg-background">
-          {/* Header skeleton: avatar + name/status bars */}
-          <div className="flex items-center gap-2">
-            <div className="h-10 w-10 shrink-0 rounded-full bg-black/10 animate-pulse dark:bg-white/10" />
-            <div className="flex flex-col gap-1.5">
-              <div className="h-4 w-32 rounded bg-black/10 animate-pulse dark:bg-white/10" />
-              <div className="h-3 w-20 rounded bg-black/10 animate-pulse dark:bg-white/10" />
-            </div>
-          </div>
-          {/* Bubble skeletons, stacked at the bottom like a real chat */}
-          <div className="flex flex-1 flex-col justify-end gap-3">
-            <div className="h-10 w-3/5 self-start rounded-2xl bg-black/10 animate-pulse dark:bg-white/10" />
-            <div className="h-10 w-2/5 self-end rounded-2xl bg-orange-500/10 animate-pulse" />
-            <div className="h-14 w-1/2 self-start rounded-2xl bg-black/10 animate-pulse dark:bg-white/10" />
-            <div className="h-10 w-2/3 self-end rounded-2xl bg-orange-500/10 animate-pulse" />
-            <div className="h-10 w-1/3 self-start rounded-2xl bg-black/10 animate-pulse dark:bg-white/10" />
-            <div className="h-10 w-1/2 self-end rounded-2xl bg-orange-500/10 animate-pulse" />
-          </div>
-          {/* Composer skeleton: input bar + send button */}
-          <div className="flex items-center gap-2">
-            <div className="h-11 flex-1 rounded-full bg-black/10 animate-pulse dark:bg-white/10" />
-            <div className="h-11 w-11 shrink-0 rounded-full bg-orange-500/10 animate-pulse" />
-          </div>
-        </div>
-      )}
+
 
       {/* Init failure — never leave the user staring at a spinner forever */}
       {initError && (
@@ -2743,5 +2794,48 @@ export default function DealRoomChat() {
         initialIndex={0}
       />
     </div>
+  );
+}
+
+function DealRoomSkeleton() {
+  return (
+    <div className="relative flex flex-col w-full h-[calc(100dvh-var(--sat)-var(--sab))] bg-[#e5ddd5] dark:bg-[#121212] overflow-hidden">
+      <div
+        className="absolute inset-0 pointer-events-none z-0 opacity-[0.05] dark:opacity-[0.06]"
+        style={{
+          backgroundImage: "url('/logo-watermark.png')",
+          backgroundRepeat: 'repeat',
+          backgroundSize: '110px 110px',
+        }}
+      />
+      <div className="flex-shrink-0 w-full bg-white dark:bg-black border-b border-gray-200 dark:border-gray-800/60 shadow-sm z-50">
+        <div className="flex items-center justify-between px-2 py-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="!p-2 -ml-1 text-gray-900 dark:text-white flex-shrink-0">
+              <IonIcon icon={chevronBackOutline} className="text-3xl" />
+            </div>
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="h-10 w-10 shrink-0 rounded-full bg-black/10 dark:bg-white/10 animate-pulse" />
+              <div className="flex flex-col justify-center gap-1.5 min-w-0">
+                <div className="h-4 w-28 rounded bg-black/10 dark:bg-white/10 animate-pulse" />
+                <div className="h-3 w-20 rounded bg-black/10 dark:bg-white/10 animate-pulse" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="flex-1 flex flex-col items-center justify-center pt-28 gap-3 relative z-10">
+        <PullSpinner spinning size={32} />
+        <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Loading chat...</p>
+      </div>
+    </div>
+  );
+}
+
+export default function DealRoomPage() {
+  return (
+    <Suspense fallback={<DealRoomSkeleton />}>
+      <DealRoomChat />
+    </Suspense>
   );
 }
