@@ -5,7 +5,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { safeBack } from '@/shared/safeBack';
-import useSWR from 'swr';
+import useSWR, { mutate as globalMutate } from 'swr';
 import { keys, fetchAuthUser } from '@/lib/swr-orders';
 import { supabase } from '@/lib/supabase';
 import { Avatar } from '@/shared/Avatar';
@@ -521,7 +521,21 @@ export default function OrderDetails() {
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     disabled={isCompleted}
-                    onClick={() => router.push(`/chats?seller=${chatPartnerId}&ref=${transaction.reference}`)}
+                    // Warm the room before the tap lands (see inbox row):
+                    // hover / touchstart fires ahead of the click, so the
+                    // heavy /chats chunk is already loading when the zoom
+                    // starts. Next dedupes repeat prefetches for the URL.
+                    onMouseEnter={() => { void router.prefetch(`/chats?seller=${chatPartnerId}&ref=${transaction.reference}`); }}
+                    onTouchStart={() => { void router.prefetch(`/chats?seller=${chatPartnerId}&ref=${transaction.reference}`); }}
+                    onClick={() => {
+                      // Pre-seed the partner header (same as the inbox row)
+                      // so the room header shows instantly instead of
+                      // waiting on a Supabase fetch; SWR revalidates after.
+                      if (chatPartnerId) {
+                        void globalMutate(['chat-partner', chatPartnerId], { ...contactPerson, id: chatPartnerId }, false);
+                      }
+                      router.push(`/chats?seller=${chatPartnerId}&ref=${transaction.reference}`);
+                    }}
                     className={`!flex items-center justify-center gap-2 !bg-gray-100 dark:!bg-gray-800 text-gray-900 dark:text-white font-bold !py-3 !rounded-2xl text-sm transition-all active:scale-[0.98] ${isCompleted ? disabledBtn : ''}`}
                   >
                     <IonIcon icon={chatbubbleEllipsesOutline} className="text-xl" /> Vendi Chat

@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import useSWR, { mutate as globalMutate } from 'swr';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { supabase } from '@/lib/supabase';
+import { getCachedInbox, putCachedInbox } from '@/lib/localCache';
 import { Avatar } from '@/shared/Avatar';
 import IonIcon from '@/shared/Icon/Icon';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
@@ -49,7 +50,10 @@ type ChatPreview = {
 /* ------------------------------------------------------------------ */
 /*  Inbox fetcher: latest message per transaction_ref + unread counts  */
 /* ------------------------------------------------------------------ */
-async function fetchInbox([_key, userId]: [string, string]): Promise<ChatPreview[]> {
+// Fresh inbox from the network (the old fetchInbox body). Writes the result
+// to the local cache before returning, so the next open is instant. Called
+// by the cache-first wrapper below.
+async function fetchInboxFresh(userId: string): Promise<ChatPreview[]> {
   // Bounded query: fetch latest 200 messages for this user
   const { data: msgs, error } = await supabase
     .from('messages')
@@ -195,7 +199,28 @@ async function fetchInbox([_key, userId]: [string, string]): Promise<ChatPreview
   for (const chat of chatMap.values()) {
     chat.unreadCount = unreadByRef.get(chat.transaction_ref) ?? 0;
   }
-  return Array.from(chatMap.values());
+  const result = Array.from(chatMap.values());
+  void putCachedInbox(userId, result);
+  return result;
+}
+
+// Cache-first inbox fetcher (Phase 2): the inbox opens instantly from disk,
+// even offline or after a restart, and fresh data syncs in the background
+// (which updates SWR + refreshes the cache, so the list updates when the
+// network catches up). Cache empty (first visit) → fetch fresh now, as before.
+async function fetchInbox([_key, userId]: [string, string]): Promise<ChatPreview[]> {
+  try {
+    const cached = await getCachedInbox(userId);
+    if (cached && cached.length > 0) {
+      void fetchInboxFresh(userId).then((fresh) => {
+        void globalMutate(['inbox', userId], fresh, { revalidate: false });
+      }).catch(() => {});
+      return cached as ChatPreview[];
+    }
+  } catch {
+    // Cache unavailable — fall through to the network fetch.
+  }
+  return fetchInboxFresh(userId);
 }
 
 /* ------------------------------------------------------------------ */
@@ -642,6 +667,13 @@ export default function MessagesList() {
           filteredChats.map((chat) => (
             <div
               key={chat.transaction_ref}
+              // Warm the room before the tap lands: hover (desktop) /
+              // touchstart (mobile) fires ahead of the click, so the heavy
+              // /chats chunk is already loading when the user taps and the
+              // zoom starts with the page ready. Next dedupes repeat
+              // prefetches for the same URL, so no guard is needed.
+              onMouseEnter={() => { void router.prefetch(`/chats?seller=${chat.partner?.id}&ref=${chat.transaction_ref}`); }}
+              onTouchStart={() => { void router.prefetch(`/chats?seller=${chat.partner?.id}&ref=${chat.transaction_ref}`); }}
               onClick={() => {
                 if (chat.partner?.id) {
                   void globalMutate(['chat-partner', chat.partner.id], chat.partner, false);

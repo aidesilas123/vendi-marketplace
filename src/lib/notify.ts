@@ -32,19 +32,28 @@ export interface NotifyInput {
 }
 
 export async function notify(input: NotifyInput): Promise<void> {
-  try {
-    await supabase.functions.invoke('send-push', {
-      body: {
-        user_id: input.userId,
-        type: input.type,
-        title: input.title,
-        body: input.body ?? '',
-        route: input.route ?? '',
-        data: input.data ?? {},
-        imageUrl: input.imageUrl ?? '',
-      },
-    });
-  } catch {
-    // Notifications are fire-and-forget.
+  // Retry the push on a slow/flaky network: a single failed invoke used to
+  // lose the push silently (no retry, no record). Bounded (3 tries, 1s +
+  // 3s backoff) so a dead network doesn't hang the sender; never throws,
+  // so a notification can never break the feature that triggered it.
+  const delays = [1000, 3000];
+  const body = {
+    user_id: input.userId,
+    type: input.type,
+    title: input.title,
+    body: input.body ?? '',
+    route: input.route ?? '',
+    data: input.data ?? {},
+    imageUrl: input.imageUrl ?? '',
+  };
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      const { error } = await supabase.functions.invoke('send-push', { body });
+      if (!error) return;
+    } catch {
+      // Network / invoke failure — retry below unless out of attempts.
+    }
+    if (attempt === delays.length) return;
+    await new Promise((r) => setTimeout(r, delays[attempt]));
   }
 }

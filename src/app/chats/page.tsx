@@ -75,6 +75,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallba
 import { useRouter, useSearchParams } from 'next/navigation';
 import useSWR, { mutate as globalMutate } from 'swr';
 import { supabase } from '@/lib/supabase';
+import { getCachedMessages, putCachedMessages, getCachedPartner, putCachedPartner, getOutbox, putOutbox, deleteOutbox } from '@/lib/localCache';
 import { notify } from '@/lib/notify';
 import { Avatar } from '@/shared/Avatar';
 import { Badge } from '@/shared/Badge';
@@ -236,7 +237,12 @@ function DealRoomChat() {
   const [hasEarlierMessages, setHasEarlierMessages] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
 
-  const fetchHistory = useCallback(async ([, ref]: [string, string]) => {
+  // Fresh history from the network (the old fetchHistory body). When
+  // `background` is true it merges the fresh list into SWR (fresh wins,
+  // older kept — so earlier-loaded messages are never wiped) instead of
+  // returning it; when false it returns the list for SWR to set as the
+  // data (first load, cache empty).
+  const syncHistoryFresh = useCallback(async (ref: string, background: boolean): Promise<any[]> => {
     const { data, error } = await supabase
       .from('messages')
       .select('*')
@@ -246,11 +252,46 @@ function DealRoomChat() {
     if (error) throw error;
     const list = (data ?? []).reverse();
     setHasEarlierMessages((data ?? []).length >= 50);
+    void putCachedMessages(ref, list);
+    if (background) {
+      void globalMutate(
+        (key: any) => Array.isArray(key) && key[0] === 'chat-history' && key[1] === ref,
+        (prev: any[] | undefined) => {
+          const byId = new Map();
+          for (const m of prev ?? []) byId.set(m.id, m);
+          for (const m of list) byId.set(m.id, m);
+          return Array.from(byId.values());
+        },
+        { revalidate: false }
+      );
+    }
     return list as any[];
   }, []);
 
+  const fetchHistory = useCallback(async ([, ref]: [string, string]) => {
+    // Phase 2: read the local cache first — the room opens instantly from
+    // disk, even offline or after a restart — and sync fresh in the
+    // background (which merges into SWR + refreshes the cache, so the room
+    // updates when the network catches up). Cache empty (first visit) →
+    // fetch fresh now, as before.
+    try {
+      const cached = await getCachedMessages(ref);
+      if (cached && cached.length > 0) {
+        setHasEarlierMessages(cached.length >= 50);
+        void syncHistoryFresh(ref, true).catch(() => {});
+        return cached;
+      }
+    } catch {
+      // Cache unavailable — fall through to the network fetch.
+    }
+    return syncHistoryFresh(ref, false);
+  }, [syncHistoryFresh]);
+
   const loadEarlierMessages = async () => {
     if (!txRef || loadingEarlier || !hasEarlierMessages) return;
+    // Show everything: the older messages being loaded sit above the
+    // last-20 cap, so they would never render while it is on.
+    setRenderLimit(Infinity);
     const scrollEl = ptrRef.current?.scrollEl();
     const prevScrollHeight = scrollEl?.scrollHeight ?? 0;
     const prevScrollTop = scrollEl?.scrollTop ?? 0;
@@ -275,6 +316,9 @@ function DealRoomChat() {
       }
       if (olderList.length > 0) {
         await mutate((prev) => [...olderList, ...(prev ?? [])], { revalidate: false });
+        // Phase 2: keep the older messages in the local cache too, so the
+        // next open shows them instantly instead of re-fetching.
+        void putCachedMessages(txRef, [...olderList, ...(serverMessages ?? [])]).catch(() => {});
         requestAnimationFrame(() => {
           if (scrollEl) {
             const heightDiff = scrollEl.scrollHeight - prevScrollHeight;
@@ -308,6 +352,28 @@ function DealRoomChat() {
   const { data: partnerInfo, isLoading: partnerLoading } = useSWR(
     partnerId ? ['chat-partner', partnerId] : null,
     async ([, id]: string[]) => {
+      // Phase 2: partner header from the local cache first (instant, even
+      // after a restart), then a background refresh so a changed name or
+      // avatar still lands without blanking the header.
+      try {
+        const cached = await getCachedPartner(id);
+        if (cached) {
+          void (async () => {
+            try {
+              const { data, error } = await supabase
+                .from('users')
+                .select('id, full_name, avatar_url, is_verified')
+                .eq('id', id)
+                .single();
+              if (!error && data) {
+                void putCachedPartner(id, data);
+                void globalMutate(['chat-partner', id], data, { revalidate: false });
+              }
+            } catch {}
+          })();
+          return cached;
+        }
+      } catch {}
       const { data, error } = await supabase
         .from('users')
         .select('id, full_name, avatar_url, is_verified')
@@ -317,6 +383,7 @@ function DealRoomChat() {
         console.warn("[Chat] Could not load the other user's profile (usually an RLS policy blocking reads of other users' rows):", error.message);
         return null;
       }
+      void putCachedPartner(id, data);
       return data;
     },
     {
@@ -334,6 +401,37 @@ function DealRoomChat() {
     });
     return [...server, ...pendingOptimistic];
   }, [serverMessages, optimisticMsgs]);
+  // Phase 2 outbox: failed messages persist on the device, so Retry
+  // survives an app restart. On every change, save the failed ones to
+  // IndexedDB and delete any outbox entry that is no longer failed here
+  // (it succeeded, or was replaced by its real message). On mount, load
+  // this room's failed messages back into the list (deduped by temp id).
+  const outboxLoadedRef = useRef(false);
+  useEffect(() => {
+    if (!txRef) return;
+    if (!outboxLoadedRef.current) {
+      outboxLoadedRef.current = true;
+      void getOutbox(txRef).then((saved) => {
+        if (!saved || saved.length === 0) return;
+        setOptimisticMsgs((prev) => {
+          const have = new Set(prev.map((m) => m.id));
+          const missing = saved.filter((m) => m && m.id && !have.has(m.id));
+          return missing.length > 0 ? [...prev, ...missing] : prev;
+        });
+      }).catch(() => {});
+    }
+    // Sync failed messages to the outbox (fire-and-forget, never throws).
+    const failed = optimisticMsgs.filter((m) => m?.status === 'failed');
+    void Promise.all(failed.map((m) => putOutbox(txRef, m))).catch(() => {});
+    // Clean up outbox entries that are no longer failed in this room.
+    void getOutbox(txRef).then((saved) => {
+      const failedIds = new Set(failed.map((m) => m.id));
+      for (const m of saved) {
+        if (m?.id && !failedIds.has(m.id)) void deleteOutbox(m.id);
+      }
+    }).catch(() => {});
+  }, [txRef, optimisticMsgs]);
+
   /** setMessages replacement: writes through the SWR cache, no refetch. */
   const updateMessages = useCallback(
     (fn: (prev: any[]) => any[]) => {
@@ -380,6 +478,13 @@ function DealRoomChat() {
   const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
   const [loadedMedia, setLoadedMedia] = useState<Record<string, boolean>>({});
   const initialScrollDone = useRef(false);
+  // First-paint render cap: only the last 20 bubbles mount initially
+  // (the ones visible at the bottom); the rest fill in 300ms after the
+  // zoom settles so the mount doesn't block the transition.
+  const [renderLimit, setRenderLimit] = useState(20);
+  const prevRenderLimitRef = useRef(20);
+  // Audio ids already probed for duration (probe once, never re-probe).
+  const probedAudioIdsRef = useRef<Set<string>>(new Set());
   const swipedTriggeredRef = useRef(false);
 
   const showCameraRef = useRef(false);
@@ -452,10 +557,24 @@ function DealRoomChat() {
       return;
     }
     let cancelled = false;
-    // Safety net: if init hasn't produced a user after 20s, surface an error
-    // with a retry button instead of spinning forever.
+    // Enable send/record instantly on a slow network: read the session
+    // locally (no network) and seed currentUser with just the id, so the
+    // composer doesn't wait for getUser + the profile fetch (which are
+    // slow when the connection is slow). initializeChat overwrites this
+    // minimal user with the full profile once it loads.
+    void supabase.auth.getSession().then(({ data }) => {
+      const sid = data.session?.user?.id;
+      if (!cancelled && sid && !currentUserRef.current) {
+        currentUserRef.current = { id: sid } as any;
+        setCurrentUser({ id: sid } as any);
+      }
+    }).catch(() => {});
+    // Safety net: if init hasn't produced a user after 20s AND no messages
+    // have loaded either, surface an error with a retry button instead of
+    // spinning forever. When messages are already showing, auth is just
+    // slow — the chat is usable, so never cover it with an error panel.
     const safetyTimeout = setTimeout(() => {
-      if (!cancelled && !currentUserRef.current) {
+      if (!cancelled && !currentUserRef.current && !initialScrollDone.current) {
         setInitError('Loading is taking too long. Check your connection and try again.');
       }
     }, 20000);
@@ -554,9 +673,7 @@ function DealRoomChat() {
             if (newMsg.sender_id === currentUserRef.current?.id) {
               setOptimisticMsgs((prev) => prev.filter((m) => {
                 if (newMsg.media_url && m.media_url === newMsg.media_url) return false;
-                if (newMsg.message_type === 'audio' && m.message_type === 'audio') return false;
-                if (newMsg.message_type === 'image' && m.message_type === 'image') return false;
-                if (newMsg.message_type === 'text' && m.content === newMsg.content) return false;
+                                                if (newMsg.message_type === 'text' && m.content === newMsg.content) return false;
                 return true;
               }));
             }
@@ -588,9 +705,7 @@ function DealRoomChat() {
             if (newMsg.sender_id === currentUserRef.current?.id) {
               setOptimisticMsgs((prev) => prev.filter((m) => {
                 if (newMsg.media_url && m.media_url === newMsg.media_url) return false;
-                if (newMsg.message_type === 'audio' && m.message_type === 'audio') return false;
-                if (newMsg.message_type === 'image' && m.message_type === 'image') return false;
-                if (newMsg.message_type === 'text' && m.content === newMsg.content) return false;
+                                                if (newMsg.message_type === 'text' && m.content === newMsg.content) return false;
                 return true;
               }));
             }
@@ -653,6 +768,13 @@ function DealRoomChat() {
           }
         ).subscribe((status: string) => {
             if (status !== 'SUBSCRIBED' || !txRef) return;
+            // Reconnected: if the user is still typing/recording right
+            // now, re-send that state — the broadcasts sent while the
+            // socket was down were lost (ephemeral, no replay), so the
+            // partner would otherwise never see the current indicator.
+            if (myActivityRef.current && chatChannelRef.current) {
+              chatChannelRef.current.send({ type: 'broadcast', event: 'activity', payload: { userId: currentUserRef.current?.id, activity: myActivityRef.current } });
+            }
             // Mount refresh: catch messages sent while this room was unmounted.
             // The channel was removed on unmount, so realtime missed them, and SWR
             // deduping may skip a mount refetch. Cached data shows instantly;
@@ -760,12 +882,26 @@ function DealRoomChat() {
         initialScrollDone.current = true;
         scrollToBottom(false);
         requestAnimationFrame(() => scrollToBottom(false));
+      } else if (prevRenderLimitRef.current !== renderLimit && renderLimit === Infinity) {
+        // Cap just lifted: the list grew upward by the older bubbles, so
+        // re-pin to the bottom instantly (before paint, no visible jump).
+        scrollToBottom(false);
       } else if (isNearBottom()) {
         scrollToBottom(true);
       }
     }
+    prevRenderLimitRef.current = renderLimit;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length, historyLoading]);
+  }, [messages.length, historyLoading, renderLimit, partnerActivity]);
+
+  // Fill in the rest of the list 300ms after mount (after the zoom
+  // settles): the first paint mounts only the last 20 bubbles, so the
+  // transition runs on a light page, and the older bubbles appear above
+  // the fold where they can't be seen popping in.
+  useEffect(() => {
+    const id = setTimeout(() => setRenderLimit(Infinity), 300);
+    return () => clearTimeout(id);
+  }, []);
 
   // Pull-to-refresh on the feed is handled by the shared <PullToRefresh>
   // wrapper (see feed JSX below) — onRefresh revalidates the SWR history.
@@ -788,9 +924,17 @@ function DealRoomChat() {
     };
   }, []);
 
+  // Audio duration probes run 300ms after mount (after the zoom settles)
+  // so creating Audio objects + fetching metadata doesn't compete with
+  // the first paint, and each id is probed once (tracked in a ref) instead
+  // of re-probing on every messages change until its metadata resolves.
   useEffect(() => {
-    messages.forEach((msg) => {
-      if (msg.message_type === 'audio' && msg.media_url && audioDurations[msg.id] === undefined) {
+    const id = setTimeout(() => {
+      messages.forEach((msg) => {
+        if (msg.message_type !== 'audio' || !msg.media_url) return;
+        if (audioDurations[msg.id] !== undefined) return;
+        if (probedAudioIdsRef.current.has(String(msg.id))) return;
+        probedAudioIdsRef.current.add(String(msg.id));
         const probe = new Audio();
         probe.preload = 'metadata';
         probe.src = msg.media_url;
@@ -799,8 +943,9 @@ function DealRoomChat() {
             setAudioDurations((prev) => ({ ...prev, [msg.id]: Math.round(probe.duration) }));
           }
         };
-      }
-    });
+      });
+    }, 300);
+    return () => clearTimeout(id);
   }, [messages]);
 
   // Close the "Report to Vendi" menu when tapping anywhere else.
@@ -1211,6 +1356,88 @@ function DealRoomChat() {
     }
   };
 
+  // --- Resend a failed message (tap the red Retry on its ticks). Reuses the
+  // same temp id so the optimistic is replaced in place (no duplicate) and
+  // the success path below removes it by that id, exactly like a fresh send.
+  // Text retries just the DB save; media/voice retry the upload first when
+  // the file is still held locally (_localDataUri / _localBlob / a data:
+  // media_url), or just the DB save when the upload already finished
+  // (media_url is a Cloudinary https URL). When nothing is left to retry
+  // from (an upload that failed before this build stored its file), it says
+  // so instead of failing silently.
+  const resendMessage = async (msg: any) => {
+    if (!msg || msg.status !== 'failed' || !txRef || !currentUser) return;
+    const tempId = msg.id;
+    const replyMeta: Record<string, any> = {};
+    if (msg.reply_to_type) replyMeta.reply_to_type = msg.reply_to_type;
+    if (msg.reply_to_content) replyMeta.reply_to_content = msg.reply_to_content;
+    if (msg.reply_to_sender_label) replyMeta.reply_to_sender_label = msg.reply_to_sender_label;
+    if (msg.reply_to_id) replyMeta.reply_to_id = msg.reply_to_id;
+    // Back to 'sending' so the ticks show the clock again while it retries.
+    setOptimisticMsgs((prev) => prev.map((m) => m.id === tempId ? { ...m, status: 'sending' } : m));
+    const finishOk = (savedMsg: any) => {
+      playChatSound('sent');
+      setOptimisticMsgs((prev) => prev.filter((m) => m.id !== tempId));
+      updateMessages((prev) => (prev.find((m) => m.id === savedMsg.id) ? prev : [...prev, savedMsg]));
+      chatChannelRef.current?.send({ type: 'broadcast', event: 'new_message', payload: savedMsg });
+      if (partnerId) void broadcastTo(`user_inbox_${partnerId}`, 'new_message', savedMsg);
+      void notifyChatPartner(savedMsg);
+      void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
+    };
+    const failAgain = () => {
+      setOptimisticMsgs((prev) => prev.map((m) => m.id === tempId ? { ...m, status: 'failed' } : m));
+    };
+    try {
+      if (msg.message_type === 'text') {
+        const { data: savedMsg, error } = await supabase.from('messages').insert({
+          transaction_ref: txRef, sender_id: currentUser.id, receiver_id: partnerId,
+          content: msg.content, message_type: 'text', status: 'sent', ...replyMeta
+        }).select().single();
+        if (error || !savedMsg) failAgain();
+        else finishOk(savedMsg);
+        return;
+      }
+      // Media / voice: work out the file to (re-)upload, if one is needed.
+      let mediaUrl: string | undefined;
+      if (typeof msg.media_url === 'string' && msg.media_url.startsWith('https://')) {
+        mediaUrl = msg.media_url; // upload already finished — just re-save
+      } else if (msg._localDataUri) {
+        const formData = new FormData();
+        formData.append('file', msg._localDataUri);
+        formData.append('upload_preset', process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || 'Campus Vendi');
+        formData.append('resource_type', 'auto');
+        const uploaded = await uploadToCloudinaryWithProgress(formData, process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME, (pct) => {
+          setUploadProgress((prev) => ({ ...prev, [tempId]: pct }));
+        });
+        mediaUrl = uploaded?.secure_url;
+        clearUploadProgress(tempId);
+      } else if (msg._localBlob) {
+        const freshUrl = URL.createObjectURL(msg._localBlob);
+        setOptimisticMsgs((prev) => prev.map((m) => m.id === tempId ? { ...m, media_url: freshUrl } : m));
+        await uploadVoiceNoteBlob(msg._localBlob, msg._localMimeType || 'audio/webm', tempId, msg._localDuration || 0, freshUrl, replyMeta);
+        return; // uploadVoiceNoteBlob -> finalizeVoiceNote handles success/failure
+      } else if (typeof msg.media_url === 'string' && msg.media_url.startsWith('data:')) {
+        await uploadVoiceNote(msg.media_url, tempId, msg._localDuration || 0, replyMeta);
+        return; // uploadVoiceNote -> finalizeVoiceNote handles success/failure
+      } else {
+        showError('Cannot Retry', 'That file is no longer on this device. Please send it again.');
+        failAgain();
+        return;
+      }
+      if (!mediaUrl) { failAgain(); return; }
+      const { data: savedMsg, error } = await supabase.from('messages').insert({
+        transaction_ref: txRef, sender_id: currentUser.id, receiver_id: partnerId,
+        content: msg.content || (msg.message_type === 'video' ? 'Video message' : msg.message_type === 'audio' ? 'Voice note' : 'Photo'),
+        media_url: mediaUrl, message_type: msg.message_type, status: 'sent', ...replyMeta
+      }).select().single();
+      if (error || !savedMsg) failAgain();
+      else finishOk(savedMsg);
+    } catch (err: any) {
+      console.error('[Chat] Resend failed:', err?.message || err);
+      failAgain();
+    }
+  };
+
   // --- Upload helper with REAL progress (fetch() cannot report upload
   // progress for FormData bodies — XMLHttpRequest can, via xhr.upload). ---
   const uploadToCloudinaryWithProgress = (
@@ -1282,6 +1509,10 @@ function DealRoomChat() {
           console.warn('[Chat] Preflight image compression bypassed:', compErr);
         }
       }
+      // Keep the file for a later retry: if this upload (or the DB save
+      // after it) fails on a slow network, resend re-uploads from here
+      // instead of asking the user to pick the file again.
+      setOptimisticMsgs((prev) => prev.map((m) => m.id === tempId ? { ...m, _localDataUri: dataUri } : m));
       const formData = new FormData();
       const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || 'Campus Vendi';
       formData.append('file', dataUri);
@@ -1736,7 +1967,7 @@ function DealRoomChat() {
         setOptimisticMsgs((prev) => [...prev, {
           id: tempId, sender_id: currentUser.id, receiver_id: partnerId, content: "Voice note",
           media_url: localUrl, message_type: 'audio', status: 'sending', created_at: new Date().toISOString(),
-          _localDuration: finalDuration, _localWaveform: finalWaveform, ...replyMeta
+          _localDuration: finalDuration, _localWaveform: finalWaveform, _localBlob: blob, _localMimeType: actualMimeType, ...replyMeta
         }]);
         setReplyTarget(null);
         setUploadProgress((prev) => ({ ...prev, [tempId]: 0 }));
@@ -1963,13 +2194,30 @@ function DealRoomChat() {
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
   };
 
-  const renderTicks = (status?: string) => {
+  // Ticks + failed-state action: a failed message shows a tappable Retry
+  // (not just a red X) that re-sends it from the saved content/media.
+  // Callers pass the whole message (not just the status) so Retry knows
+  // what to re-send.
+  const renderTicks = (msg: any) => {
+    const status = msg?.status;
     if (!status) return null;
     if (status === 'sending') return <IonIcon icon={timeOutline} className="text-gray-400 text-[11px] ml-0.5" />;
     if (status === 'sent') return <IonIcon icon={checkmarkOutline} className="text-gray-400 text-sm ml-0.5" />;
     if (status === 'delivered') return <IonIcon icon={checkmarkDoneOutline} className="text-gray-400 text-sm ml-0.5" />;
     if (status === 'read') return <IonIcon icon={checkmarkDoneOutline} className="!text-orange-500 text-sm ml-0.5" />;
-    if (status === 'failed') return <IonIcon icon={closeOutline} className="text-red-500 text-sm ml-0.5" />;
+    if (status === 'failed') {
+      return (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); void resendMessage(msg); }}
+          className="flex items-center gap-0.5 ml-0.5 active:scale-95 transition-transform"
+          aria-label="Retry sending this message"
+        >
+          <IonIcon icon={closeOutline} className="text-red-500 text-sm" />
+          <span className="text-[10px] font-bold text-red-500">Retry</span>
+        </button>
+      );
+    }
     return null;
   };
 
@@ -2011,7 +2259,7 @@ function DealRoomChat() {
           return (
             <div
               key={i}
-              className={`w-[2px] !rounded-full transition-all flex-shrink-0 ${live ? '!bg-red-400 animate-pulse' : (played ? '!bg-orange-500' : '!bg-gray-400 dark:!bg-gray-500')}`}
+              className={`w-[2px] !rounded-full transition-colors flex-shrink-0 ${live ? '!bg-red-400 animate-pulse' : (played ? '!bg-orange-500' : '!bg-gray-400 dark:!bg-gray-500')}`}
               style={{ height: `${Math.max(15, h)}%` }}
             />
           );
@@ -2095,7 +2343,12 @@ function DealRoomChat() {
   // changes (messages, playback state, uploads, swipe/search highlighting).
   // ==========================================================================
   const renderedMessages = useMemo(() => {
-    return messages.map((msg) => {
+    const visibleMessages = searchQuery.trim()
+      ? messages
+      : renderLimit === Infinity
+        ? messages
+        : messages.slice(-renderLimit);
+    return visibleMessages.map((msg) => {
       const isMe = currentUser ? msg.sender_id === currentUser.id : (partnerId ? msg.sender_id !== partnerId : false);
       const msgTime = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const isActiveSearchMatch = !!searchQuery.trim() && searchMatches[searchIndex] === msg.id;
@@ -2106,7 +2359,7 @@ function DealRoomChat() {
       // instead of centered.
       if (msg.is_deleted) {
         return (
-          <div key={msg.id} ref={setBubbleRef} className={`flex w-full min-w-0 ${isMe ? 'justify-end' : 'justify-start'} my-1 animate-in fade-in duration-150`}>
+          <div key={msg.id} ref={setBubbleRef} className={`flex w-full min-w-0 [content-visibility:auto] [contain-intrinsic-size:auto_120px] ${isMe ? 'justify-end' : 'justify-start'} my-1`}>
             <div className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-300/60 dark:bg-gray-800/60 !rounded-full text-[11px] font-semibold text-gray-500 dark:text-gray-400 italic">
               <IonIcon icon={closeOutline} className="text-sm" />
               This message was deleted
@@ -2122,7 +2375,7 @@ function DealRoomChat() {
             key={msg.id}
             id={`msg-${msg.id}`}
             ref={setBubbleRef}
-            className={`flex w-full min-w-0 ${isMe ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2 duration-200 transition-all ${
+            className={`flex w-full min-w-0 [content-visibility:auto] [contain-intrinsic-size:auto_120px] ${isMe ? 'justify-end' : 'justify-start'} transition-transform ${
               highlightedMsgId === msg.id ? 'scale-[1.02] ring-2 ring-orange-500 rounded-2xl' : ''
             }`}
           >
@@ -2142,7 +2395,7 @@ function DealRoomChat() {
                 <div className="flex items-center justify-end gap-1 mt-1 -mb-0.5">
                   {msg.is_edited && <span className="text-[9px] italic text-gray-400">edited</span>}
                   <span className={`text-[9px] font-bold ${isMe ? 'text-orange-900/50 dark:text-orange-200/50' : 'text-gray-400'}`}>{msgTime}</span>
-                  {isMe && renderTicks(msg.status)}
+                  {isMe && renderTicks(msg)}
                 </div>
               </div>
               {renderReactions(msg.id, isMe)}
@@ -2160,7 +2413,7 @@ function DealRoomChat() {
             key={msg.id}
             id={`msg-${msg.id}`}
             ref={setBubbleRef}
-            className={`flex w-full min-w-0 ${isMe ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2 duration-200 transition-all ${
+            className={`flex w-full min-w-0 [content-visibility:auto] [contain-intrinsic-size:auto_120px] ${isMe ? 'justify-end' : 'justify-start'} transition-transform ${
               highlightedMsgId === msg.id ? 'scale-[1.02] ring-2 ring-orange-500 rounded-2xl' : ''
             }`}
           >
@@ -2194,7 +2447,7 @@ function DealRoomChat() {
                 />
                 <div className="flex items-center justify-end gap-1 px-1 -mt-1 pb-0.5">
                   <span className={`text-[9px] font-bold ${isMe ? 'text-gray-500' : 'text-gray-400'}`}>{msgTime}</span>
-                  {isMe && renderTicks(msg.status)}
+                  {isMe && renderTicks(msg)}
                 </div>
               </div>
               {renderReactions(msg.id, isMe)}
@@ -2211,7 +2464,7 @@ function DealRoomChat() {
             key={msg.id}
             id={`msg-${msg.id}`}
             ref={setBubbleRef}
-            className={`flex w-full min-w-0 ${isMe ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2 duration-200 transition-all ${
+            className={`flex w-full min-w-0 [content-visibility:auto] [contain-intrinsic-size:auto_120px] ${isMe ? 'justify-end' : 'justify-start'} transition-transform ${
               highlightedMsgId === msg.id ? 'scale-[1.02] ring-2 ring-orange-500 rounded-2xl' : ''
             }`}
           >
@@ -2233,7 +2486,7 @@ function DealRoomChat() {
                     src={msg.media_url}
                     loading="lazy"
                     onLoad={() => setLoadedMedia((prev) => ({ ...prev, [msg.id]: true }))}
-                    className="w-full h-full object-cover rounded-xl transition-opacity duration-200"
+                    className={`w-full h-full object-cover rounded-xl transition-opacity duration-200 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}
                   />
                   {!isLoaded && !isUploading && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/10 dark:bg-white/5 animate-pulse">
@@ -2249,7 +2502,7 @@ function DealRoomChat() {
                 )}
                 <div className="flex items-center justify-end gap-1 px-1 pt-1">
                   <span className={`text-[9px] font-bold ${isMe ? 'text-gray-500' : 'text-gray-400'}`}>{msgTime}</span>
-                  {isMe && renderTicks(msg.status)}
+                  {isMe && renderTicks(msg)}
                 </div>
               </div>
               {renderReactions(msg.id, isMe)}
@@ -2261,7 +2514,7 @@ function DealRoomChat() {
       if (msg.message_type === 'video') {
         const isUploading = msg.status === 'sending' && uploadProgress[msg.id] !== undefined;
         return (
-          <div key={msg.id} ref={setBubbleRef} className={`flex w-full min-w-0 ${isMe ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2 duration-200`}>
+          <div key={msg.id} ref={setBubbleRef} className={`flex w-full min-w-0 [content-visibility:auto] [contain-intrinsic-size:auto_120px] ${isMe ? 'justify-end' : 'justify-start'}`}>
             <div className="relative max-w-[75%] min-w-0">
               {renderSwipeReplyIndicator(msg)}
               <div
@@ -2288,7 +2541,7 @@ function DealRoomChat() {
                 </div>
                 <div className="flex items-center justify-end gap-1 px-2 pb-1 pt-1">
                   <span className={`text-[9px] font-bold ${isMe ? 'text-gray-500' : 'text-gray-400'}`}>{msgTime}</span>
-                  {isMe && renderTicks(msg.status)}
+                  {isMe && renderTicks(msg)}
                 </div>
               </div>
               {renderReactions(msg.id, isMe)}
@@ -2300,7 +2553,7 @@ function DealRoomChat() {
       return null;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, currentUser, partnerId, partnerInfo, playback, audioDurations, uploadProgress, searchQuery, searchMatches, searchIndex, highlightedMsgId, loadedMedia, reactions]);
+  }, [messages, currentUser, partnerId, partnerInfo, playback, audioDurations, uploadProgress, searchQuery, searchMatches, searchIndex, highlightedMsgId, loadedMedia, reactions, renderLimit]);
 
   // Cancel-drag opacity fade: full opacity at rest, fading toward ~30% as
   // the mic button is dragged toward the cancel threshold.
@@ -2416,7 +2669,7 @@ function DealRoomChat() {
       })()}
 
       {/* STICKY HEADER */}
-      <div className="flex-shrink-0 w-full bg-white dark:bg-black border-b border-gray-200 dark:border-gray-800/60 transition-all shadow-sm z-50">
+      <div className="flex-shrink-0 w-full bg-white dark:bg-black border-b border-gray-200 dark:border-gray-800/60 transition-colors shadow-sm z-50">
         <div className="flex items-center justify-between px-2 py-2">
           <div className="flex items-center gap-2 min-w-0">
             <button onClick={() => router.back()} className="!p-2 -ml-1 text-gray-900 dark:text-white active:scale-95 transition-transform !rounded-full flex-shrink-0">
@@ -2620,7 +2873,7 @@ function DealRoomChat() {
       {showScrollBottom && (
         <button
           onClick={() => scrollToBottom(true)}
-          className="absolute right-4 bottom-20 z-40 !w-10 !h-10 !min-w-[40px] !min-h-[40px] !p-0 !rounded-full bg-white dark:bg-[#1f2937] shadow-lg border border-gray-200/80 dark:border-gray-700 flex items-center justify-center text-gray-700 dark:text-gray-200 active:scale-90 transition-all animate-in fade-in zoom-in-95 duration-150"
+          className="absolute right-4 bottom-20 z-40 !w-10 !h-10 !min-w-[40px] !min-h-[40px] !p-0 !rounded-full bg-white dark:bg-[#1f2937] shadow-lg border border-gray-200/80 dark:border-gray-700 flex items-center justify-center text-gray-700 dark:text-gray-200 active:scale-90 transition-transform animate-in fade-in zoom-in-95 duration-150"
           aria-label="Scroll to bottom"
         >
           <IonIcon icon={chevronDownOutline} className="text-xl pointer-events-none" />
@@ -2676,7 +2929,7 @@ function DealRoomChat() {
           <div className="max-w-2xl mx-auto w-full min-w-0 flex items-end gap-2 relative">
             {(recordState === 'locked' || recordState === 'paused') ? (
               <>
-                <div className="flex-1 min-w-0 overflow-hidden bg-white dark:bg-black !rounded-[24px] min-h-[48px] flex items-center justify-between px-2 shadow-md border border-gray-200 dark:border-gray-700 transition-all">
+                <div className="flex-1 min-w-0 overflow-hidden bg-white dark:bg-black !rounded-[24px] min-h-[48px] flex items-center justify-between px-2 shadow-md border border-gray-200 dark:border-gray-700 transition-colors">
                   <button
                     onClick={(e) => { e.preventDefault(); e.stopPropagation(); cancelRecordingAction(); }}
                     className="!w-9 !h-9 !min-w-[36px] !min-h-[36px] !aspect-square !rounded-full flex items-center justify-center text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex-shrink-0 z-10"

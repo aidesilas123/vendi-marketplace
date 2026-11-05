@@ -16,7 +16,8 @@ const EXIT_MS = 280;
  * Source: push.ts dispatches `vendi-push-received` when the push plugin
  * reports a foreground arrival. Behavior: slides down from the top, swipe
  * up / left / right dismisses, tap opens the destination, auto-dismisses
- * after 5s.
+ * after 5s. Suppressed (chat-only): a chat push whose ref matches the room
+ * already open is dropped silently — the room shows the message itself.
  */
 export function PushBanner() {
   const router = useRouter();
@@ -56,6 +57,29 @@ export function PushBanner() {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<PushPayload>).detail;
       if (!detail?.title) return;
+      // Chat-only suppression: if this push opens the chat room you are
+      // already sitting in, drop it silently — no banner, no banner sound.
+      // The room shows the message via realtime and plays its own received
+      // sound, so the banner would be a duplicate pop-over plus a second
+      // sound. Other push types are untouched (chat-only scope): a wallet
+      // or order push still shows its banner even on its own page. The
+      // route's ref (or id) must match the open room's ref; a chat route
+      // with no ref can't be confirmed as this room, so it shows as usual.
+      // window.location is read live here, not usePathname/useSearchParams:
+      // the handler is registered once, so a hook value would go stale
+      // after navigating, and useSearchParams would need a Suspense boundary.
+      if (detail?.route) {
+        try {
+          const routeUrl = new URL(detail.route, window.location.origin);
+          if (routeUrl.pathname === '/chats') {
+            const routeRef = routeUrl.searchParams.get('ref') || routeUrl.searchParams.get('id');
+            if (routeRef && window.location.pathname === '/chats') {
+              const here = new URLSearchParams(window.location.search);
+              if ((here.get('ref') || here.get('id')) === routeRef) return;
+            }
+          }
+        } catch {}
+      }
       if (exitTimer.current) clearTimeout(exitTimer.current);
       setExitTo(null);
       setDrag(null);
