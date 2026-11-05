@@ -207,9 +207,12 @@ html {
 /* ==========================================================================
    Page zoom + step slide animations (zoom navigation)
    --------------------------------------------------------------------------
-   Page transitions are a scale + opacity keyframe: the entering page
-   zooms in from 0.96 to 1 while fading in. Scale + opacity are both
-   compositor properties (no layout, no re-raster), so the zoom runs
+   Page transitions are a scale-only keyframe: the entering page
+   zooms in from 0.96 to 1, opaque throughout (no opacity fade).
+   Opacity is deliberately absent: a fading page over the kept page
+   underneath blends two pages' text at slightly different scales,
+   which reads as blur / ghosting until it settles. Scale is a
+   compositor property (no layout, no re-raster), so the zoom runs
    cleanly even while React mounts the new page on the main thread and
    even on low-end phones — and unlike a pure opacity fade, the scale
    makes the transition actually visible. Fill mode is forwards, so the
@@ -236,16 +239,18 @@ html {
 .vendi-step-in-forward { animation: vendi-step-in-forward 300ms ease-out; }
 .vendi-step-in-back { animation: vendi-step-in-back 300ms ease-out; }
 
-/* Page zoom: forward grows out (scale 0.96→1 + opacity 0→1), back
-   shrinks in (scale 1.04→1 + opacity 0→1) — same 220ms ease-out, same
-   fade, opposite scale direction, so direction is readable by feel.
+/* Page zoom: forward grows out (scale 0.96→1), back
+   shrinks in (scale 1.04→1) — same 220ms ease-out, same
+   rhythm, opposite scale direction, so direction is readable by feel.
+   Opaque throughout: the kept page underneath shows only around the
+   edges while the new page grows, never through it (no ghosting/blur).
    Applies to stack navigations and non-shell navigations (auth pages,
    the /chats room) alike. Kept-tab reveals stay instant (plain div,
    native tab behaviour); the first-mount fallback stays plain too
    (robustness over uniformity on that rare path). */
 @keyframes vendi-zoom-in {
-  from { opacity: 0; transform: scale(0.96); }
-  to { opacity: 1; transform: scale(1); }
+  from { transform: scale(0.96); }
+  to { transform: scale(1); }
 }
 .vendi-zoom-in {
   animation: vendi-zoom-in 220ms ease-out forwards;
@@ -255,10 +260,10 @@ html {
 /* Back entrance: starts slightly larger than the screen and settles to
    normal. Edges sit a touch off-screen for the first frames, then slide
    into view as it shrinks — that slide is part of the motion, not a
-   clip bug. Same duration and fade as vendi-zoom-in, reversed scale. */
+   clip bug. Same duration as vendi-zoom-in, reversed scale, opaque throughout. */
 @keyframes vendi-shrink-in {
-  from { opacity: 0; transform: scale(1.04); }
-  to { opacity: 1; transform: scale(1); }
+  from { transform: scale(1.04); }
+  to { transform: scale(1); }
 }
 .vendi-shrink-in {
   animation: vendi-shrink-in 220ms ease-out forwards;

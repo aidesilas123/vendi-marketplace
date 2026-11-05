@@ -71,7 +71,7 @@
     revisit with a non-portal approach (e.g. normal-flow layout).
   ============================================================================
 */
-import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import useSWR, { mutate as globalMutate } from 'swr';
 import { supabase } from '@/lib/supabase';
@@ -87,6 +87,12 @@ const CameraCapture = dynamic(() => import('./components/CameraCapture').then((m
 const GalleryPicker = dynamic(() => import('./components/GalleryPicker').then((m) => m.GalleryPicker), { ssr: false });
 const PhotoPreview = dynamic(() => import('./components/PhotoPreview').then((m) => m.PhotoPreview), { ssr: false });
 const ImageViewer = dynamic(() => import('@/shared/ImageViewer/ImageViewer').then((m) => m.ImageViewer), { ssr: false });
+
+// Scroll-to-bottom must run before paint (not after) on first enter, or the
+// first frame shows the oldest messages at the top, then jumps to the bottom.
+// useLayoutEffect does that on the client; on the server it warns, so use
+// useEffect there (static export prerender only) — same API, no warning.
+const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 import { VoiceNotePlayer } from './components/VoiceNotePlayer';
 import { hapticImpact, ImpactStyle } from '@/shared/haptics';
 import {
@@ -465,19 +471,37 @@ function DealRoomChat() {
         if (userError) throw userError;
         if (!user) { router.push('/login'); return; }
 
-        const uniqueChannelName = `chat_${txRef}`;
         if (cancelled) return;
-        // Clean up any existing channel with this topic so we start fresh with no join-race errors
-        const existingChannels = (supabase as any).getChannels?.() || [];
-        const staleCh = existingChannels.find((c: any) => c.topic === `realtime:${uniqueChannelName}` || c.topic === uniqueChannelName);
-        if (staleCh) {
-          try { void supabase.removeChannel(staleCh); } catch {}
+        // Reuse a live channel for this room instead of dropping + recreating it.
+        // Dropping a still-joined channel then immediately re-joining the same
+        // topic races the server-side leave: the new subscribe is rejected
+        // ("tried to join multiple times"), the channel lands in error, and
+        // realtime silently dies — no typing, no receipts, no live messages.
+        // A live channel is already subscribed with handlers attached, so
+        // reuse it (skip creation AND the .on() chain below).
+        let reuseChannel = false;
+        const existing = chatChannelRef.current;
+        if (existing && chatChannelTxRef.current === txRef) {
+          // A removal was scheduled by a previous cleanup (deferred 0ms) but
+          // hasn't fired yet — cancel it, the channel is still live.
+          if (chatRemovalTimeoutRef.current) {
+            clearTimeout(chatRemovalTimeoutRef.current);
+            chatRemovalTimeoutRef.current = null;
+          }
+          const adapter = (existing as any)?.channelAdapter;
+          const state = (existing as any)?.state;
+          if (adapter?.isJoined?.() || adapter?.isJoining?.() || state === 'joined' || state === 'joining') {
+            reuseChannel = true;
+            chatChannel = existing;
+          }
         }
-        chatChannel = supabase.channel(uniqueChannelName, {
-          config: { presence: { key: user.id } }
-        });
-        chatChannelRef.current = chatChannel;
-        chatChannelTxRef.current = txRef;
+        if (!reuseChannel) {
+          chatChannel = supabase.channel(`chat_${txRef}`, {
+            config: { presence: { key: user.id } }
+          });
+          chatChannelRef.current = chatChannel;
+          chatChannelTxRef.current = txRef;
+        }
 
         const { data: userProfile, error: profileError } = await supabase
           .from('users')
@@ -520,6 +544,7 @@ function DealRoomChat() {
         // throws, and .subscribe() twice throws "tried to join multiple
         // times". The if body is the entire multi-line chain (through
         // ).subscribe();), so no re-indent is needed.
+        if (!reuseChannel) {
         chatChannel.on(
           'postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'messages', filter: `transaction_ref=eq.${txRef}` },
@@ -644,6 +669,7 @@ function DealRoomChat() {
               });
             }).catch(() => {});
           });
+        }
 
         // 2. Global presence is single-owned by AppShell (src/lib/realtime.ts).
         //    This page used to create the same 'global_presence' topic and call
@@ -673,11 +699,22 @@ function DealRoomChat() {
       cancelled = true;
       clearTimeout(safetyTimeout);
       if (chatChannel) {
-        try { void supabase.removeChannel(chatChannel); } catch {}
-      }
-      if (chatChannelRef.current === chatChannel) {
-        chatChannelRef.current = null;
-        chatChannelTxRef.current = null;
+        // Deferred removal (0ms): a fast remount of the same room (StrictMode,
+        // quick back-and-forth) cancels this and reuses the live channel
+        // instead of racing a leave + re-join on the same topic. A real
+        // navigation away lets it fire (getUser in the next init takes ~200ms,
+        // well after this 0ms timer), so the old channel is gone before a
+        // new one for another room is created. Refs are cleared inside the
+        // timer, only if they still point at this channel.
+        if (chatRemovalTimeoutRef.current) clearTimeout(chatRemovalTimeoutRef.current);
+        chatRemovalTimeoutRef.current = setTimeout(() => {
+          chatRemovalTimeoutRef.current = null;
+          try { void supabase.removeChannel(chatChannel); } catch {}
+          if (chatChannelRef.current === chatChannel) {
+            chatChannelRef.current = null;
+            chatChannelTxRef.current = null;
+          }
+        }, 0);
       }
       if (partnerActivityWatchdogRef.current) clearTimeout(partnerActivityWatchdogRef.current);
       void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
@@ -713,8 +750,11 @@ function DealRoomChat() {
     return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 140;
   };
 
-  // Immediate auto-scroll on opening chats to bottom messages
-  useEffect(() => {
+  // Immediate auto-scroll on opening chats to bottom messages.
+  // Layout effect (not useEffect): it runs before paint, so the first frame
+  // is already at the bottom — with useEffect the first paint shows the
+  // oldest messages at the top, then jumps to the bottom (glitchy flash).
+  useIsomorphicLayoutEffect(() => {
     if (!historyLoading && messages.length > 0) {
       if (!initialScrollDone.current) {
         initialScrollDone.current = true;
@@ -2390,10 +2430,10 @@ function DealRoomChat() {
             >
               {partnerLoading && !partnerInfo ? (
                 <>
-                  <div className="h-10 w-10 shrink-0 rounded-full bg-black/10 dark:bg-white/10 animate-pulse" />
-                  <div className="flex flex-col justify-center gap-1.5 min-w-0">
-                    <div className="h-4 w-28 rounded bg-black/10 dark:bg-white/10 animate-pulse" />
-                    <div className="h-3 w-20 rounded bg-black/10 dark:bg-white/10 animate-pulse" />
+                  <div className="h-12 w-12 shrink-0 rounded-full bg-black/10 dark:bg-white/10 animate-pulse" />
+                  <div className="flex flex-col justify-center min-w-0">
+                    <div className="h-5 w-28 rounded bg-black/10 dark:bg-white/10 animate-pulse" />
+                    <div className="h-4 w-20 rounded bg-black/10 dark:bg-white/10 animate-pulse" />
                   </div>
                 </>
               ) : (
@@ -2815,12 +2855,16 @@ function DealRoomSkeleton() {
               <IonIcon icon={chevronBackOutline} className="text-3xl" />
             </div>
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="h-10 w-10 shrink-0 rounded-full bg-black/10 dark:bg-white/10 animate-pulse" />
-              <div className="flex flex-col justify-center gap-1.5 min-w-0">
-                <div className="h-4 w-28 rounded bg-black/10 dark:bg-white/10 animate-pulse" />
-                <div className="h-3 w-20 rounded bg-black/10 dark:bg-white/10 animate-pulse" />
+              <div className="h-12 w-12 shrink-0 rounded-full bg-black/10 dark:bg-white/10 animate-pulse" />
+              <div className="flex flex-col justify-center min-w-0">
+                <div className="h-5 w-28 rounded bg-black/10 dark:bg-white/10 animate-pulse" />
+                <div className="h-4 w-20 rounded bg-black/10 dark:bg-white/10 animate-pulse" />
               </div>
             </div>
+          </div>
+          <div className="flex items-center gap-0.5 flex-shrink-0">
+            <div className="h-11 w-11 shrink-0 rounded-full bg-black/10 dark:bg-white/10 animate-pulse" />
+            <div className="h-12 w-12 shrink-0 rounded-full bg-black/10 dark:bg-white/10 animate-pulse" />
           </div>
         </div>
       </div>

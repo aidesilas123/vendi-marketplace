@@ -88,7 +88,7 @@ export const PageTransition = ({
   }
 
   // Stack-managed forward: the new page grows out (vendi-zoom-in,
-  // 220ms scale 0.96→1 + opacity 0→1) over blank, single layer. Keyed
+  // 220ms scale 0.96→1, opaque throughout) over the kept page, single layer. Keyed
   // by this entry's own route, never by the global pathname, so
   // becoming kept can't remount it. The scale transform is a containing
   // block only until settling (300ms) removes the class, so sheets
@@ -98,14 +98,9 @@ export const PageTransition = ({
       <div
         key={pagePath ?? pathname}
         className="w-full min-h-full vendi-zoom-in"
-        // First-paint guard: the entering page must never paint once at
-        // full size and opacity before the zoom starts. This inline opacity
-        // is present from the very first paint; the running animation
-        // overrides it (animations beat inline styles), and settling
-        // removes it. No visibility gate needed: with a zoom, this
-        // inline opacity IS the guard, so there is no second hiding
-        // mechanism to mistime.
-        style={{ opacity: 0 }}
+        // No opacity guard: the page is opaque from the first paint
+        // (scale only, no fade), so there is nothing to hide and
+        // nothing that can stick invisible if the animation never runs.
       >
         {children}
       </div>
@@ -113,18 +108,16 @@ export const PageTransition = ({
   }
 
   // Stack-managed back: the page you return to shrinks in
-  // (vendi-shrink-in, 220ms scale 1.04→1 + opacity 0→1) — the reverse of
-  // forward's grow, same duration, same fade, so direction is readable
+  // (vendi-shrink-in, 220ms scale 1.04→1, opaque throughout) — the reverse of
+  // forward's grow, same duration, same rhythm, so direction is readable
   // by feel: forward grows toward you, back settles back to normal.
-  // The inline guard is safe here: back carries a settle marker
-  // (transition kind 'back-zoom'), so settling removes class + guard
-  // at 300ms even if the animation never runs.
+  // No opacity guard: the page is opaque from the first paint, so
+  // settling only removes the class at 300ms (no guard to remove).
   if (stackMode === 'stack-back') {
     return (
       <div
         key={pagePath ?? pathname}
         className="w-full min-h-full vendi-shrink-in"
-        style={{ opacity: 0 }}
       >
         {children}
       </div>
@@ -148,17 +141,16 @@ export const PageTransition = ({
 
   // Self-contained animation for non-shell navigations (auth pages,
   // shell boundaries — see the effect above): directional zoom only
-  // (back shrinks, forward grows). The local 300ms timer drops class +
-  // guard. Safe if the timer ever fails: the animation's forwards fill
-  // holds the final state (opacity 1, scale/translate at rest), which
-  // beats the inline guard, so the page can never stick invisible.
+  // (back shrinks, forward grows), opaque throughout. The local 300ms
+  // timer drops the class. Safe if the timer ever fails: the page is
+  // opaque from the first paint, so it can never stick invisible
+  // (no opacity guard to get stuck on).
   if (shellFreeAnim) {
     const animClass = shellFreeAnim === 'shrink-in' ? 'vendi-shrink-in' : 'vendi-zoom-in';
     return (
       <div
         key={pathname}
         className={`w-full min-h-full ${animClass}`}
-        style={{ opacity: 0 }}
       >
         {children}
       </div>
