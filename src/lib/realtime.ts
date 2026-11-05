@@ -130,6 +130,78 @@ export async function broadcastTo(topic: string, event: string, payload: any): P
   return false;
 }
 
+/* ── Room broadcast subscription (activity, reaction, new_message, read, delivered) ── */
+
+export interface RoomCallbacks {
+  onMessage?: (msg: any) => void;
+  onActivity?: (payload: { userId: string; activity: any }) => void;
+  onReaction?: (payload: { messageId: string; emoji: string; userId?: string }) => void;
+  onRead?: (payload: { ids: string[] }) => void;
+  onDelivered?: (payload: { ids: string[] }) => void;
+}
+
+const roomListeners = new Map<string, Set<RoomCallbacks>>();
+
+export function subscribeRoom(txRef: string, callbacks: RoomCallbacks): () => void {
+  if (!txRef) return () => {};
+  const topic = `chat_${txRef}`;
+  let set = roomListeners.get(txRef);
+  if (!set) {
+    set = new Set();
+    roomListeners.set(txRef, set);
+  }
+  set.add(callbacks);
+
+  ensureChannel(topic, (ch: any) => {
+    ch.on('broadcast', { event: 'new_message' }, (payload: any) => {
+      const msg = payload?.payload;
+      if (!msg) return;
+      roomListeners.get(txRef)?.forEach((cb) => {
+        try { cb.onMessage?.(msg); } catch (e) { console.error('[realtime] onMessage error:', e); }
+      });
+    })
+    .on('broadcast', { event: 'activity' }, (payload: any) => {
+      const data = payload?.payload;
+      if (!data) return;
+      roomListeners.get(txRef)?.forEach((cb) => {
+        try { cb.onActivity?.(data); } catch (e) { console.error('[realtime] onActivity error:', e); }
+      });
+    })
+    .on('broadcast', { event: 'message_reaction' }, (payload: any) => {
+      const data = payload?.payload;
+      if (!data) return;
+      roomListeners.get(txRef)?.forEach((cb) => {
+        try { cb.onReaction?.(data); } catch (e) { console.error('[realtime] onReaction error:', e); }
+      });
+    })
+    .on('broadcast', { event: 'messages_read' }, (payload: any) => {
+      const data = payload?.payload;
+      if (!data) return;
+      roomListeners.get(txRef)?.forEach((cb) => {
+        try { cb.onRead?.(data); } catch (e) { console.error('[realtime] onRead error:', e); }
+      });
+    })
+    .on('broadcast', { event: 'messages_delivered' }, (payload: any) => {
+      const data = payload?.payload;
+      if (!data) return;
+      roomListeners.get(txRef)?.forEach((cb) => {
+        try { cb.onDelivered?.(data); } catch (e) { console.error('[realtime] onDelivered error:', e); }
+      });
+    });
+  });
+
+  return () => {
+    const s = roomListeners.get(txRef);
+    if (s) {
+      s.delete(callbacks);
+      if (s.size === 0) {
+        roomListeners.delete(txRef);
+        dropChannel(topic);
+      }
+    }
+  };
+}
+
 /* ── Global presence — single owner is AppShell ─────────────────────────── */
 
 const PRESENCE_TOPIC = 'global_presence';

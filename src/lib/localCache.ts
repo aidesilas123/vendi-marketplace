@@ -191,8 +191,48 @@ export async function getCachedInbox(userId: string): Promise<any[] | null> {
 
 export async function putCachedInbox(userId: string, list: any[]): Promise<void> {
   try {
-    if (!userId || !Array.isArray(list) || list.length === 0) return;
+    if (!userId || !Array.isArray(list)) return;
     await idbPut('inbox', { userId, list, updatedAt: Date.now() });
+  } catch {}
+}
+
+export async function markCachedInboxAsRead(userId: string, txRef: string): Promise<void> {
+  try {
+    if (!userId || !txRef) return;
+    const list = await getCachedInbox(userId);
+    if (!list) return;
+    let changed = false;
+    for (const item of list) {
+      if (item.transaction_ref === txRef) {
+        if (item.unreadCount > 0) {
+          item.unreadCount = 0;
+          changed = true;
+        }
+        if (item.latestMessage && item.latestMessage.status !== 'read') {
+          item.latestMessage.status = 'read';
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      await putCachedInbox(userId, list);
+    }
+  } catch {}
+}
+
+export async function updateCachedInboxLatestMessage(userId: string, txRef: string, latestMsg: any): Promise<void> {
+  try {
+    if (!userId || !txRef || !latestMsg) return;
+    const list = await getCachedInbox(userId);
+    if (!list) return;
+    const item = list.find((i: any) => i.transaction_ref === txRef);
+    if (item) {
+      item.latestMessage = latestMsg;
+      if (latestMsg.receiver_id === userId && latestMsg.status !== 'read') {
+        item.unreadCount = (item.unreadCount || 0) + 1;
+      }
+      await putCachedInbox(userId, list);
+    }
   } catch {}
 }
 

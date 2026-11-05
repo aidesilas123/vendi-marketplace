@@ -569,21 +569,18 @@ export const AppShell = ({ children }: AppShellProps) => {
           needs only the bottom inset — the room fills the rest. */}
       <main
         id="main-scroll-container"
-        className="flex-1 w-full overflow-y-auto overflow-x-clip overscroll-y-contain relative"
+        className={`flex-1 w-full ${pathname === '/chats' ? 'overflow-hidden' : 'overflow-y-auto overflow-x-clip overscroll-y-contain'} relative`}
         style={{ paddingBottom: pathname === '/chats' ? 'calc(var(--sab))' : 'calc(6rem + var(--sab))' }}
       >
         {/* Bounce wrapper: the rubber-band transform applies here, around page
             content only. Fixed elements (bottom nav, modals, toasts) live
             outside it so a transform never breaks their positioning. */}
         <div ref={bounceRef}>
-          <div className={`max-w-[1600px] mx-auto w-full ${stackMode === 'stack-enter' ? 'relative grid grid-cols-1 grid-rows-1 [&>*]:col-start-1 [&>*]:row-start-1' : ''}`}>
+          <div className="max-w-[1600px] mx-auto w-full relative">
             <StackContext.Provider value={stackMode}>
               {renderEntries.map((e) => {
                 const isCurrent = e.pathname === (pathname ?? '');
-                const isKept = !isCurrent;
-                // During stack-enter, keep the outgoing (kept) page visible underneath the entering page!
-                // The entering page zooms in on top (z-10), while the previous page stays visible (z-0).
-                const isVisible = isCurrent || (stackMode === 'stack-enter' && isKept);
+                const isVisible = isCurrent;
                 return (
                   <div
                     key={e.pathname}

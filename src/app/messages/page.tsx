@@ -204,22 +204,10 @@ async function fetchInboxFresh(userId: string): Promise<ChatPreview[]> {
   return result;
 }
 
-// Cache-first inbox fetcher (Phase 2): the inbox opens instantly from disk,
-// even offline or after a restart, and fresh data syncs in the background
-// (which updates SWR + refreshes the cache, so the list updates when the
-// network catches up). Cache empty (first visit) → fetch fresh now, as before.
+// SWR fetcher: always fetches fresh inbox data from the network and updates
+// IndexedDB cache on success. Cache-first instant paint is handled on mount
+// so SWR revalidations never return stale cached rows.
 async function fetchInbox([_key, userId]: [string, string]): Promise<ChatPreview[]> {
-  try {
-    const cached = await getCachedInbox(userId);
-    if (cached && cached.length > 0) {
-      void fetchInboxFresh(userId).then((fresh) => {
-        void globalMutate(['inbox', userId], fresh, { revalidate: false });
-      }).catch(() => {});
-      return cached as ChatPreview[];
-    }
-  } catch {
-    // Cache unavailable — fall through to the network fetch.
-  }
   return fetchInboxFresh(userId);
 }
 
@@ -293,6 +281,16 @@ export default function MessagesList() {
   useEffect(() => {
     if (userId === null) router.replace('/login');
   }, [userId, router]);
+
+  // Seed SWR immediately on mount from local IndexedDB cache if memory is empty
+  useEffect(() => {
+    if (!userId) return;
+    void getCachedInbox(userId).then((cached) => {
+      if (cached && cached.length > 0) {
+        void mutate((current) => current ?? (cached as ChatPreview[]), { revalidate: false });
+      }
+    });
+  }, [userId, mutate]);
 
   // Immediately refresh inbox on mount and whenever returning to this tab/window
   useEffect(() => {
