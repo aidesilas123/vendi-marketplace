@@ -206,6 +206,8 @@ function DealRoomChat() {
   // fires and the channel is removed (no leak).
   const chatRemovalTimeoutRef = useRef<any>(null);
   const chatChannelTxRef = useRef<string | null>(null);
+  // Re-join attempts for the current channel (reset on a new channel).
+  const channelResubscribeRef = useRef(0);
   const myActivityRef = useRef<PartnerActivity>(null);
   const typingStopTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const partnerActivityWatchdogRef = useRef<NodeJS.Timeout | null>(null);
@@ -423,10 +425,10 @@ function DealRoomChat() {
     if (!txRef) return;
     if (!outboxLoadedRef.current) {
       outboxLoadedRef.current = true;
-      // Deferred 300ms (after the 220ms zoom settles): loading the outbox
-      // calls setOptimisticMsgs, which re-renders during the zoom and
-      // makes the first paint look squeezed, then snap back. Failed
-      // messages are rare — they can appear 300ms later with no harm.
+      // Deferred 300ms (after mount): loading the outbox calls
+      // setOptimisticMsgs, which re-renders during the first paint and
+      // makes it look squeezed, then snap back. Failed messages are
+      // rare — they can appear 300ms later with no harm.
       setTimeout(() => {
         void getOutbox(txRef).then((saved) => {
           if (!saved || saved.length === 0) return;
@@ -496,19 +498,15 @@ function DealRoomChat() {
   const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
   const [loadedMedia, setLoadedMedia] = useState<Record<string, boolean>>({});
   const initialScrollDone = useRef(false);
-  // First-paint render cap: only the last 20 bubbles mount initially
-  // (the ones visible at the bottom); the rest fill in 300ms after the
-  // zoom settles so the mount doesn't block the transition.
+  // First-paint render cap (lazy load): only the last 20 bubbles mount
+  // initially (the ones visible at the bottom); the rest fill in 300ms
+  // after mount so the first paint stays light.
   const [renderLimit, setRenderLimit] = useState(20);
   const prevRenderLimitRef = useRef(20);
   // Open loader: true while the conversation for this room is still
   // loading on open. See the layout effect below (resets on txRef).
   const [isOpening, setIsOpening] = useState(true);
   const loadStartedRef = useRef(false);
-  // Zoom settle: false until 300ms after the room opens (the 220ms zoom
-  // has settled). Messages are held until then so they don't pop in
-  // mid-zoom and stutter it.
-  const [zoomSettled, setZoomSettled] = useState(false);
   // Audio ids already probed for duration (probe once, never re-probe).
   const probedAudioIdsRef = useRef<Set<string>>(new Set());
   const swipedTriggeredRef = useRef(false);
@@ -536,24 +534,66 @@ function DealRoomChat() {
   }, []);
 
   const [reactions, setReactions] = useState<Record<string, string[]>>({});
+  // My own reaction per message (from the DB) — the display pill holds
+  // every participant's emojis, so it can't tell whether *I* already
+  // reacted with an emoji. Needed to toggle the right DB row.
+  const myReactionsRef = useRef<Record<string, string>>({});
+  // Message ids whose reactions have already been loaded from the DB.
+  const loadedReactionIdsRef = useRef<Set<string>>(new Set());
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const lastTapRef = useRef<{ id: string; time: number }>({ id: '', time: 0 });
   const lastTypingBroadcastTime = useRef(0);
   const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
+  // Resilient room broadcast (typing/recording + reactions): the old code
+  // called chatChannel.send() once and ignored the result, so a broadcast
+  // sent while the channel was down or errored was lost silently and the
+  // partner never saw typing, recording or a reaction. This retries twice
+  // (500ms, 1500ms — same backoff as broadcastTo in realtime.ts) and races
+  // each attempt against a 4s timeout so a hung send can't stall the loop.
+  // Callers use it fire-and-forget: `void sendRoomBroadcast(...)`.
+  const sendRoomBroadcast = useCallback(async (event: string, payload: any): Promise<boolean> => {
+    const ch = chatChannelRef.current;
+    if (!ch) return false;
+    const delays = [500, 1500];
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
+      try {
+        const res: any = await Promise.race([
+          ch.send({ type: 'broadcast', event, payload }),
+          new Promise((r) => setTimeout(() => r('timed out'), 4000)),
+        ]);
+        if (res === 'ok') return true;
+      } catch {}
+      if (attempt === delays.length) return false;
+      await new Promise((r) => setTimeout(r, delays[attempt]));
+    }
+    return false;
+  }, []);
+
   const handleToggleReaction = useCallback((msgId: string, emoji: string) => {
+    // Persist the toggle in the DB (message_reactions table) so the
+    // reaction survives leaving and reopening the room: the same emoji
+    // again deletes my row, a different emoji upserts it (one row per
+    // user per message). The broadcast below still carries it live.
+    const myEmoji = myReactionsRef.current[msgId];
+    if (myEmoji === emoji) {
+      delete myReactionsRef.current[msgId];
+      void supabase.from('message_reactions').delete().eq('message_id', msgId).eq('user_id', currentUserRef.current?.id);
+    } else {
+      myReactionsRef.current[msgId] = emoji;
+      void supabase.from('message_reactions').upsert(
+        { message_id: msgId, user_id: currentUserRef.current?.id, emoji },
+        { onConflict: 'message_id,user_id' }
+      );
+    }
     setReactions((prev) => {
       const existing = prev[msgId] || [];
       const next = existing.includes(emoji) ? [] : [emoji];
       return { ...prev, [msgId]: next };
     });
     hapticImpact(ImpactStyle.Light);
-    chatChannelRef.current?.send({
-      type: 'broadcast',
-      event: 'message_reaction',
-      payload: { messageId: msgId, emoji, userId: currentUserRef.current?.id }
-    });
-  }, []);
+    void sendRoomBroadcast('message_reaction', { messageId: msgId, emoji, userId: currentUserRef.current?.id });
+  }, [sendRoomBroadcast]);
 
   // --- Presence: broadcast my activity ('typing' | 'recording' | null) ---
   const broadcastActivity = useCallback((activity: PartnerActivity) => {
@@ -561,22 +601,15 @@ function DealRoomChat() {
     // channel) — the SUBSCRIBED re-send picks it up when the channel is live.
     myActivityRef.current = activity;
     if (!currentUser) return;
-    if (chatChannelRef.current) {
-      chatChannelRef.current.send({
-        type: 'broadcast',
-        event: 'activity',
-        payload: { userId: currentUser.id, activity }
-      });
-    }
-    // Also notify partner's inbox activity channel so /messages shows live status
+    void sendRoomBroadcast('activity', { userId: currentUser.id, activity });
+    // Also notify partner's inbox activity channel so /messages shows live status.
+    // broadcastTo (realtime.ts) subscribes first, then sends with retry — the
+    // old throwaway supabase.channel(...).send() never subscribed, so the
+    // inbox indicator was lost whenever that send raced the join.
     if (partnerId) {
-      supabase.channel(`inbox_activity_${partnerId}`).send({
-        type: 'broadcast',
-        event: 'user_activity',
-        payload: { txRef, userId: currentUser.id, activity }
-      }).catch(() => {});
+      void broadcastTo(`inbox_activity_${partnerId}`, 'user_activity', { txRef, userId: currentUser.id, activity });
     }
-  }, [currentUser, partnerId, txRef]);
+  }, [currentUser, partnerId, txRef, sendRoomBroadcast]);
 
   // 1. INITIALIZATION & WEBSOCKET
   useEffect(() => {
@@ -665,6 +698,7 @@ function DealRoomChat() {
           });
           chatChannelRef.current = chatChannel;
           chatChannelTxRef.current = txRef;
+          channelResubscribeRef.current = 0;
         }
 
         // Profile loads in the background and must never block realtime:
@@ -711,6 +745,55 @@ function DealRoomChat() {
         // above) — no manual fetch here, so revisits render from cache.
 
         // History is loaded by SWR (see fetchHistory above) — no manual fetch here.
+
+        // Channel status handler: SUBSCRIBED re-sends the current activity
+        // + refreshes history; CHANNEL_ERROR / TIMED_OUT / CLOSED re-joins
+        // (1s later, max 5 tries per channel) instead of leaving typing,
+        // reactions and live messages dead silently until the room is
+        // reopened. The room check uses the refs, not this invoke's
+        // `cancelled` flag: on a remount that reuses the live channel,
+        // the subscribed callback still belongs to the first invoke
+        // (already "cancelled"), but the channel is still this room's.
+        const handleChannelStatus = (status: string) => {
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            if (chatChannelTxRef.current === txRef && channelResubscribeRef.current < 5) {
+              channelResubscribeRef.current += 1;
+              setTimeout(() => {
+                if (chatChannelTxRef.current !== txRef) return;
+                const ch = chatChannelRef.current;
+                if (!ch || ch !== chatChannel) return;
+                const adapter = (ch as any)?.channelAdapter;
+                const state = (ch as any)?.state;
+                if (adapter?.isJoined?.() || adapter?.isJoining?.() || state === 'joined' || state === 'joining') return;
+                try { ch.subscribe(handleChannelStatus); } catch {}
+              }, 1000);
+            }
+            return;
+          }
+          if (status !== 'SUBSCRIBED' || !txRef) return;
+          // Reconnected: if the user is still typing/recording right
+          // now, re-send that state — the broadcasts sent while the
+          // socket was down were lost (ephemeral, no replay), so the
+          // partner would otherwise never see the current indicator.
+          if (myActivityRef.current) {
+            void sendRoomBroadcast('activity', { userId: currentUserRef.current?.id, activity: myActivityRef.current });
+          }
+          // Mount refresh: catch messages sent while this room was unmounted.
+          // The channel was removed on unmount, so realtime missed them, and SWR
+          // deduping may skip a mount refetch. Cached data shows instantly;
+          // this background merge adds gap messages without wiping earlier
+          // loaded messages (Map keeps older ids, fresh wins) or optimistic
+          // temps (which live outside the SWR cache).
+          void fetchHistory(['chat-history', txRef]).then((fresh) => {
+            if (!fresh || fresh.length === 0) return;
+            updateMessages((prev) => {
+              const byId = new Map();
+              for (const m of prev) byId.set(m.id, m);
+              for (const m of fresh) byId.set(m.id, m);
+              return Array.from(byId.values());
+            });
+          }).catch(() => {});
+        };
 
         // 1. Chat Room Channel
         // Skip the whole chain on reuse: handlers are already attached
@@ -821,31 +904,8 @@ function DealRoomChat() {
               partnerActivityWatchdogRef.current = setTimeout(() => setPartnerActivity(null), PARTNER_ACTIVITY_WATCHDOG_MS);
             }
           }
-        ).subscribe((status: string) => {
-            if (status !== 'SUBSCRIBED' || !txRef) return;
-            // Reconnected: if the user is still typing/recording right
-            // now, re-send that state — the broadcasts sent while the
-            // socket was down were lost (ephemeral, no replay), so the
-            // partner would otherwise never see the current indicator.
-            if (myActivityRef.current && chatChannelRef.current) {
-              chatChannelRef.current.send({ type: 'broadcast', event: 'activity', payload: { userId: currentUserRef.current?.id, activity: myActivityRef.current } });
-            }
-            // Mount refresh: catch messages sent while this room was unmounted.
-            // The channel was removed on unmount, so realtime missed them, and SWR
-            // deduping may skip a mount refetch. Cached data shows instantly;
-            // this background merge adds gap messages without wiping earlier
-            // loaded messages (Map keeps older ids, fresh wins) or optimistic
-            // temps (which live outside the SWR cache).
-            void fetchHistory(['chat-history', txRef]).then((fresh) => {
-              if (!fresh || fresh.length === 0) return;
-              updateMessages((prev) => {
-                const byId = new Map();
-                for (const m of prev) byId.set(m.id, m);
-                for (const m of fresh) byId.set(m.id, m);
-                return Array.from(byId.values());
-              });
-            }).catch(() => {});
-          });
+        );
+        chatChannel.subscribe(handleChannelStatus);
         }
 
         // 2. Global presence is single-owned by AppShell (src/lib/realtime.ts).
@@ -949,11 +1009,11 @@ function DealRoomChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length, historyLoading, renderLimit, partnerActivity]);
 
-  // Fill in the rest of the list 300ms after mount (after the zoom
-  // settles): the first paint mounts only the last 20 bubbles, so the
-  // transition runs on a light page, and the older bubbles appear above
-  // the fold where they can't be seen popping in. Re-runs per room
-  // (txRef) so a room switched to from another room also fills in.
+  // Fill in the rest of the list 300ms after mount (lazy load): the
+  // first paint mounts only the last 20 bubbles, so it stays light, and
+  // the older bubbles appear above the fold where they can't be seen
+  // popping in. Re-runs per room (txRef) so a room switched to from
+  // another room also fills in.
   useEffect(() => {
     const id = setTimeout(() => setRenderLimit(Infinity), 300);
     return () => clearTimeout(id);
@@ -974,20 +1034,23 @@ function DealRoomChat() {
     setRenderLimit(20);
     prevRenderLimitRef.current = 20;
     initialScrollDone.current = false;
-    setZoomSettled(false);
     // Don't leak the previous room's typing state into this room: the
     // SUBSCRIBED re-send would show "typing..." to the new partner.
     myActivityRef.current = null;
-    // Hold the messages until the 220ms zoom settles (300ms) so nothing
-    // pops in mid-zoom and stutters it — the header skeleton shows
-    // during the zoom, the messages appear after it.
-    const zoomTimer = setTimeout(() => setZoomSettled(true), 300);
+    // Fresh room, fresh reactions: clear the previous room's loaded ids,
+    // my reactions and the display pill (message ids are unique per
+    // message, but stale entries would linger in memory otherwise).
+    loadedReactionIdsRef.current.clear();
+    myReactionsRef.current = {};
+    setReactions({});
+    // No zoom hold anymore: the room opens instantly (no zoom, see
+    // PageTransition), so cached messages render on the first frame
+    // and fresh ones appear the moment they arrive.
     // Only force a load when there is nothing to show yet — a revisit
     // with cached messages stays instant, no refetch.
     if (!serverMessages || (Array.isArray(serverMessages) && serverMessages.length === 0)) {
       void mutate();
     }
-    return () => clearTimeout(zoomTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [txRef]);
 
@@ -998,9 +1061,6 @@ function DealRoomChat() {
   // and validating are both still false because the fetch hasn't
   // started yet — without it the loader would clear immediately.
   useEffect(() => {
-    // Hold the loader until the zoom settles — messages that arrive from
-    // the device cache in the first 300ms must not pop in mid-zoom.
-    if (!zoomSettled) return;
     if (messages.length > 0) {
       setIsOpening(false);
       return;
@@ -1010,7 +1070,7 @@ function DealRoomChat() {
       return;
     }
     if (loadStartedRef.current) setIsOpening(false);
-  }, [messages.length, historyLoading, historyValidating, zoomSettled]);
+  }, [messages.length, historyLoading, historyValidating]);
 
   // Pull-to-refresh on the feed is handled by the shared <PullToRefresh>
   // wrapper (see feed JSX below) — onRefresh revalidates the SWR history.
@@ -1033,7 +1093,7 @@ function DealRoomChat() {
     };
   }, []);
 
-  // Audio duration probes run 300ms after mount (after the zoom settles)
+  // Audio duration probes run 300ms after mount
   // so creating Audio objects + fetching metadata doesn't compete with
   // the first paint, and each id is probed once (tracked in a ref) instead
   // of re-probing on every messages change until its metadata resolves.
@@ -1331,14 +1391,24 @@ function DealRoomChat() {
     ) : null
   );
 
+  // Scroll the feed to a message (reply quote, search jump). scrollIntoView
+  // was unreliable here: it scrolled the wrong ancestor (AppShell's main
+  // scroller instead of the feed) and could land on the wrong spot, so
+  // search arrows changed the counter but the message never came into
+  // view. Scroll the feed's own scroller directly, centering the bubble.
   const scrollToMessage = (msgId: string) => {
     const el = document.getElementById(`msg-${msgId}`) || messageRefs.current[msgId];
-    if (el) {
+    if (!el) return;
+    const feed = ptrRef.current?.scrollEl();
+    if (feed) {
+      const top = (el as HTMLElement).offsetTop - feed.clientHeight / 2 + (el as HTMLElement).offsetHeight / 2;
+      feed.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    } else {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      setHighlightedMsgId(msgId);
-      setTimeout(() => setHighlightedMsgId(null), 1800);
-      hapticImpact(ImpactStyle.Light);
     }
+    setHighlightedMsgId(msgId);
+    setTimeout(() => setHighlightedMsgId(null), 1800);
+    hapticImpact(ImpactStyle.Light);
   };
 
   const renderReplyQuote = (msg: any) => {
@@ -2444,18 +2514,70 @@ function DealRoomChat() {
     }
   }, [searchIndex, searchMatches, showSearch]);
 
+  // Arrows scroll directly (rAF, after the highlight re-renders) instead
+  // of relying only on the searchIndex effect — the effect stays as the
+  // backup for the first match when the query itself changes.
   const goToNextMatch = () => {
     if (!searchMatches.length) return;
-    setSearchIndex((i) => (i + 1) % searchMatches.length);
+    const next = (searchIndex + 1) % searchMatches.length;
+    setSearchIndex(next);
+    requestAnimationFrame(() => scrollToMessage(searchMatches[next]));
   };
   const goToPrevMatch = () => {
     if (!searchMatches.length) return;
-    setSearchIndex((i) => (i - 1 + searchMatches.length) % searchMatches.length);
+    const prev = (searchIndex - 1 + searchMatches.length) % searchMatches.length;
+    setSearchIndex(prev);
+    requestAnimationFrame(() => scrollToMessage(searchMatches[prev]));
   };
   const closeSearch = () => {
     setShowSearch(false);
     setSearchQuery('');
   };
+
+  // Load persisted reactions from the DB for messages we haven't loaded
+  // yet. Broadcasts carry reactions live, but they are ephemeral — without
+  // this, a reaction vanishes when the room is reopened. Runs on every
+  // messages change, but only queries ids it hasn't loaded (temp ids and
+  // deleted messages are skipped). Ids are marked loaded only after a
+  // successful query, so if the table isn't created yet the load simply
+  // retries on the next messages change instead of staying broken.
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    const ids = messages
+      .filter((m) => !m.is_deleted && m.id && !String(m.id).startsWith('temp_') && !loadedReactionIdsRef.current.has(String(m.id)))
+      .map((m) => String(m.id));
+    if (ids.length === 0) return;
+    let cancelledLoad = false;
+    void supabase
+      .from('message_reactions')
+      .select('message_id, user_id, emoji')
+      .in('message_id', ids)
+      .then(({ data, error }) => {
+        if (cancelledLoad || error || !data) return;
+        ids.forEach((id) => loadedReactionIdsRef.current.add(id));
+        const mine: Record<string, string> = {};
+        const byMsg: Record<string, string[]> = {};
+        for (const row of data as any[]) {
+          const mid = String(row.message_id);
+          if (row.user_id === currentUser.id) mine[mid] = row.emoji;
+          if (!byMsg[mid]) byMsg[mid] = [];
+          if (row.emoji && !byMsg[mid].includes(row.emoji)) byMsg[mid].push(row.emoji);
+        }
+        myReactionsRef.current = { ...myReactionsRef.current, ...mine };
+        if (Object.keys(byMsg).length > 0) {
+          setReactions((prev) => {
+            const next = { ...prev };
+            for (const [mid, emojis] of Object.entries(byMsg)) {
+              const merged = [...(next[mid] || [])];
+              for (const e of emojis) if (!merged.includes(e)) merged.push(e);
+              next[mid] = merged;
+            }
+            return next;
+          });
+        }
+      });
+    return () => { cancelledLoad = true; };
+  }, [messages, currentUser]);
 
   // --- Report to Vendi: snapshot the last 10 messages for the report page ---
   const handleReportAction = () => {
@@ -2942,9 +3064,19 @@ function DealRoomChat() {
         bgClassName="bg-transparent"
         contentClassName="px-3 sm:px-4 py-6 space-y-4 scrollbar-hide relative"
       >
+        {/* TOP LOADER — back by request: while the conversation is still
+            loading and there is nothing to show yet, a small loader sits
+            at the TOP of the feed (under the header), not in the centre.
+            It disappears the moment the first message renders. */}
+        {isOpening && messages.length === 0 && (
+          <div className="flex items-center justify-center gap-2 pt-4 pb-2">
+            <PullSpinner spinning size={20} />
+            <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Loading chat...</span>
+          </div>
+        )}
         {/* Security notice + escrow warning: brand-new chats only.
             Hidden the moment any message exists in the conversation. */}
-        {messages.length === 0 && !historyLoading && (
+        {messages.length === 0 && !historyLoading && !isOpening && (
           <>
             <div className="flex justify-center mb-6">
               <span className="px-3 py-1 bg-white dark:bg-[#1a1a1a] border border-gray-200/80 dark:border-gray-800 !rounded-lg text-[10px] font-black uppercase tracking-widest text-gray-500 dark:text-gray-400 shadow-sm">
@@ -2985,11 +3117,12 @@ function DealRoomChat() {
             </button>
           </div>
         )}
-        {/* No centre loader here on purpose: the header skeleton (top) is
-            the only loading indication. A centre spinner duplicated it
-            (centre + top). Messages are held until the zoom settles
-            (zoomSettled, 300ms) so they don't pop in mid-zoom. */}
-        {zoomSettled ? renderedMessages : null}
+        {/* Messages render the moment they are available — no zoom hold
+            anymore (the room opens instantly, see PageTransition), so
+            cached messages show on the first frame. No centre loader:
+            the top loader above is the loading indication while the
+            list is still empty. */}
+        {renderedMessages}
 
         {/* TYPING / RECORDING STATUS BUBBLE — w-fit keeps it small and
             left-aligned like an incoming message, never full width. */}
@@ -3266,7 +3399,12 @@ function DealRoomSkeleton() {
           </div>
         </div>
       </div>
-      <div className="flex-1 relative z-10" />
+      <div className="flex-1 relative z-10">
+        <div className="flex items-center justify-center gap-2 pt-6">
+          <PullSpinner spinning size={20} />
+          <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Loading chat...</span>
+        </div>
+      </div>
     </div>
   );
 }

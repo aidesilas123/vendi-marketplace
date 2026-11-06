@@ -244,39 +244,43 @@ html {
    rhythm, opposite scale direction, so direction is readable by feel.
    Opaque throughout: the kept page underneath shows only around the
    edges while the new page grows, never through it (no ghosting/blur).
-   Applies to stack navigations and non-shell navigations (auth pages,
-   the /chats room) alike. Kept-tab reveals stay instant (plain div,
+   Applies to stack navigations and non-shell navigations (auth pages)
+   alike — /chats opens instantly with vendi-fade-in instead (see
+   PageTransition). Kept-tab reveals stay instant (plain div,
    native tab behaviour); the first-mount fallback stays plain too
    (robustness over uniformity on that rare path). */
 @keyframes vendi-zoom-in {
-  from {
-    opacity: 0.9;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { transform: scale(0.96); }
+  to { transform: scale(1); }
 }
 .vendi-zoom-in {
-  animation: vendi-zoom-in 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  will-change: transform, opacity;
+  animation: vendi-zoom-in 220ms ease-out forwards;
+  will-change: transform;
 }
 
-/* Back entrance: smooth subtle upward settlement */
+/* Back entrance: starts slightly larger than the screen and settles to
+   normal. Edges sit a touch off-screen for the first frames, then slide
+   into view as it shrinks — that slide is part of the motion, not a
+   clip bug. Same duration as vendi-zoom-in, reversed scale, opaque throughout. */
 @keyframes vendi-shrink-in {
-  from {
-    opacity: 0.9;
-    transform: translateY(-8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { transform: scale(1.04); }
+  to { transform: scale(1); }
 }
 .vendi-shrink-in {
-  animation: vendi-shrink-in 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  will-change: transform, opacity;
+  animation: vendi-shrink-in 220ms ease-out forwards;
+  will-change: transform;
+}
+
+/* /chats entrance: no zoom — the room opens instantly with a short
+   fade (opacity 0→1, 150ms) instead. Ends opaque (forwards), so it
+   can never stick invisible. The list itself lazy-loads in the room
+   (render cap: 20 bubbles first, rest after 300ms). */
+@keyframes vendi-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.vendi-fade-in {
+  animation: vendi-fade-in 150ms ease-out forwards;
 }
 
 /* Reduced motion: no animation anywhere, at the CSS level as well as the JS check. */
@@ -284,7 +288,8 @@ html {
   .vendi-step-in-forward,
   .vendi-step-in-back,
   .vendi-zoom-in,
-  .vendi-shrink-in {
+  .vendi-shrink-in,
+  .vendi-fade-in {
     animation: none !important;
   }
 }

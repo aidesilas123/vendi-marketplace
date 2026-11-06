@@ -20,6 +20,10 @@ export const PageTransition = ({
 }) => {
   const pathname = usePathname();
   const stackMode = useContext(StackContext);
+  // /chats opens instantly now (no zoom): the room felt glitchy under
+  // the zoom, so it renders plain with a short fade instead, in every
+  // stack mode. Other pages keep the directional zoom untouched.
+  const isChats = (pagePath ?? pathname) === '/chats';
 
   // Back direction is decided once per pathname: isBackNavigation() reads a
   // 2.5s popstate window, so calling it on every render could flip the
@@ -85,6 +89,19 @@ export const PageTransition = ({
 
   if (shouldReduceMotion) {
     return <>{children}</>;
+  }
+
+  // /chats: instant, no zoom — plain div with a short 150ms fade
+  // (vendi-fade-in ends opaque, forwards, so it can never stick
+  // invisible). The list itself lazy-loads in the room (render cap:
+  // 20 bubbles first, rest after 300ms). Kept-tab reveals and the
+  // first mount were already plain; this makes enter/back plain too.
+  if (isChats) {
+    return (
+      <div key={pagePath ?? pathname} className="w-full min-h-full vendi-fade-in">
+        {children}
+      </div>
+    );
   }
 
   // Stack-managed forward: the new page grows out (vendi-zoom-in,
