@@ -75,7 +75,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallba
 import { useRouter, useSearchParams } from 'next/navigation';
 import useSWR, { mutate as globalMutate } from 'swr';
 import { supabase } from '@/lib/supabase';
-import { getCachedMessages, putCachedMessages, getCachedPartner, putCachedPartner, getOutbox, putOutbox, deleteOutbox, markCachedInboxAsRead, updateCachedInboxLatestMessage } from '@/lib/localCache';
+import { getCachedMessages, putCachedMessages, getCachedPartner, putCachedPartner, getOutbox, putOutbox, deleteOutbox, getCachedInbox, putCachedInbox } from '@/lib/localCache';
 import { notify } from '@/lib/notify';
 import { Avatar } from '@/shared/Avatar';
 import { Badge } from '@/shared/Badge';
@@ -88,13 +88,23 @@ const CameraCapture = dynamic(() => import('./components/CameraCapture').then((m
 const GalleryPicker = dynamic(() => import('./components/GalleryPicker').then((m) => m.GalleryPicker), { ssr: false });
 const PhotoPreview = dynamic(() => import('./components/PhotoPreview').then((m) => m.PhotoPreview), { ssr: false });
 const ImageViewer = dynamic(() => import('@/shared/ImageViewer/ImageViewer').then((m) => m.ImageViewer), { ssr: false });
+// VoiceNotePlayer (241 lines: audio, waveform, haptics) is split out of the
+// initial /chats chunk — it only renders inside audio bubbles, so rooms
+// with no voice notes never load it. The loading placeholder matches the
+// player's size (min-w 210px, 40px play button + py-1 = ~48px tall) so an
+// audio bubble doesn't shift when the player chunk lands.
+const VoiceNotePlayer = dynamic(() => import('./components/VoiceNotePlayer').then((m) => m.VoiceNotePlayer), {
+  ssr: false,
+  loading: () => (
+    <div className="h-12 w-56 max-w-[72vw] rounded-xl bg-black/5 dark:bg-white/5 animate-pulse" />
+  ),
+});
 
 // Scroll-to-bottom must run before paint (not after) on first enter, or the
 // first frame shows the oldest messages at the top, then jumps to the bottom.
 // useLayoutEffect does that on the client; on the server it warns, so use
 // useEffect there (static export prerender only) — same API, no warning.
 const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
-import { VoiceNotePlayer } from './components/VoiceNotePlayer';
 import { hapticImpact, ImpactStyle } from '@/shared/haptics';
 import {
   chevronBackOutline, sendOutline, micOutline, cameraOutline, attachOutline,
@@ -109,7 +119,7 @@ import { VoiceRecorder } from 'capacitor-voice-recorder';
 import { registerBackHandler } from '@/shared/HardwareBackButton';
 import { playChatSound } from '@/shared/audio/sounds';
 import { compressImagePreflight } from '@/shared/image/compressor';
-import { ensurePresence, subscribePresence, getPresence, broadcastTo, subscribeRoom } from '@/lib/realtime';
+import { ensurePresence, subscribePresence, getPresence, broadcastTo } from '@/lib/realtime';
 import { effectiveTxStatus } from '@/lib/txStatus';
 
 type RecordState = 'idle' | 'holding' | 'locked' | 'paused';
@@ -335,6 +345,8 @@ function DealRoomChat() {
   const {
     data: serverMessages,
     isLoading: historyLoading,
+    isValidating: historyValidating,
+    error: historyError,
     mutate,
   } = useSWR(txRef ? ['chat-history', txRef] : null, fetchHistory, {
     revalidateOnFocus: false,
@@ -411,14 +423,20 @@ function DealRoomChat() {
     if (!txRef) return;
     if (!outboxLoadedRef.current) {
       outboxLoadedRef.current = true;
-      void getOutbox(txRef).then((saved) => {
-        if (!saved || saved.length === 0) return;
-        setOptimisticMsgs((prev) => {
-          const have = new Set(prev.map((m) => m.id));
-          const missing = saved.filter((m) => m && m.id && !have.has(m.id));
-          return missing.length > 0 ? [...prev, ...missing] : prev;
-        });
-      }).catch(() => {});
+      // Deferred 300ms (after the 220ms zoom settles): loading the outbox
+      // calls setOptimisticMsgs, which re-renders during the zoom and
+      // makes the first paint look squeezed, then snap back. Failed
+      // messages are rare — they can appear 300ms later with no harm.
+      setTimeout(() => {
+        void getOutbox(txRef).then((saved) => {
+          if (!saved || saved.length === 0) return;
+          setOptimisticMsgs((prev) => {
+            const have = new Set(prev.map((m) => m.id));
+            const missing = saved.filter((m) => m && m.id && !have.has(m.id));
+            return missing.length > 0 ? [...prev, ...missing] : prev;
+          });
+        }).catch(() => {});
+      }, 300);
     }
     // Sync failed messages to the outbox (fire-and-forget, never throws).
     const failed = optimisticMsgs.filter((m) => m?.status === 'failed');
@@ -432,18 +450,12 @@ function DealRoomChat() {
     }).catch(() => {});
   }, [txRef, optimisticMsgs]);
 
-  /** setMessages replacement: writes through the SWR cache and persists to IndexedDB. */
+  /** setMessages replacement: writes through the SWR cache, no refetch. */
   const updateMessages = useCallback(
     (fn: (prev: any[]) => any[]) => {
-      void mutate((prev: any[] | undefined) => {
-        const next = fn(prev ?? []);
-        if (txRef && next.length > 0) {
-          void putCachedMessages(txRef, next);
-        }
-        return next;
-      }, { revalidate: false });
+      void mutate((prev: any[] | undefined) => fn(prev ?? []), { revalidate: false });
     },
-    [mutate, txRef]
+    [mutate]
   );
   const [messageText, setMessageText] = useState('');
   const [showMenu, setShowMenu] = useState(false);
@@ -489,6 +501,14 @@ function DealRoomChat() {
   // zoom settles so the mount doesn't block the transition.
   const [renderLimit, setRenderLimit] = useState(20);
   const prevRenderLimitRef = useRef(20);
+  // Open loader: true while the conversation for this room is still
+  // loading on open. See the layout effect below (resets on txRef).
+  const [isOpening, setIsOpening] = useState(true);
+  const loadStartedRef = useRef(false);
+  // Zoom settle: false until 300ms after the room opens (the 220ms zoom
+  // has settled). Messages are held until then so they don't pop in
+  // mid-zoom and stutter it.
+  const [zoomSettled, setZoomSettled] = useState(false);
   // Audio ids already probed for duration (probe once, never re-probe).
   const probedAudioIdsRef = useRef<Set<string>>(new Set());
   const swipedTriggeredRef = useRef(false);
@@ -528,40 +548,48 @@ function DealRoomChat() {
       return { ...prev, [msgId]: next };
     });
     hapticImpact(ImpactStyle.Light);
-    if (txRef && currentUserRef.current?.id) {
-      void broadcastTo(`chat_${txRef}`, 'message_reaction', {
-        messageId: msgId,
-        emoji,
-        userId: currentUserRef.current.id,
-      });
-    }
-  }, [txRef]);
+    chatChannelRef.current?.send({
+      type: 'broadcast',
+      event: 'message_reaction',
+      payload: { messageId: msgId, emoji, userId: currentUserRef.current?.id }
+    });
+  }, []);
 
   // --- Presence: broadcast my activity ('typing' | 'recording' | null) ---
   const broadcastActivity = useCallback((activity: PartnerActivity) => {
-    if (!currentUser || !txRef) return;
+    // Remember the activity even if we can't send it yet (no user, or no
+    // channel) — the SUBSCRIBED re-send picks it up when the channel is live.
     myActivityRef.current = activity;
-    void broadcastTo(`chat_${txRef}`, 'activity', {
-      userId: currentUser.id,
-      activity,
-    });
+    if (!currentUser) return;
+    if (chatChannelRef.current) {
+      chatChannelRef.current.send({
+        type: 'broadcast',
+        event: 'activity',
+        payload: { userId: currentUser.id, activity }
+      });
+    }
     // Also notify partner's inbox activity channel so /messages shows live status
     if (partnerId) {
-      void broadcastTo(`inbox_activity_${partnerId}`, 'user_activity', {
-        txRef,
-        userId: currentUser.id,
-        activity,
-      });
+      supabase.channel(`inbox_activity_${partnerId}`).send({
+        type: 'broadcast',
+        event: 'user_activity',
+        payload: { txRef, userId: currentUser.id, activity }
+      }).catch(() => {});
     }
   }, [currentUser, partnerId, txRef]);
 
-  // 1. INITIALIZATION & AUTH
+  // 1. INITIALIZATION & WEBSOCKET
   useEffect(() => {
     if (!txRef) {
       router.replace('/messages');
       return;
     }
     let cancelled = false;
+    // Enable send/record instantly on a slow network: read the session
+    // locally (no network) and seed currentUser with just the id, so the
+    // composer doesn't wait for getUser + the profile fetch (which are
+    // slow when the connection is slow). initializeChat overwrites this
+    // minimal user with the full profile once it loads.
     void supabase.auth.getSession().then(({ data }) => {
       const sid = data.session?.user?.id;
       if (!cancelled && sid && !currentUserRef.current) {
@@ -569,52 +597,274 @@ function DealRoomChat() {
         setCurrentUser({ id: sid } as any);
       }
     }).catch(() => {});
-
+    // Safety net: if init hasn't produced a user after 20s AND no messages
+    // have loaded either, surface an error with a retry button instead of
+    // spinning forever. When messages are already showing, auth is just
+    // slow — the chat is usable, so never cover it with an error panel.
     const safetyTimeout = setTimeout(() => {
       if (!cancelled && !currentUserRef.current && !initialScrollDone.current) {
         setInitError('Loading is taking too long. Check your connection and try again.');
       }
     }, 20000);
 
+    // Stable channel name shared by both participants: typing/recording
+    // broadcasts only reach clients subscribed to the SAME channel topic,
+    // so a per-client suffix (Date.now()) would silently break presence.
+    let chatChannel: any = null;
+
     const initializeChat = async () => {
       try {
-        const { data: { user }, error: userError } = await supabase.auth.getUser();
-        if (userError) throw userError;
-        if (!user) { router.push('/login'); return; }
-
-        if (cancelled) return;
-
-        const { data: userProfile, error: profileError } = await supabase
-          .from('users')
-          .select('id, full_name, avatar_url')
-          .eq('id', user.id)
-          .single();
-
-        if (profileError) {
-          console.warn('[Chat] Could not load your profile row from `users`:', profileError.message);
+        // Use the session (local, instant) so the channel is created
+        // immediately even on a slow network. getUser() is a network call:
+        // on slow networks it takes seconds and, if it fails, realtime
+        // never starts at all — typing, reactions and live messages all
+        // fail while /messages (which reads the session locally) works.
+        // The full profile loads in the background below and fills in
+        // name/avatar when it arrives; the channel only needs the id.
+        let user: any = null;
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.user?.id) user = session.user;
+        } catch {}
+        if (!user && currentUserRef.current?.id) user = currentUserRef.current;
+        if (!user) {
+          const { data: { user: netUser }, error: userError } = await supabase.auth.getUser();
+          if (userError) throw userError;
+          if (!netUser) { router.push('/login'); return; }
+          user = netUser;
         }
-
-        if (cancelled) return;
-        const me = userProfile || {
-          id: user.id,
-          full_name: user.user_metadata?.full_name,
-          avatar_url: user.user_metadata?.avatar_url
-        };
-        currentUserRef.current = me;
-        setCurrentUser(me);
         setInitError(null);
 
-        if (txRef) {
-          const { data: txRecord } = await supabase
-            .from('transactions')
-            .select('*')
-            .eq('reference', txRef)
-            .maybeSingle();
-          if (!cancelled && txRecord) setTxData(txRecord);
+        if (cancelled) return;
+        // Reuse a live channel for this room instead of dropping + recreating it.
+        // Dropping a still-joined channel then immediately re-joining the same
+        // topic races the server-side leave: the new subscribe is rejected
+        // ("tried to join multiple times"), the channel lands in error, and
+        // realtime silently dies — no typing, no receipts, no live messages.
+        // A live channel is already subscribed with handlers attached, so
+        // reuse it (skip creation AND the .on() chain below).
+        let reuseChannel = false;
+        const existing = chatChannelRef.current;
+        if (existing && chatChannelTxRef.current === txRef) {
+          // A removal was scheduled by a previous cleanup (deferred 0ms) but
+          // hasn't fired yet — cancel it, the channel is still live.
+          if (chatRemovalTimeoutRef.current) {
+            clearTimeout(chatRemovalTimeoutRef.current);
+            chatRemovalTimeoutRef.current = null;
+          }
+          const adapter = (existing as any)?.channelAdapter;
+          const state = (existing as any)?.state;
+          if (adapter?.isJoined?.() || adapter?.isJoining?.() || state === 'joined' || state === 'joining') {
+            reuseChannel = true;
+            chatChannel = existing;
+          }
+        }
+        if (!reuseChannel) {
+          chatChannel = supabase.channel(`chat_${txRef}`, {
+            config: { presence: { key: user.id } }
+          });
+          chatChannelRef.current = chatChannel;
+          chatChannelTxRef.current = txRef;
         }
 
+        // Profile loads in the background and must never block realtime:
+        // the channel subscribes below using just the user id (already
+        // known from the session), and the full profile fills in the
+        // name/avatar when it arrives.
+        void (async () => {
+          try {
+            const { data: userProfile, error: profileError } = await supabase
+              .from('users')
+              .select('id, full_name, avatar_url')
+              .eq('id', user.id)
+              .single();
+            if (profileError) {
+              console.warn('[Chat] Could not load your profile row from `users` (check table/column names and RLS policies):', profileError.message);
+              return;
+            }
+            if (cancelled) return;
+            const me = userProfile || {
+              id: user.id,
+              full_name: user.user_metadata?.full_name,
+              avatar_url: user.user_metadata?.avatar_url
+            };
+            currentUserRef.current = me;
+            setCurrentUser(me);
+          } catch {}
+        })();
+
+        // Transaction status also loads in the background (read-only check).
+        if (txRef) {
+          void (async () => {
+            try {
+              const { data: txRecord } = await supabase
+                .from('transactions')
+                .select('*')
+                .eq('reference', txRef)
+                .maybeSingle();
+              if (!cancelled && txRecord) setTxData(txRecord);
+            } catch {}
+          })();
+        }
+
+        // Partner header is loaded by SWR (see the chat-partner hook
+        // above) — no manual fetch here, so revisits render from cache.
+
+        // History is loaded by SWR (see fetchHistory above) — no manual fetch here.
+
+        // 1. Chat Room Channel
+        // Skip the whole chain on reuse: handlers are already attached
+        // and the channel already subscribed — .on() after subscribe()
+        // throws, and .subscribe() twice throws "tried to join multiple
+        // times". The if body is the entire multi-line chain (through
+        // ).subscribe();), so no re-indent is needed.
+        if (!reuseChannel) {
+        chatChannel.on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'messages', filter: `transaction_ref=eq.${txRef}` },
+          (payload: any) => {
+            const newMsg = payload?.new;
+            if (!newMsg) return;
+            if (newMsg.sender_id === currentUserRef.current?.id) {
+              setOptimisticMsgs((prev) => prev.filter((m) => {
+                if (newMsg.media_url && m.media_url === newMsg.media_url) return false;
+                                                if (newMsg.message_type === 'text' && m.content === newMsg.content) return false;
+                return true;
+              }));
+            }
+            updateMessages((prev) => {
+               if (prev.find(m => m.id === newMsg.id)) return prev;
+               return [...prev, newMsg];
+            });
+            const meNow = currentUserRef.current;
+            if (meNow && newMsg.receiver_id === meNow.id) {
+              playChatSound('received');
+              chatChannel.send({ type: 'broadcast', event: 'messages_read', payload: { ids: [newMsg.id] } });
+              supabase.from('messages').update({ status: 'read' }).eq('id', newMsg.id);
+            }
+          }
+        ).on(
+          // Keep edits/deletes made from other devices/tabs in sync.
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'messages', filter: `transaction_ref=eq.${txRef}` },
+          (payload: any) => {
+            updateMessages((prev) => prev.map((m) => m.id === payload.new.id ? { ...m, ...payload.new } : m));
+          }
+        ).on(
+          // Instant Peer-to-Peer Realtime Broadcast for zero-latency incoming messages
+          'broadcast',
+          { event: 'new_message' },
+          (payload: any) => {
+            const newMsg = payload?.payload;
+            if (!newMsg) return;
+            if (newMsg.sender_id === currentUserRef.current?.id) {
+              setOptimisticMsgs((prev) => prev.filter((m) => {
+                if (newMsg.media_url && m.media_url === newMsg.media_url) return false;
+                                                if (newMsg.message_type === 'text' && m.content === newMsg.content) return false;
+                return true;
+              }));
+            }
+            updateMessages((prev) => {
+              if (prev.find(m => m.id === newMsg.id)) return prev;
+              return [...prev, newMsg];
+            });
+            const meNow = currentUserRef.current;
+            if (meNow && newMsg.receiver_id === meNow.id) {
+              playChatSound('received');
+              chatChannel.send({ type: 'broadcast', event: 'messages_read', payload: { ids: [newMsg.id] } });
+              supabase.from('messages').update({ status: 'read' }).eq('id', newMsg.id);
+            }
+          }
+        ).on(
+          // Live read receipts broadcast
+          'broadcast',
+          { event: 'messages_read' },
+          (payload: any) => {
+            const { ids } = payload?.payload || {};
+            if (Array.isArray(ids)) {
+              updateMessages((prev) => prev.map((m) => ids.includes(m.id) ? { ...m, status: 'read' } : m));
+            }
+          }
+        ).on(
+          // Live delivered ticks broadcast
+          'broadcast',
+          { event: 'messages_delivered' },
+          (payload: any) => {
+            const { ids } = payload?.payload || {};
+            if (Array.isArray(ids)) {
+              updateMessages((prev) => prev.map((m) => ids.includes(m.id) && m.status !== 'read' ? { ...m, status: 'delivered' } : m));
+            }
+          }
+        ).on(
+          // Reactions broadcast — enforce 1 reaction at a time
+          'broadcast',
+          { event: 'message_reaction' },
+          (payload: any) => {
+            const { messageId, emoji } = payload?.payload || {};
+            if (!messageId || !emoji) return;
+            setReactions((prev) => {
+              const existing = prev[messageId] || [];
+              const next = existing.includes(emoji) ? [] : [emoji];
+              return { ...prev, [messageId]: next };
+            });
+          }
+        ).on(
+          // Presence: partner's typing/recording activity broadcast.
+          'broadcast',
+          { event: 'activity' },
+          (payload: any) => {
+            const { userId, activity } = payload?.payload || {};
+            if (!partnerId || userId !== partnerId) return;
+            setPartnerActivity(activity || null);
+            if (partnerActivityWatchdogRef.current) clearTimeout(partnerActivityWatchdogRef.current);
+            if (activity) {
+              partnerActivityWatchdogRef.current = setTimeout(() => setPartnerActivity(null), PARTNER_ACTIVITY_WATCHDOG_MS);
+            }
+          }
+        ).subscribe((status: string) => {
+            if (status !== 'SUBSCRIBED' || !txRef) return;
+            // Reconnected: if the user is still typing/recording right
+            // now, re-send that state — the broadcasts sent while the
+            // socket was down were lost (ephemeral, no replay), so the
+            // partner would otherwise never see the current indicator.
+            if (myActivityRef.current && chatChannelRef.current) {
+              chatChannelRef.current.send({ type: 'broadcast', event: 'activity', payload: { userId: currentUserRef.current?.id, activity: myActivityRef.current } });
+            }
+            // Mount refresh: catch messages sent while this room was unmounted.
+            // The channel was removed on unmount, so realtime missed them, and SWR
+            // deduping may skip a mount refetch. Cached data shows instantly;
+            // this background merge adds gap messages without wiping earlier
+            // loaded messages (Map keeps older ids, fresh wins) or optimistic
+            // temps (which live outside the SWR cache).
+            void fetchHistory(['chat-history', txRef]).then((fresh) => {
+              if (!fresh || fresh.length === 0) return;
+              updateMessages((prev) => {
+                const byId = new Map();
+                for (const m of prev) byId.set(m.id, m);
+                for (const m of fresh) byId.set(m.id, m);
+                return Array.from(byId.values());
+              });
+            }).catch(() => {});
+          });
+        }
+
+        // 2. Global presence is single-owned by AppShell (src/lib/realtime.ts).
+        //    This page used to create the same 'global_presence' topic and call
+        //    .on('presence') on it — after AppShell subscribed it, that throws
+        //    "cannot add presence callbacks after subscribe()" and kills init.
+        //    ensurePresence is idempotent: a no-op when AppShell already owns it.
         ensurePresence(user.id);
       } catch (err: any) {
+        // Already-live guard (backstop): if the channel is already
+        // subscribed (StrictMode/Fast Refresh race that reuse + adapter
+        // missed), the channel IS live via the first invoke — so treat
+        // it as success (warn, no error panel) instead of showing
+        // "Couldn't open this chat" for a channel that actually works.
+        if (/after `subscribe\(\)`|join multiple times/i.test(err?.message || '')) {
+          console.warn('[Chat] Channel already live (StrictMode race), continuing:', err?.message);
+          if (!cancelled) setInitError(null);
+          return;
+        }
         console.error('[Chat] Initialization failed:', err);
         if (!cancelled) setInitError(err?.message || 'Could not load this chat. Please try again.');
       }
@@ -625,115 +875,28 @@ function DealRoomChat() {
     return () => {
       cancelled = true;
       clearTimeout(safetyTimeout);
+      if (chatChannel) {
+        // Deferred removal (0ms): a fast remount of the same room (StrictMode,
+        // quick back-and-forth) cancels this and reuses the live channel
+        // instead of racing a leave + re-join on the same topic. A real
+        // navigation away lets it fire (getUser in the next init takes ~200ms,
+        // well after this 0ms timer), so the old channel is gone before a
+        // new one for another room is created. Refs are cleared inside the
+        // timer, only if they still point at this channel.
+        if (chatRemovalTimeoutRef.current) clearTimeout(chatRemovalTimeoutRef.current);
+        chatRemovalTimeoutRef.current = setTimeout(() => {
+          chatRemovalTimeoutRef.current = null;
+          try { void supabase.removeChannel(chatChannel); } catch {}
+          if (chatChannelRef.current === chatChannel) {
+            chatChannelRef.current = null;
+            chatChannelTxRef.current = null;
+          }
+        }, 0);
+      }
       if (partnerActivityWatchdogRef.current) clearTimeout(partnerActivityWatchdogRef.current);
       void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
     };
   }, [txRef, partnerId, router, initAttempt]);
-
-  // 2. ROOM BROADCASTS (Peer-to-peer: typing, recording, new messages, reactions, receipts)
-  useEffect(() => {
-    if (!txRef) return;
-    const unsub = subscribeRoom(txRef, {
-      onMessage: (newMsg) => {
-        if (!newMsg) return;
-        if (newMsg.sender_id === currentUserRef.current?.id) {
-          setOptimisticMsgs((prev) => prev.filter((m) => {
-            if (newMsg.media_url && m.media_url === newMsg.media_url) return false;
-            if (newMsg.message_type === 'text' && m.content === newMsg.content) return false;
-            return true;
-          }));
-        }
-        updateMessages((prev) => {
-          if (prev.find((m) => m.id === newMsg.id)) return prev;
-          return [...prev, newMsg];
-        });
-        const meNow = currentUserRef.current;
-        if (meNow && newMsg.receiver_id === meNow.id) {
-          playChatSound('received');
-          void broadcastTo(`chat_${txRef}`, 'messages_read', { ids: [newMsg.id] });
-          void supabase.from('messages').update({ status: 'read' }).eq('id', newMsg.id);
-          if (meNow.id) void markCachedInboxAsRead(meNow.id, txRef);
-        }
-      },
-      onActivity: ({ userId, activity }) => {
-        if (!partnerId || userId !== partnerId) return;
-        setPartnerActivity(activity || null);
-        if (partnerActivityWatchdogRef.current) clearTimeout(partnerActivityWatchdogRef.current);
-        if (activity) {
-          partnerActivityWatchdogRef.current = setTimeout(() => setPartnerActivity(null), PARTNER_ACTIVITY_WATCHDOG_MS);
-        }
-      },
-      onReaction: ({ messageId, emoji }) => {
-        if (!messageId || !emoji) return;
-        setReactions((prev) => {
-          const existing = prev[messageId] || [];
-          const next = existing.includes(emoji) ? [] : [emoji];
-          return { ...prev, [messageId]: next };
-        });
-      },
-      onRead: ({ ids }) => {
-        if (Array.isArray(ids)) {
-          updateMessages((prev) => prev.map((m) => ids.includes(m.id) ? { ...m, status: 'read' } : m));
-        }
-      },
-      onDelivered: ({ ids }) => {
-        if (Array.isArray(ids)) {
-          updateMessages((prev) => prev.map((m) => ids.includes(m.id) && m.status !== 'read' ? { ...m, status: 'delivered' } : m));
-        }
-      },
-    });
-
-    return () => {
-      unsub();
-    };
-  }, [txRef, partnerId, updateMessages]);
-
-  // 3. DATABASE CDC (Postgres changes for messages INSERT & UPDATE)
-  useEffect(() => {
-    if (!txRef) return;
-    const mountTag = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const dbChannel = supabase
-      .channel(`chat_db_${txRef}_${mountTag}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `transaction_ref=eq.${txRef}` },
-        (payload: any) => {
-          const newMsg = payload?.new;
-          if (!newMsg) return;
-          if (newMsg.sender_id === currentUserRef.current?.id) {
-            setOptimisticMsgs((prev) => prev.filter((m) => {
-              if (newMsg.media_url && m.media_url === newMsg.media_url) return false;
-              if (newMsg.message_type === 'text' && m.content === newMsg.content) return false;
-              return true;
-            }));
-          }
-          updateMessages((prev) => {
-            if (prev.find((m) => m.id === newMsg.id)) return prev;
-            return [...prev, newMsg];
-          });
-          const meNow = currentUserRef.current;
-          if (meNow && newMsg.receiver_id === meNow.id) {
-            playChatSound('received');
-            void broadcastTo(`chat_${txRef}`, 'messages_read', { ids: [newMsg.id] });
-            void supabase.from('messages').update({ status: 'read' }).eq('id', newMsg.id);
-            if (meNow.id) void markCachedInboxAsRead(meNow.id, txRef);
-          }
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'messages', filter: `transaction_ref=eq.${txRef}` },
-        (payload: any) => {
-          if (!payload?.new?.id) return;
-          updateMessages((prev) => prev.map((m) => m.id === payload.new.id ? { ...m, ...payload.new } : m));
-        }
-      )
-      .subscribe();
-
-    return () => {
-      void supabase.removeChannel(dbChannel);
-    };
-  }, [txRef, updateMessages]);
 
   // Mirror the AppShell-owned global presence into this room's online indicator.
   // (Presence handlers live in src/lib/realtime.ts, registered exactly once —
@@ -789,11 +952,65 @@ function DealRoomChat() {
   // Fill in the rest of the list 300ms after mount (after the zoom
   // settles): the first paint mounts only the last 20 bubbles, so the
   // transition runs on a light page, and the older bubbles appear above
-  // the fold where they can't be seen popping in.
+  // the fold where they can't be seen popping in. Re-runs per room
+  // (txRef) so a room switched to from another room also fills in.
   useEffect(() => {
     const id = setTimeout(() => setRenderLimit(Infinity), 300);
     return () => clearTimeout(id);
-  }, []);
+  }, [txRef]);
+
+  // Open loader: when a chat is opened, show "Loading chat..." once
+  // while the conversation loads. On a slow network the messages take
+  // seconds to arrive, and without this the room shows the empty
+  // (Security Notice) state, which reads as a failed load. SWR's
+  // revalidateOnMount is false (revisits stay instant), so a room whose
+  // cached data is empty would otherwise never refetch on open;
+  // mutate() here forces that one load. Layout effect (before paint)
+  // so the loader is up on the very first frame, not after a flash
+  // of the empty state.
+  useIsomorphicLayoutEffect(() => {
+    setIsOpening(true);
+    loadStartedRef.current = false;
+    setRenderLimit(20);
+    prevRenderLimitRef.current = 20;
+    initialScrollDone.current = false;
+    setZoomSettled(false);
+    // Don't leak the previous room's typing state into this room: the
+    // SUBSCRIBED re-send would show "typing..." to the new partner.
+    myActivityRef.current = null;
+    // Hold the messages until the 220ms zoom settles (300ms) so nothing
+    // pops in mid-zoom and stutters it — the header skeleton shows
+    // during the zoom, the messages appear after it.
+    const zoomTimer = setTimeout(() => setZoomSettled(true), 300);
+    // Only force a load when there is nothing to show yet — a revisit
+    // with cached messages stays instant, no refetch.
+    if (!serverMessages || (Array.isArray(serverMessages) && serverMessages.length === 0)) {
+      void mutate();
+    }
+    return () => clearTimeout(zoomTimer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [txRef]);
+
+  // Clear the open loader once the conversation has had a chance to
+  // load: messages arrived, or the load finished (whether it succeeded
+  // or failed — a failed load shows Retry below, not the spinner
+  // forever). loadStartedRef guards the first render, where loading
+  // and validating are both still false because the fetch hasn't
+  // started yet — without it the loader would clear immediately.
+  useEffect(() => {
+    // Hold the loader until the zoom settles — messages that arrive from
+    // the device cache in the first 300ms must not pop in mid-zoom.
+    if (!zoomSettled) return;
+    if (messages.length > 0) {
+      setIsOpening(false);
+      return;
+    }
+    if (historyLoading || historyValidating) {
+      loadStartedRef.current = true;
+      return;
+    }
+    if (loadStartedRef.current) setIsOpening(false);
+  }, [messages.length, historyLoading, historyValidating, zoomSettled]);
 
   // Pull-to-refresh on the feed is handled by the shared <PullToRefresh>
   // wrapper (see feed JSX below) — onRefresh revalidates the SWR history.
@@ -859,7 +1076,31 @@ function DealRoomChat() {
     if (unread.length === 0) return;
     const ids = unread.map((m) => m.id);
     updateMessages((prev) => prev.map((m) => (ids.includes(m.id) ? { ...m, status: 'read' } : m)));
-    void broadcastTo(`chat_${txRef}`, 'messages_read', { ids });
+    // Update the cached inbox NOW (SWR + IndexedDB) so /messages stops
+    // showing these as unread immediately. The globalMutate below only
+    // triggers a refetch, which returns the stale cache first and takes
+    // seconds to sync fresh on a slow network — that's why the inbox
+    // kept showing unread after the messages were read in the room.
+    void globalMutate(
+      (key: any) => Array.isArray(key) && key[0] === 'inbox',
+      (prev: any) => {
+        if (!Array.isArray(prev)) return prev;
+        return prev.map((c: any) => (c?.transaction_ref === txRef ? { ...c, unreadCount: 0 } : c));
+      },
+      { revalidate: false }
+    );
+    void (async () => {
+      try {
+        const cached = await getCachedInbox(currentUser.id);
+        if (cached) {
+          await putCachedInbox(
+            currentUser.id,
+            cached.map((c: any) => (c?.transaction_ref === txRef ? { ...c, unreadCount: 0 } : c))
+          );
+        }
+      } catch {}
+    })();
+    chatChannelRef.current?.send({ type: 'broadcast', event: 'messages_read', payload: { ids } });
     if (partnerId) {
       void broadcastTo(`user_inbox_${partnerId}`, 'messages_read', { ids });
     }
@@ -867,17 +1108,7 @@ function DealRoomChat() {
       if (error) {
         console.error('[Chat] Failed to mark messages as read on the server:', error.message);
       }
-      if (currentUser?.id) void markCachedInboxAsRead(currentUser.id, txRef);
-      void globalMutate(
-        (key: any) => Array.isArray(key) && key[0] === 'inbox',
-        (prev: any[] | undefined) => {
-          if (!prev) return prev;
-          return prev.map((item) =>
-            item.transaction_ref === txRef ? { ...item, unreadCount: 0, latestMessage: item.latestMessage ? { ...item.latestMessage, status: 'read' } : item.latestMessage } : item
-          );
-        },
-        { revalidate: false }
-      );
+      void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
     });
   }, [messages, currentUser, txRef]);
 
@@ -1051,6 +1282,9 @@ function DealRoomChat() {
     swipeTriggeredRef.current = false;
   };
 
+  // Reaction pill hangs -bottom-2.5 below the bubble, so the bubble wrappers
+  // must NOT use content-visibility:auto: it implies paint containment, which
+  // clips overflow to the bubble's box and cuts the pill in half.
   const renderReactions = (msgId: string, isMe: boolean) => {
     const msgReactions = reactions[msgId];
     if (!msgReactions || msgReactions.length === 0) return null;
@@ -1060,7 +1294,7 @@ function DealRoomChat() {
           e.stopPropagation();
           setOpenMenuFor(msgId);
         }}
-        className={`absolute -bottom-3 ${isMe ? 'right-2' : 'left-2'} z-20 flex items-center gap-0.5 px-2 py-0.5 bg-white dark:bg-[#1f2937] border border-gray-200/80 dark:border-gray-700 !rounded-full shadow-md text-xs select-none cursor-pointer active:scale-95 transition-transform`}
+        className={`absolute -bottom-2.5 ${isMe ? 'right-2' : 'left-2'} z-10 flex items-center gap-0.5 px-2 py-0.5 bg-white dark:bg-[#1f2937] border border-gray-200/80 dark:border-gray-700 !rounded-full shadow-md text-xs select-none cursor-pointer active:scale-95 transition-transform`}
       >
         {msgReactions.map((emoji, idx) => (
           <span key={idx} className="text-xs leading-none">{emoji}</span>
@@ -1245,8 +1479,11 @@ function DealRoomChat() {
       playChatSound('sent');
       setOptimisticMsgs((prev) => prev.filter((msg) => msg.id !== tempId));
       updateMessages((prev) => (prev.find((m) => m.id === savedMsg.id) ? prev : [...prev, savedMsg]));
-      void broadcastTo(`chat_${txRef}`, 'new_message', savedMsg);
-      if (currentUser?.id && txRef) void updateCachedInboxLatestMessage(currentUser.id, txRef, savedMsg);
+      chatChannelRef.current?.send({
+        type: 'broadcast',
+        event: 'new_message',
+        payload: savedMsg
+      });
       if (partnerId) {
         void broadcastTo(`user_inbox_${partnerId}`, 'new_message', savedMsg);
       }
@@ -1278,8 +1515,7 @@ function DealRoomChat() {
       playChatSound('sent');
       setOptimisticMsgs((prev) => prev.filter((m) => m.id !== tempId));
       updateMessages((prev) => (prev.find((m) => m.id === savedMsg.id) ? prev : [...prev, savedMsg]));
-      void broadcastTo(`chat_${txRef}`, 'new_message', savedMsg);
-      if (currentUser?.id && txRef) void updateCachedInboxLatestMessage(currentUser.id, txRef, savedMsg);
+      chatChannelRef.current?.send({ type: 'broadcast', event: 'new_message', payload: savedMsg });
       if (partnerId) void broadcastTo(`user_inbox_${partnerId}`, 'new_message', savedMsg);
       void notifyChatPartner(savedMsg);
       void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
@@ -1432,8 +1668,11 @@ function DealRoomChat() {
         playChatSound('sent');
         setOptimisticMsgs((prev) => prev.filter((msg) => msg.id !== tempId));
         updateMessages((prev) => (prev.find((m) => m.id === savedMsg.id) ? prev : [...prev, savedMsg]));
-        void broadcastTo(`chat_${txRef}`, 'new_message', savedMsg);
-        if (currentUser?.id && txRef) void updateCachedInboxLatestMessage(currentUser.id, txRef, savedMsg);
+        chatChannelRef.current?.send({
+          type: 'broadcast',
+          event: 'new_message',
+          payload: savedMsg
+        });
         if (partnerId) {
           void broadcastTo(`user_inbox_${partnerId}`, 'new_message', savedMsg);
         }
@@ -1947,8 +2186,11 @@ function DealRoomChat() {
       setOptimisticMsgs((prev) => prev.filter((msg) => msg.id !== tempId));
       updateMessages((prev) => (prev.find((m) => m.id === savedMsg.id) ? prev : [...prev, savedMsg]));
       setPlayback((p) => (p.id === tempId ? { ...p, id: savedMsg.id } : p));
-      void broadcastTo(`chat_${txRef}`, 'new_message', savedMsg);
-      if (currentUser?.id && txRef) void updateCachedInboxLatestMessage(currentUser.id, txRef, savedMsg);
+      chatChannelRef.current?.send({
+        type: 'broadcast',
+        event: 'new_message',
+        payload: savedMsg
+      });
       if (partnerId) {
         void broadcastTo(`user_inbox_${partnerId}`, 'new_message', savedMsg);
       }
@@ -2269,7 +2511,7 @@ function DealRoomChat() {
             key={msg.id}
             id={`msg-${msg.id}`}
             ref={setBubbleRef}
-            className={`flex w-full min-w-0 ${reactions[msg.id]?.length ? 'mb-2.5' : ''} ${isMe ? 'justify-end' : 'justify-start'} transition-transform ${
+            className={`flex w-full min-w-0 ${isMe ? 'justify-end' : 'justify-start'} transition-transform ${
               highlightedMsgId === msg.id ? 'scale-[1.02] ring-2 ring-orange-500 rounded-2xl' : ''
             }`}
           >
@@ -2307,7 +2549,7 @@ function DealRoomChat() {
             key={msg.id}
             id={`msg-${msg.id}`}
             ref={setBubbleRef}
-            className={`flex w-full min-w-0 [content-visibility:auto] [contain-intrinsic-size:auto_120px] ${isMe ? 'justify-end' : 'justify-start'} transition-transform ${
+            className={`flex w-full min-w-0 ${isMe ? 'justify-end' : 'justify-start'} transition-transform ${
               highlightedMsgId === msg.id ? 'scale-[1.02] ring-2 ring-orange-500 rounded-2xl' : ''
             }`}
           >
@@ -2358,7 +2600,7 @@ function DealRoomChat() {
             key={msg.id}
             id={`msg-${msg.id}`}
             ref={setBubbleRef}
-            className={`flex w-full min-w-0 [content-visibility:auto] [contain-intrinsic-size:auto_120px] ${isMe ? 'justify-end' : 'justify-start'} transition-transform ${
+            className={`flex w-full min-w-0 ${isMe ? 'justify-end' : 'justify-start'} transition-transform ${
               highlightedMsgId === msg.id ? 'scale-[1.02] ring-2 ring-orange-500 rounded-2xl' : ''
             }`}
           >
@@ -2408,7 +2650,7 @@ function DealRoomChat() {
       if (msg.message_type === 'video') {
         const isUploading = msg.status === 'sending' && uploadProgress[msg.id] !== undefined;
         return (
-          <div key={msg.id} ref={setBubbleRef} className={`flex w-full min-w-0 ${reactions[msg.id]?.length ? 'mb-2.5' : ''} ${isMe ? 'justify-end' : 'justify-start'}`}>
+          <div key={msg.id} ref={setBubbleRef} className={`flex w-full min-w-0 ${isMe ? 'justify-end' : 'justify-start'}`}>
             <div className="relative max-w-[75%] min-w-0">
               {renderSwipeReplyIndicator(msg)}
               <div
@@ -2465,7 +2707,7 @@ function DealRoomChat() {
   // the shell's px so the room stays edge-to-edge like the messages
   // inbox.
   return (
-    <div className="relative flex flex-col w-full h-full bg-[#e5ddd5] dark:bg-[#121212] overflow-hidden">
+    <div className="relative flex flex-col w-full h-[calc(100dvh-var(--sat)-var(--sab))] bg-[#e5ddd5] dark:bg-[#121212] overflow-hidden">
       {/* Background wallpaper with faded Vendi logos pattern */}
       <div
         className="absolute inset-0 pointer-events-none z-0 opacity-[0.05] dark:opacity-[0.06]"
@@ -2564,7 +2806,7 @@ function DealRoomChat() {
 
       {/* STICKY HEADER */}
       <div className="flex-shrink-0 w-full bg-white dark:bg-black border-b border-gray-200 dark:border-gray-800/60 transition-colors shadow-sm z-50">
-        <div className="flex items-center justify-between px-2 py-2">
+        <div className="flex items-center justify-between px-2 pt-1 pb-2">
           <div className="flex items-center gap-2 min-w-0">
             <button onClick={() => router.back()} className="!p-2 -ml-1 text-gray-900 dark:text-white active:scale-95 transition-transform !rounded-full flex-shrink-0">
               <IonIcon icon={chevronBackOutline} className="text-3xl" />
@@ -2719,6 +2961,18 @@ function DealRoomChat() {
             </div>
           </>
         )}
+        {messages.length === 0 && !historyLoading && !historyValidating && !isOpening && historyError && (
+          <div className="flex flex-col items-center justify-center pt-10 gap-3">
+            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Couldn&apos;t load this chat.</p>
+            <button
+              type="button"
+              onClick={() => void mutate()}
+              className="px-4 py-2 text-sm font-bold text-white bg-orange-500 !rounded-full active:scale-95 transition-transform"
+            >
+              Retry
+            </button>
+          </div>
+        )}
         {hasEarlierMessages && (
           <div className="flex justify-center my-3">
             <button
@@ -2731,14 +2985,11 @@ function DealRoomChat() {
             </button>
           </div>
         )}
-        {historyLoading && messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center pt-28 gap-3">
-            <PullSpinner spinning size={32} />
-            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Loading chat...</p>
-          </div>
-        ) : (
-          renderedMessages
-        )}
+        {/* No centre loader here on purpose: the header skeleton (top) is
+            the only loading indication. A centre spinner duplicated it
+            (centre + top). Messages are held until the zoom settles
+            (zoomSettled, 300ms) so they don't pop in mid-zoom. */}
+        {zoomSettled ? renderedMessages : null}
 
         {/* TYPING / RECORDING STATUS BUBBLE — w-fit keeps it small and
             left-aligned like an incoming message, never full width. */}
@@ -2986,7 +3237,7 @@ function DealRoomChat() {
 
 function DealRoomSkeleton() {
   return (
-    <div className="relative flex flex-col w-full h-full bg-[#e5ddd5] dark:bg-[#121212] overflow-hidden">
+    <div className="relative flex flex-col w-full h-[calc(100dvh-var(--sat)-var(--sab))] bg-[#e5ddd5] dark:bg-[#121212] overflow-hidden">
       <div
         className="absolute inset-0 pointer-events-none z-0 opacity-[0.05] dark:opacity-[0.06]"
         style={{
@@ -2996,7 +3247,7 @@ function DealRoomSkeleton() {
         }}
       />
       <div className="flex-shrink-0 w-full bg-white dark:bg-black border-b border-gray-200 dark:border-gray-800/60 shadow-sm z-50">
-        <div className="flex items-center justify-between px-2 py-2">
+        <div className="flex items-center justify-between px-2 pt-1 pb-2">
           <div className="flex items-center gap-2 min-w-0">
             <div className="!p-2 -ml-1 text-gray-900 dark:text-white flex-shrink-0">
               <IonIcon icon={chevronBackOutline} className="text-3xl" />
@@ -3015,10 +3266,7 @@ function DealRoomSkeleton() {
           </div>
         </div>
       </div>
-      <div className="flex-1 flex flex-col items-center justify-center pt-28 gap-3 relative z-10">
-        <PullSpinner spinning size={32} />
-        <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Loading chat...</p>
-      </div>
+      <div className="flex-1 relative z-10" />
     </div>
   );
 }

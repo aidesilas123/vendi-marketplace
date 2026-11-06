@@ -204,10 +204,22 @@ async function fetchInboxFresh(userId: string): Promise<ChatPreview[]> {
   return result;
 }
 
-// SWR fetcher: always fetches fresh inbox data from the network and updates
-// IndexedDB cache on success. Cache-first instant paint is handled on mount
-// so SWR revalidations never return stale cached rows.
+// Cache-first inbox fetcher (Phase 2): the inbox opens instantly from disk,
+// even offline or after a restart, and fresh data syncs in the background
+// (which updates SWR + refreshes the cache, so the list updates when the
+// network catches up). Cache empty (first visit) → fetch fresh now, as before.
 async function fetchInbox([_key, userId]: [string, string]): Promise<ChatPreview[]> {
+  try {
+    const cached = await getCachedInbox(userId);
+    if (cached && cached.length > 0) {
+      void fetchInboxFresh(userId).then((fresh) => {
+        void globalMutate(['inbox', userId], fresh, { revalidate: false });
+      }).catch(() => {});
+      return cached as ChatPreview[];
+    }
+  } catch {
+    // Cache unavailable — fall through to the network fetch.
+  }
   return fetchInboxFresh(userId);
 }
 
@@ -282,16 +294,6 @@ export default function MessagesList() {
     if (userId === null) router.replace('/login');
   }, [userId, router]);
 
-  // Seed SWR immediately on mount from local IndexedDB cache if memory is empty
-  useEffect(() => {
-    if (!userId) return;
-    void getCachedInbox(userId).then((cached) => {
-      if (cached && cached.length > 0) {
-        void mutate((current) => current ?? (cached as ChatPreview[]), { revalidate: false });
-      }
-    });
-  }, [userId, mutate]);
-
   // Immediately refresh inbox on mount and whenever returning to this tab/window
   useEffect(() => {
     if (userId) void mutate();
@@ -305,6 +307,22 @@ export default function MessagesList() {
       window.removeEventListener('focus', handleVisible);
     };
   }, [userId, mutate]);
+
+  // Prefetch the room chunk for the top conversations on inbox mount, so
+  // tapping a row doesn't wait on a cold chunk. Hover/touchstart already
+  // prefetches the tapped row; this warms the top 2 before any tap.
+  // Each ref is prefetched once (the Set guards repeat inbox refetches).
+  const prefetchedRefsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!chats || chats.length === 0) return;
+    for (const chat of chats.slice(0, 2)) {
+      const ref = chat?.transaction_ref;
+      const pid = chat?.partner?.id;
+      if (!ref || !pid || prefetchedRefsRef.current.has(ref)) continue;
+      prefetchedRefsRef.current.add(ref);
+      void router.prefetch(`/chats?seller=${pid}&ref=${ref}`);
+    }
+  }, [chats, router]);
 
   const mutateRef = useRef(mutate);
   mutateRef.current = mutate;
@@ -322,7 +340,36 @@ export default function MessagesList() {
     const mountTag = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const channel = supabase
       .channel(`inbox_${userId}_${mountTag}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, (payload: any) => {
+        // Optimistic preview: update the cached inbox NOW from the payload
+        // so a new message shows instantly in the preview. The refetch
+        // below returns the stale cache first and takes seconds to sync
+        // fresh on a slow network — that's why the inbox kept previewing
+        // old messages even when new ones had arrived.
+        const m = payload?.new;
+        if (m && (m.sender_id === userId || m.receiver_id === userId) && m.transaction_ref) {
+          const isIncoming = m.receiver_id === userId && m.sender_id !== userId;
+          const preview = m.content || (m.message_type === 'audio' ? 'Voice note' : m.message_type === 'image' ? 'Photo' : m.message_type === 'video' ? 'Video' : 'Attachment');
+          const apply = (list: any[]) => list.map((c: any) => {
+            if (c?.transaction_ref !== m.transaction_ref) return c;
+            return {
+              ...c,
+              latestMessage: { ...(c.latestMessage || {}), content: preview, created_at: m.created_at, sender_id: m.sender_id },
+              unreadCount: isIncoming && m.status !== 'read' ? (c.unreadCount || 0) + 1 : c.unreadCount,
+            };
+          });
+          void globalMutate(
+            (key: any) => Array.isArray(key) && key[0] === 'inbox',
+            (prev: any) => (Array.isArray(prev) ? apply(prev) : prev),
+            { revalidate: false }
+          );
+          void (async () => {
+            try {
+              const cached = await getCachedInbox(userId);
+              if (cached) await putCachedInbox(userId, apply(cached));
+            } catch {}
+          })();
+        }
         void mutateRef.current();
       })
       .subscribe((status, err) => {
