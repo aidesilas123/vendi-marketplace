@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<!-- public/error.html
+     Shown instead of the phone's dead-end "This page couldn't load" screen
+     whenever a page load fails (server.errorPath in capacitor.config.ts).
+     It has NO access to Capacitor plugins and NO app code — plain HTML/JS
+     only — so it must stay self-contained: no external files, no framework.
+     It auto-retries the feed a few times, then stops and offers a button,
+     so a truly dead connection can't loop forever. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Vendi</title>
+<style>
+  html, body { height: 100%; margin: 0; background: #000; color: #fff; font-family: system-ui, -apple-system, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 24px; box-sizing: border-box; }
+  .spin { width: 32px; height: 32px; animation: vendi-tick-spin 0.9s steps(12) infinite; }
+  @keyframes vendi-tick-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .spin { animation-duration: 2s !important; }
+  }
+  p { margin: 0; font-size: 16px; }
+  small { color: rgba(255,255,255,.6); font-size: 13px; }
+  button { background: #f97316; color: #fff; border: 0; border-radius: 999px; padding: 12px 28px; font-size: 16px; font-weight: 700; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <!-- The same spinner as the app's PullSpinner (12 orange ticks, fading
+       trail, stepped 0.9s spin) — inlined here because this page can't
+       use React or any app code. -->
+  <svg class="spin" id="spin" width="32" height="32" viewBox="0 0 32 32" aria-label="Loading">
+    <line x1="16" y1="3.5" x2="16" y2="9" stroke="#f97316" stroke-width="3" stroke-linecap="round" opacity="0.25" transform="rotate(0 16 16)" />
+    <line x1="16" y1="3.5" x2="16" y2="9" stroke="#f97316" stroke-width="3" stroke-linecap="round" opacity="0.3125" transform="rotate(30 16 16)" />
+    <line x1="16" y1="3.5" x2="16" y2="9" stroke="#f97316" stroke-width="3" stroke-linecap="round" opacity="0.375" transform="rotate(60 16 16)" />
+    <line x1="16" y1="3.5" x2="16" y2="9" stroke="#f97316" stroke-width="3" stroke-linecap="round" opacity="0.4375" transform="rotate(90 16 16)" />
+    <line x1="16" y1="3.5" x2="16" y2="9" stroke="#f97316" stroke-width="3" stroke-linecap="round" opacity="0.5" transform="rotate(120 16 16)" />
+    <line x1="16" y1="3.5" x2="16" y2="9" stroke="#f97316" stroke-width="3" stroke-linecap="round" opacity="0.5625" transform="rotate(150 16 16)" />
+    <line x1="16" y1="3.5" x2="16" y2="9" stroke="#f97316" stroke-width="3" stroke-linecap="round" opacity="0.625" transform="rotate(180 16 16)" />
+    <line x1="16" y1="3.5" x2="16" y2="9" stroke="#f97316" stroke-width="3" stroke-linecap="round" opacity="0.6875" transform="rotate(210 16 16)" />
+    <line x1="16" y1="3.5" x2="16" y2="9" stroke="#f97316" stroke-width="3" stroke-linecap="round" opacity="0.75" transform="rotate(240 16 16)" />
+    <line x1="16" y1="3.5" x2="16" y2="9" stroke="#f97316" stroke-width="3" stroke-linecap="round" opacity="0.8125" transform="rotate(270 16 16)" />
+    <line x1="16" y1="3.5" x2="16" y2="9" stroke="#f97316" stroke-width="3" stroke-linecap="round" opacity="0.875" transform="rotate(300 16 16)" />
+    <line x1="16" y1="3.5" x2="16" y2="9" stroke="#f97316" stroke-width="3" stroke-linecap="round" opacity="0.9375" transform="rotate(330 16 16)" />
+  </svg>
+  <p id="msg">Something went wrong — reloading Vendi…</p>
+  <small id="sub">Give it a moment.</small>
+  <button id="retryBtn" class="hidden">Reload</button>
+  <script>
+    (function () {
+      var KEY = 'vendi-error-retries';
+      var MAX_AUTO = 3;        // auto-retry at most 3 times per episode
+      var EPISODE_MS = 60000;  // a failure >60s after the last is a new episode
+      var state = { count: 0, time: 0 };
+      try {
+        var raw = sessionStorage.getItem(KEY);
+        if (raw) state = JSON.parse(raw);
+        if (!state || Date.now() - (state.time || 0) > EPISODE_MS) state = { count: 0, time: 0 };
+      } catch (e) { state = { count: 0, time: 0 }; }
+      function save() {
+        try { sessionStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+      }
+      function go() {
+        // Back to the feed (home). replace() keeps this page out of history.
+        location.replace('/');
+      }
+      if (state.count < MAX_AUTO) {
+        state.count += 1;
+        state.time = Date.now();
+        save();
+        setTimeout(go, 1500);
+      } else {
+        // Retried 3 times and still failing — stop looping, let the user choose.
+        document.getElementById('spin').classList.add('hidden');
+        document.getElementById('msg').textContent = "Vendi couldn't load.";
+        document.getElementById('sub').textContent = 'Check your connection, then try again.';
+        var btn = document.getElementById('retryBtn');
+        btn.classList.remove('hidden');
+        btn.onclick = function () {
+          state = { count: 0, time: 0 };
+          save();
+          go();
+        };
+      }
+    })();
+  </script>
+</body>
+</html>

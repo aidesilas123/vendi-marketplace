@@ -4,6 +4,9 @@ const config: CapacitorConfig = {
   appId: 'com.vendi.app',
   appName: 'Vendi',
   webDir: 'out',
+  server: {
+    errorPath: 'error.html',
+  },
   plugins: {
     StatusBar: {
       overlaysWebView: true,

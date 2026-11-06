@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import useSWR, { mutate as globalMutate } from 'swr';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { supabase } from '@/lib/supabase';
+import { ensureActivityChannel, subscribeActivity } from '@/lib/realtime';
 import { getCachedInbox, putCachedInbox } from '@/lib/localCache';
 import { Avatar } from '@/shared/Avatar';
 import IonIcon from '@/shared/Icon/Icon';
@@ -258,13 +259,6 @@ export default function MessagesList() {
   const [activityMap, setActivityMap] = useState<Record<string, 'typing' | 'recording'>>({});
   const [viewingImages, setViewingImages] = useState<string[]>([]);
   const activityTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
-  // Activity channel (typing/recording) must use the STABLE topic
-  // `inbox_activity_${userId}` — the chat page sends to that exact topic,
-  // and a per-mount suffix would mean sender and receiver never meet.
-  // Guarded like the chat channel: reuse a live channel on fast remount,
-  // deferred removal on cleanup, so a new subscribe never races a leave.
-  const actChannelRef = useRef<any>(null);
-  const actRemovalTimeoutRef = useRef<any>(null);
 
   // Rubber-band pull-to-refresh: ONLY the list body stretches — the sticky
   // header never moves. The strip grows in-flow above the list, pushing it
@@ -378,70 +372,41 @@ export default function MessagesList() {
         }
       });
 
-    // Activity channel: live typing and recording status from partners.
-    // STABLE topic `inbox_activity_${userId}` (no mount suffix): the chat
-    // page sends to exactly this topic, so a per-mount suffix would mean
-    // sender and receiver never meet. Guarded: reuse a live channel on
-    // fast remount (StrictMode) instead of subscribing a duplicate on
-    // the same topic ("tried to join multiple times").
-    let reuseActChannel = false;
-    if (actChannelRef.current) {
-      if (actRemovalTimeoutRef.current) {
-        clearTimeout(actRemovalTimeoutRef.current);
-        actRemovalTimeoutRef.current = null;
-      }
-      const adapter = (actChannelRef.current as any)?.channelAdapter;
-      const state = (actChannelRef.current as any)?.state;
-      if (adapter?.isJoined?.() || adapter?.isJoining?.() || state === 'joined' || state === 'joining') {
-        reuseActChannel = true;
-      }
-    }
-    let actChannel: any = null;
-    if (!reuseActChannel) {
-      actChannel = supabase
-        .channel(`inbox_activity_${userId}`)
-        .on('broadcast', { event: 'user_activity' }, (payload: any) => {
-          const { txRef, activity } = payload?.payload || {};
-          if (!txRef) return;
-          if (activityTimersRef.current[txRef]) {
-            clearTimeout(activityTimersRef.current[txRef]);
-          }
-          if (activity) {
-            setActivityMap((prev) => ({ ...prev, [txRef]: activity }));
-            activityTimersRef.current[txRef] = setTimeout(() => {
-              setActivityMap((prev) => {
-                const next = { ...prev };
-                delete next[txRef];
-                return next;
-              });
-            }, 6000);
-          } else {
-            setActivityMap((prev) => {
-              const next = { ...prev };
-              delete next[txRef];
-              return next;
-            });
-          }
-        })
-        .subscribe();
-      actChannelRef.current = actChannel;
-    } else {
-      actChannel = actChannelRef.current;
-    }
-
     return () => {
       void supabase.removeChannel(channel);
-      // Deferred removal for the activity channel: a fast remount of the
-      // inbox (StrictMode, quick back-and-forth) cancels this and reuses
-      // the live channel instead of racing a leave + re-join on the
-      // stable topic. Ref cleared inside the timer, only if it still
-      // points at this channel.
-      if (actRemovalTimeoutRef.current) clearTimeout(actRemovalTimeoutRef.current);
-      actRemovalTimeoutRef.current = setTimeout(() => {
-        actRemovalTimeoutRef.current = null;
-        try { void supabase.removeChannel(actChannel); } catch {}
-        if (actChannelRef.current === actChannel) actChannelRef.current = null;
-      }, 0);
+    };
+  }, [userId]);
+
+  // Typing/recording: the shared activity channel (realtime.ts) — the
+  // same mechanism the room now uses. One stable channel per login,
+  // never torn down on navigation; the 6s timeout clears a stale
+  // indicator if broadcasts stop arriving.
+  useEffect(() => {
+    if (!userId) return;
+    ensureActivityChannel(userId);
+    const unsubscribe = subscribeActivity((txRef, _senderId, activity) => {
+      if (activityTimersRef.current[txRef]) {
+        clearTimeout(activityTimersRef.current[txRef]);
+      }
+      if (activity) {
+        setActivityMap((prev) => ({ ...prev, [txRef]: activity }));
+        activityTimersRef.current[txRef] = setTimeout(() => {
+          setActivityMap((prev) => {
+            const next = { ...prev };
+            delete next[txRef];
+            return next;
+          });
+        }, 6000);
+      } else {
+        setActivityMap((prev) => {
+          const next = { ...prev };
+          delete next[txRef];
+          return next;
+        });
+      }
+    });
+    return () => {
+      unsubscribe();
       Object.values(activityTimersRef.current).forEach(clearTimeout);
     };
   }, [userId]);

@@ -45,10 +45,11 @@
      - Chat images lazy-load. SSR-safe Icon wrapper (no hydration mismatch).
   ============================================================================
   PRESERVED FROM PRIOR SESSIONS:
-  - Typing/recording presence via Supabase Realtime broadcast + watchdog.
-    NOTE: channel is now the STABLE `chat_${txRef}` — a per-client suffix
-    (e.g. Date.now()) breaks presence because broadcasts only reach clients
-    on the SAME channel topic.
+  - Typing/recording presence via the shared activity channel
+    (realtime.ts, `inbox_activity_${userId}`) — the /messages mechanism,
+    one stable channel per login with a 6s clear timeout. The old
+    per-room channel listener + 2.5s watchdog are gone: on a slow phone
+    network the room channel was still joining when the partner typed.
   - WhatsApp-style read receipts (batched UPDATE ... WHERE id IN ...).
   - Report-to-Vendi payload routing via sessionStorage.
   - Deleted-message alignment, draggable waveform seeking, functional
@@ -119,7 +120,7 @@ import { VoiceRecorder } from 'capacitor-voice-recorder';
 import { registerBackHandler } from '@/shared/HardwareBackButton';
 import { playChatSound } from '@/shared/audio/sounds';
 import { compressImagePreflight } from '@/shared/image/compressor';
-import { ensurePresence, subscribePresence, getPresence, broadcastTo } from '@/lib/realtime';
+import { ensurePresence, subscribePresence, getPresence, broadcastTo, ensureActivityChannel, subscribeActivity } from '@/lib/realtime';
 import { effectiveTxStatus } from '@/lib/txStatus';
 
 type RecordState = 'idle' | 'holding' | 'locked' | 'paused';
@@ -134,7 +135,6 @@ const SWIPE_TRIGGER_PX = 64;
 const SWIPE_MAX_PX = 90;
 const LONG_PRESS_MS = 450;
 const TYPING_BROADCAST_IDLE_MS = 1200;
-const PARTNER_ACTIVITY_WATCHDOG_MS = 2500;
 const CANCEL_DRAG_PX = 100;
 const LOCK_DRAG_PX = 80;
 
@@ -210,7 +210,15 @@ function DealRoomChat() {
   const channelResubscribeRef = useRef(0);
   const myActivityRef = useRef<PartnerActivity>(null);
   const typingStopTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const partnerActivityWatchdogRef = useRef<NodeJS.Timeout | null>(null);
+  // Room activity timer (6s, same as /messages): cleared and re-armed on
+  // every activity broadcast, so one lost/delayed broadcast on a slow
+  // phone network can't kill the indicator — the old 2.5s watchdog did.
+  const roomActivityTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // Current room, mirrored for the shared activity listener (its handler
+  // is registered once per login, so it must read the room from refs,
+  // not from a stale closure).
+  const activityTxRef = useRef<string | null>(null);
+  const activityPartnerRef = useRef<string | null>(null);
 
   // --- Drag-to-cancel/lock haptic guards ---
   const cancelHapticFiredRef = useRef(false);
@@ -596,20 +604,22 @@ function DealRoomChat() {
   }, [sendRoomBroadcast]);
 
   // --- Presence: broadcast my activity ('typing' | 'recording' | null) ---
+  // ONE send, on the partner's inbox_activity topic via broadcastTo
+  // (subscribe-then-send + retry) — the SAME mechanism /messages uses,
+  // and the one that works on phone and web. The partner's room and
+  // inbox both read it from the shared activity channel (realtime.ts),
+  // so there is no second, per-room send to go stale. Typing re-sends
+  // every 1.2s and recording every 2s while active, so a lost broadcast
+  // is re-armed by the next heartbeat.
   const broadcastActivity = useCallback((activity: PartnerActivity) => {
-    // Remember the activity even if we can't send it yet (no user, or no
-    // channel) — the SUBSCRIBED re-send picks it up when the channel is live.
+    // Remember the activity so the heartbeat logic knows what state
+    // we're in (and so a room switch can clear it).
     myActivityRef.current = activity;
     if (!currentUser) return;
-    void sendRoomBroadcast('activity', { userId: currentUser.id, activity });
-    // Also notify partner's inbox activity channel so /messages shows live status.
-    // broadcastTo (realtime.ts) subscribes first, then sends with retry — the
-    // old throwaway supabase.channel(...).send() never subscribed, so the
-    // inbox indicator was lost whenever that send raced the join.
     if (partnerId) {
       void broadcastTo(`inbox_activity_${partnerId}`, 'user_activity', { txRef, userId: currentUser.id, activity });
     }
-  }, [currentUser, partnerId, txRef, sendRoomBroadcast]);
+  }, [currentUser, partnerId, txRef]);
 
   // 1. INITIALIZATION & WEBSOCKET
   useEffect(() => {
@@ -771,13 +781,6 @@ function DealRoomChat() {
             return;
           }
           if (status !== 'SUBSCRIBED' || !txRef) return;
-          // Reconnected: if the user is still typing/recording right
-          // now, re-send that state — the broadcasts sent while the
-          // socket was down were lost (ephemeral, no replay), so the
-          // partner would otherwise never see the current indicator.
-          if (myActivityRef.current) {
-            void sendRoomBroadcast('activity', { userId: currentUserRef.current?.id, activity: myActivityRef.current });
-          }
           // Mount refresh: catch messages sent while this room was unmounted.
           // The channel was removed on unmount, so realtime missed them, and SWR
           // deduping may skip a mount refetch. Cached data shows instantly;
@@ -891,19 +894,6 @@ function DealRoomChat() {
               return { ...prev, [messageId]: next };
             });
           }
-        ).on(
-          // Presence: partner's typing/recording activity broadcast.
-          'broadcast',
-          { event: 'activity' },
-          (payload: any) => {
-            const { userId, activity } = payload?.payload || {};
-            if (!partnerId || userId !== partnerId) return;
-            setPartnerActivity(activity || null);
-            if (partnerActivityWatchdogRef.current) clearTimeout(partnerActivityWatchdogRef.current);
-            if (activity) {
-              partnerActivityWatchdogRef.current = setTimeout(() => setPartnerActivity(null), PARTNER_ACTIVITY_WATCHDOG_MS);
-            }
-          }
         );
         chatChannel.subscribe(handleChannelStatus);
         }
@@ -953,7 +943,6 @@ function DealRoomChat() {
           }
         }, 0);
       }
-      if (partnerActivityWatchdogRef.current) clearTimeout(partnerActivityWatchdogRef.current);
       void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
     };
   }, [txRef, partnerId, router, initAttempt]);
@@ -975,6 +964,35 @@ function DealRoomChat() {
     syncFromStore();
     return subscribePresence(syncFromStore);
   }, [partnerId]);
+
+  // Typing/recording in THIS room — the /messages mechanism, shared:
+  // one stable activity channel per login (realtime.ts), created once
+  // and never torn down on navigation, with the inbox's 6s clear
+  // timeout. The old room-channel listener is gone: that channel is
+  // rebuilt on every room entry, so on a slow phone network the
+  // subscribe was still in flight (or the channel had errored) when
+  // the partner typed, and the 2.5s watchdog cleared the indicator
+  // after a single lost broadcast.
+  useEffect(() => {
+    const myId = currentUser?.id;
+    if (!myId) return;
+    ensureActivityChannel(myId);
+    const unsubscribe = subscribeActivity((msgTxRef, senderId, activity) => {
+      if (!msgTxRef || msgTxRef !== activityTxRef.current) return;
+      if (senderId && activityPartnerRef.current && senderId !== activityPartnerRef.current) return;
+      if (roomActivityTimerRef.current) clearTimeout(roomActivityTimerRef.current);
+      if (activity) {
+        setPartnerActivity(activity);
+        roomActivityTimerRef.current = setTimeout(() => setPartnerActivity(null), 6000);
+      } else {
+        setPartnerActivity(null);
+      }
+    });
+    return () => {
+      unsubscribe();
+      if (roomActivityTimerRef.current) clearTimeout(roomActivityTimerRef.current);
+    };
+  }, [currentUser?.id]);
 
   const scrollToBottom = (smooth = true) =>
     messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
@@ -1034,9 +1052,14 @@ function DealRoomChat() {
     setRenderLimit(20);
     prevRenderLimitRef.current = 20;
     initialScrollDone.current = false;
-    // Don't leak the previous room's typing state into this room: the
-    // SUBSCRIBED re-send would show "typing..." to the new partner.
+    // Don't leak the previous room's typing state into this room.
     myActivityRef.current = null;
+    // Point the shared activity listener at this room, and clear any
+    // indicator left over from the previous room.
+    activityTxRef.current = txRef;
+    activityPartnerRef.current = partnerId;
+    if (roomActivityTimerRef.current) clearTimeout(roomActivityTimerRef.current);
+    setPartnerActivity(null);
     // Fresh room, fresh reactions: clear the previous room's loaded ids,
     // my reactions and the display pill (message ids are unique per
     // message, but stale entries would linger in memory otherwise).

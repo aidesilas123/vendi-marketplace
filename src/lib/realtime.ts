@@ -130,78 +130,6 @@ export async function broadcastTo(topic: string, event: string, payload: any): P
   return false;
 }
 
-/* ── Room broadcast subscription (activity, reaction, new_message, read, delivered) ── */
-
-export interface RoomCallbacks {
-  onMessage?: (msg: any) => void;
-  onActivity?: (payload: { userId: string; activity: any }) => void;
-  onReaction?: (payload: { messageId: string; emoji: string; userId?: string }) => void;
-  onRead?: (payload: { ids: string[] }) => void;
-  onDelivered?: (payload: { ids: string[] }) => void;
-}
-
-const roomListeners = new Map<string, Set<RoomCallbacks>>();
-
-export function subscribeRoom(txRef: string, callbacks: RoomCallbacks): () => void {
-  if (!txRef) return () => {};
-  const topic = `chat_${txRef}`;
-  let set = roomListeners.get(txRef);
-  if (!set) {
-    set = new Set();
-    roomListeners.set(txRef, set);
-  }
-  set.add(callbacks);
-
-  ensureChannel(topic, (ch: any) => {
-    ch.on('broadcast', { event: 'new_message' }, (payload: any) => {
-      const msg = payload?.payload;
-      if (!msg) return;
-      roomListeners.get(txRef)?.forEach((cb) => {
-        try { cb.onMessage?.(msg); } catch (e) { console.error('[realtime] onMessage error:', e); }
-      });
-    })
-    .on('broadcast', { event: 'activity' }, (payload: any) => {
-      const data = payload?.payload;
-      if (!data) return;
-      roomListeners.get(txRef)?.forEach((cb) => {
-        try { cb.onActivity?.(data); } catch (e) { console.error('[realtime] onActivity error:', e); }
-      });
-    })
-    .on('broadcast', { event: 'message_reaction' }, (payload: any) => {
-      const data = payload?.payload;
-      if (!data) return;
-      roomListeners.get(txRef)?.forEach((cb) => {
-        try { cb.onReaction?.(data); } catch (e) { console.error('[realtime] onReaction error:', e); }
-      });
-    })
-    .on('broadcast', { event: 'messages_read' }, (payload: any) => {
-      const data = payload?.payload;
-      if (!data) return;
-      roomListeners.get(txRef)?.forEach((cb) => {
-        try { cb.onRead?.(data); } catch (e) { console.error('[realtime] onRead error:', e); }
-      });
-    })
-    .on('broadcast', { event: 'messages_delivered' }, (payload: any) => {
-      const data = payload?.payload;
-      if (!data) return;
-      roomListeners.get(txRef)?.forEach((cb) => {
-        try { cb.onDelivered?.(data); } catch (e) { console.error('[realtime] onDelivered error:', e); }
-      });
-    });
-  });
-
-  return () => {
-    const s = roomListeners.get(txRef);
-    if (s) {
-      s.delete(callbacks);
-      if (s.size === 0) {
-        roomListeners.delete(txRef);
-        dropChannel(topic);
-      }
-    }
-  };
-}
-
 /* ── Global presence — single owner is AppShell ─────────────────────────── */
 
 const PRESENCE_TOPIC = 'global_presence';
@@ -296,5 +224,65 @@ export function subscribePresence(cb: () => void): () => void {
   presenceListeners.add(cb);
   return () => {
     presenceListeners.delete(cb);
+  };
+}
+
+/* ── Typing/recording activity — single owner is the realtime registry ──
+ * One stable channel per user (`inbox_activity_${userId}`), created once
+ * via ensureChannel and never removed by page cleanups. This is the
+ * /messages mechanism: it works on phone and web because the channel is
+ * created once per login (not per room), lives as long as the app, and
+ * the sender uses broadcastTo (subscribe-then-send + retry) on the same
+ * topic. The old /chats path listened on the per-room channel instead:
+ * that channel is torn down and rebuilt on every room entry, so on a
+ * slow phone network the subscribe handshake was still in flight (or
+ * the channel had errored) when the partner typed, and the 2.5s
+ * watchdog cleared the indicator after a single lost broadcast.
+ * Both /messages (per-conversation map) and /chats (current room) read
+ * from this one channel via subscribeActivity. */
+
+export type ActivityValue = 'typing' | 'recording' | null;
+export type ActivityListener = (
+  txRef: string,
+  userId: string | null,
+  activity: ActivityValue
+) => void;
+
+const activityListeners = new Set<ActivityListener>();
+const activityWiredTopics = new Set<string>();
+let activityOwner: string | null = null;
+
+export function ensureActivityChannel(userId: string): void {
+  if (!userId) return;
+  if (activityOwner === userId) return;
+  if (activityOwner && activityOwner !== userId) {
+    dropChannel(`inbox_activity_${activityOwner}`);
+    activityWiredTopics.delete(`inbox_activity_${activityOwner}`);
+  }
+  activityOwner = userId;
+  const topic = `inbox_activity_${userId}`;
+  // ensureChannel subscribes the topic (once); the broadcast handler is
+  // attached here, not in setup, so it also lands when the channel was
+  // already joined by someone else — broadcast .on() is exempt from the
+  // "cannot add callbacks after subscribe()" throw.
+  const ch = ensureChannel(topic);
+  if (!activityWiredTopics.has(topic)) {
+    activityWiredTopics.add(topic);
+    ch.on('broadcast', { event: 'user_activity' }, (payload: any) => {
+      const { txRef, userId: senderId, activity } = payload?.payload || {};
+      if (!txRef) return;
+      activityListeners.forEach((cb) => {
+        try {
+          cb(txRef, senderId ?? null, activity ?? null);
+        } catch {}
+      });
+    });
+  }
+}
+
+export function subscribeActivity(cb: ActivityListener): () => void {
+  activityListeners.add(cb);
+  return () => {
+    activityListeners.delete(cb);
   };
 }
