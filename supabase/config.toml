@@ -577,3 +577,25 @@ entrypoint = "./functions/broadcast/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/broadcast/*.html" ]
+
+[functions.monnify-checkout-initialize]
+enabled = true
+verify_jwt = false
+import_map = "./functions/monnify-checkout-initialize/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/monnify-checkout-initialize/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/monnify-checkout-initialize/*.html" ]
+
+[functions.monnify-checkout-reconcile]
+enabled = true
+verify_jwt = false
+import_map = "./functions/monnify-checkout-reconcile/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/monnify-checkout-reconcile/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/monnify-checkout-reconcile/*.html" ]

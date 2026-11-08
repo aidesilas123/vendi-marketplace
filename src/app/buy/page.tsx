@@ -23,6 +23,17 @@ import {
   bookmarkOutline, warningOutline
 } from 'ionicons/icons';
 
+// Monnify Web Checkout SDK (loaded on demand from Monnify's CDN — see
+// loadMonnifySDK). It opens Monnify's own modal over the app, the way
+// Paystack's inline checkout does: the buyer never leaves Vendi.
+declare global {
+  interface Window {
+    MonnifySDK?: {
+      initialize: (config: Record<string, unknown>) => void;
+    };
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /*  SWR keys                                                          */
 /*  'current-user-id', 'platform-settings-raw', ['product', id] and   */
@@ -96,6 +107,9 @@ export default function BuyPage() {
   const searchParams = useSearchParams();
   const productId = searchParams.get('id');
   const offerQuery = searchParams.get('offer');
+  // Deep-link return (com.vendi.app://payment-return): AppShell routes here
+  // with ?paymentReference= after Monnify sends the buyer back into the app.
+  const paymentRefParam = searchParams.get('paymentReference');
   const router = useRouter();
   const { toast, showToast, hideToast } = useToast();
 
@@ -114,6 +128,15 @@ export default function BuyPage() {
   const [pin, setPin] = useState('');
   const [pinMode, setPinMode] = useState<'create' | 'confirm' | 'verify'>('create');
   const [tempPin, setTempPin] = useState('');
+
+  // A Monnify payment started from this page but not yet reconciled (the
+  // buyer is in the browser, or came back before it finished). Tapping the
+  // Monnify button again checks THIS payment instead of starting a new one,
+  // so the buyer can never be charged twice for the same order.
+  const [onlinePendingRef, setOnlinePendingRef] = useState<string | null>(null);
+  // The Monnify SDK script, loaded once and cached (a failed load clears so
+  // a retry loads it again).
+  const monnifySdkPromiseRef = useRef<Promise<void> | null>(null);
 
   /* ------------------------------ SWR data layer ------------------------------ */
 
@@ -196,6 +219,16 @@ export default function BuyPage() {
   const totalCharge = fees.total;
   const hasEnoughFunds = wallet ? Number(wallet.balance) >= totalCharge : false;
 
+  // Monnify gateway fee for the online path: 1.5% of the total, rounded UP so the
+  // collected amount always covers it. The buyer pays total + fee, so the escrow
+  // amounts (item price, seller net) stay exact. The fee is shown in the sheet
+  // before the buyer taps pay. VAT on the fee (~7.5%) and the fee-on-gross
+  // rounding (a few naira) are absorbed by Vendi for now — flip the rate below
+  // to pass them to the buyer later. The server re-computes this fee when the
+  // payment starts; the client number is display-only, never trusted.
+  const gatewayFee = Math.ceil(totalCharge * 0.015);
+  const gatewayTotal = totalCharge + gatewayFee;
+
   // A failed first load (nothing cached) gets a retry screen instead of an endless skeleton
   const loadError =
     (!!productError && product === undefined) ||
@@ -228,6 +261,247 @@ export default function BuyPage() {
     setPin('');
     setTempPin('');
     setActiveModal('pin');
+  };
+
+  // Loads Monnify's Web Checkout SDK (the Paystack-inline equivalent: it
+  // opens Monnify's own modal over the app, so the buyer never leaves
+  // Vendi). The script URL follows the API key: test keys (MK_TEST_) load
+  // the sandbox SDK, live keys load the live SDK. Loaded once, then cached.
+  const loadMonnifySDK = (apiKey: string): Promise<void> => {
+    if (typeof window !== 'undefined' && window.MonnifySDK) return Promise.resolve();
+    if (monnifySdkPromiseRef.current) return monnifySdkPromiseRef.current;
+    const src = apiKey.startsWith('MK_TEST_')
+      ? 'https://sandbox.sdk.monnify.com/plugin/monnify.js'
+      : 'https://sdk.monnify.com/plugin/monnify.js';
+    monnifySdkPromiseRef.current = new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = src;
+      script.async = true;
+      script.onload = () => resolve();
+      script.onerror = () => {
+        monnifySdkPromiseRef.current = null;
+        reject(new Error('Could not load the Monnify checkout. Check your connection and try again.'));
+      };
+      document.head.appendChild(script);
+    });
+    return monnifySdkPromiseRef.current;
+  };
+
+  // Online payment with Monnify (direct escrow), in-app modal: the server
+  // quotes the payment and records it, then the Monnify SDK opens its modal
+  // over the app. On completion (or on close) the payment is reconciled
+  // with Monnify on the server — the webhook usually creates the escrow
+  // first; the reconcile is the safety net that also covers a missed
+  // webhook. No system browser, no redirect: the buyer never leaves Vendi.
+  const handlePayOnline = async () => {
+    if (!product || isProcessingTx) return;
+
+    // A payment is already running for this order — check it instead of
+    // starting (and charging) a second one.
+    if (onlinePendingRef) {
+      await reconcileOnlinePayment(onlinePendingRef);
+      return;
+    }
+
+    // The SDK's apiKey + contractCode are public SDK credentials (like
+    // Paystack's public key) — they ship in the app bundle. The SECRET key
+    // stays only in Supabase secrets and is never used here.
+    const apiKey = process.env.NEXT_PUBLIC_MONNIFY_API_KEY ?? '';
+    const contractCode = process.env.NEXT_PUBLIC_MONNIFY_CONTRACT_CODE ?? '';
+    if (!apiKey || !contractCode) {
+      showToast('Online payment is not set up yet. Try the wallet instead.', 'error');
+      return;
+    }
+
+    setIsProcessingTx(true);
+    try {
+      // Load the SDK first: if it can't load, no checkout row is created
+      // and the buyer can simply retry.
+      await loadMonnifySDK(apiKey);
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        showToast('You must be logged in to checkout.', 'error');
+        return;
+      }
+      const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/monnify-checkout-initialize`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId: product.id, offerPrice: negotiatedOffer }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Could not start the online payment');
+      const paymentReference: string = data.paymentReference;
+      const gatewayTotal: number = Number(data.gatewayTotal);
+      const customerName: string = data.customerName ?? 'Vendi Buyer';
+      const customerEmail: string = data.customerEmail ?? '';
+      if (!paymentReference || !gatewayTotal) throw new Error('Could not start the online payment');
+
+      setOnlinePendingRef(paymentReference);
+      setIsProcessingTx(false);
+      // Slide the sheet down: the Monnify modal opens over the buy page.
+      // Reopening the sheet shows "Check my Monnify payment" for this
+      // same payment.
+      setActiveModal('none');
+
+      // The SDK opens its own modal and initializes the payment with our
+      // reference. `completed` guards onClose: after a successful payment
+      // onClose may also fire, and it must not reconcile a second time.
+      let completed = false;
+      window.MonnifySDK!.initialize({
+        amount: gatewayTotal,
+        currency: 'NGN',
+        reference: paymentReference,
+        // Monnify's sample uses customerFullName; their field table lists
+        // customerName. Both are passed so a doc mismatch can't break it.
+        customerFullName: customerName,
+        customerName,
+        customerEmail,
+        apiKey,
+        contractCode,
+        paymentDescription: `Vendi escrow: ${String(product.title).slice(0, 40)}`,
+        metadata: { product_id: product.id },
+        onComplete: (response: any) => {
+          completed = true;
+          void reconcileOnlinePayment(paymentReference, response?.transactionReference ?? null);
+        },
+        onClose: () => {
+          if (completed) return;
+          // Closed without completing (or completed but onComplete didn't
+          // fire) — reconcile to find out which. A paid payment still
+          // creates the escrow; an unpaid one is closed as cancelled.
+          void reconcileOnlinePayment(paymentReference, null, true);
+        },
+      });
+    } catch (error: any) {
+      showToast(error.message || 'Could not start the online payment', 'error');
+      setIsProcessingTx(false);
+    }
+  };
+
+  // Asks the server to verify the Monnify payment and finish the escrow
+  // (or refund). Retries a few times: the webhook usually lands first, but
+  // on a slow network the payment can still be confirming when the modal
+  // closes. `cancelled` means the buyer closed the modal without paying —
+  // the server then closes the row (no money moved, nothing to refund).
+  const reconcileOnlinePayment = async (
+    paymentReference: string,
+    monnifyTransactionReference?: string | null,
+    cancelled?: boolean,
+  ) => {
+    setIsProcessingTx(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/monnify-checkout-reconcile`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paymentReference, monnifyTransactionReference: monnifyTransactionReference ?? null, cancelled: cancelled ?? false }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Could not confirm the payment');
+
+        if (data.success && data.reference) {
+          paymentDone.current = true;
+          setOnlinePendingRef(null);
+          setActiveModal('none');
+
+          // Exact numbers from the reconcile; fallback to the local math.
+          const itemAmount = Number(negotiatedOffer || product?.base_price || 0);
+          const totalChargePaid = Number(data.total_charge ?? totalCharge);
+          const sellerNet = Number(data.seller_net ?? itemAmount);
+          const productImage = (product as any)?.images?.[0] || '';
+
+          // Sold -> seller (same words as the wallet path)
+          if (product?.seller_id && product.seller_id !== userId) {
+            void (async () => {
+              let buyerName = 'A buyer';
+              try {
+                const { data: buyer } = await supabase.from('users').select('full_name').eq('id', userId).maybeSingle();
+                if (buyer?.full_name) buyerName = buyer.full_name.split(' ')[0];
+              } catch { /* name is a nicety, never block the notification */ }
+              await notify({
+                userId: product.seller_id,
+                type: 'order',
+                title: `Your "${product.title}" has been sold!`,
+                body: `${buyerName} has paid — your payout of ₦${sellerNet.toLocaleString()} is secured in escrow. Chat them to arrange inspection and delivery; once they confirm receipt, the payout will be released to your wallet.`,
+                route: `/order?ref=${data.reference}`,
+                data: {
+                  amount: String(sellerNet),
+                  itemTitle: product.title,
+                  counterparty: buyerName,
+                  reference: data.reference,
+                  detail: `Your payout is ₦${sellerNet.toLocaleString()}`,
+                },
+                imageUrl: productImage || undefined,
+              });
+            })();
+          }
+
+          // Escrow hold -> buyer (same words as the wallet path)
+          if (userId) {
+            void notify({
+              userId,
+              type: 'wallet',
+              title: 'Payment secured in escrow',
+              body: `Your ₦${totalChargePaid.toLocaleString()} for "${product?.title}" is held safely. It goes to the seller only after you confirm receipt.`,
+              route: `/order?ref=${data.reference}`,
+              data: {
+                amount: String(totalChargePaid),
+                direction: 'debit',
+                itemTitle: product?.title ?? '',
+                reference: data.reference,
+              },
+              imageUrl: productImage || undefined,
+            });
+          }
+
+          globalMutate(['product', product.id]);
+          router.push(`/order?ref=${data.reference}`);
+          return;
+        }
+
+        if (data.refunded) {
+          setOnlinePendingRef(null);
+          setActiveModal('none');
+          showToast('This item was just sold. Your payment was returned to your wallet.', 'info');
+          mutateWallet();
+          router.push('/wallet');
+          return;
+        }
+
+        if (data.cancelled) {
+          setOnlinePendingRef(null);
+          showToast('Payment cancelled.', 'info');
+          return;
+        }
+
+        if (data.dead) {
+          setOnlinePendingRef(null);
+          showToast('This payment has expired. Start a new one if you still want the item.', 'info');
+          return;
+        }
+
+        // Monnify has no record of this payment — it never started, so
+        // there is nothing to wait for. Free the button so the buyer can
+        // start a fresh payment instead of re-checking a dead one.
+        if (data.not_started) {
+          setOnlinePendingRef(null);
+          showToast('This payment never started. You can start a new one.', 'info');
+          return;
+        }
+
+        // Not paid (yet) — wait a moment and try again, in case Monnify is
+        // still confirming. After the last try, leave the sheet open: the
+        // order appears once the webhook lands, and the button re-checks.
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 3000));
+      }
+      showToast('Payment not confirmed yet. Your order will appear once Monnify confirms it.', 'info');
+    } catch (error: any) {
+      showToast(error.message || 'Could not confirm the payment', 'error');
+    } finally {
+      setIsProcessingTx(false);
+    }
   };
 
   const handlePinBackspace = () => setPin(prev => prev.slice(0, -1));
@@ -368,6 +642,18 @@ export default function BuyPage() {
   /* ---------------- what to show ---------------- */
 
   const ready = !loadError && !isLoading && !!product;
+
+  // Deep-link return: once the product has loaded, reconcile the payment the
+  // deep link carries (idempotent). Runs once per reference — the modal's
+  // onClose reconcile covers the case where this event is missed.
+  const deepLinkReconciledRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!ready || !paymentRefParam) return;
+    if (deepLinkReconciledRef.current === paymentRefParam) return;
+    deepLinkReconciledRef.current = paymentRefParam;
+    setOnlinePendingRef(paymentRefParam);
+    void reconcileOnlinePayment(paymentRefParam);
+  }, [ready, paymentRefParam]); // eslint-disable-line react-hooks/exhaustive-deps
 
   let content: React.ReactNode;
 
@@ -640,6 +926,11 @@ export default function BuyPage() {
             hasEnoughFunds={hasEnoughFunds}
             onConfirmPayment={handleProceedToPin}
             onTopUp={() => router.push('/wallet?topup=1')}
+            gatewayFee={gatewayFee}
+            gatewayTotal={gatewayTotal}
+            onlinePending={onlinePendingRef !== null}
+            onlineProcessing={isProcessingTx}
+            onPayOnline={handlePayOnline}
           />
 
           <PinPadModal

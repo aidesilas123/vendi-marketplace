@@ -1,3 +1,4 @@
+// src/shared/Checkout/CheckoutBottomSheet.tsx
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { IonIcon } from '@ionic/react';
@@ -15,10 +16,23 @@ interface CheckoutBottomSheetProps {
   hasEnoughFunds: boolean;
   onConfirmPayment: () => void;
   onTopUp: () => void;
+  // Online path: Monnify takes 1.5% on top of the total (see buy page for the
+  // math). gatewayFee is shown in the sheet before the buyer taps pay, so they
+  // can compare it with the wallet path, which has no gateway fee.
+  gatewayFee: number;
+  gatewayTotal: number;
+  // A Monnify payment is already running for this order — the button checks
+  // that payment instead of starting (and charging) a second one.
+  onlinePending?: boolean;
+  // The Monnify flow is busy (SDK loading, or the payment being confirmed)
+  // — the button shows a loader and can't be tapped twice.
+  onlineProcessing?: boolean;
+  onPayOnline: () => void;
 }
 
 export const CheckoutBottomSheet = ({
-  isOpen, onClose, product, itemPrice, buyerFee, totalCharge, isPromo, wallet, hasEnoughFunds, onConfirmPayment, onTopUp
+  isOpen, onClose, product, itemPrice, buyerFee, totalCharge, isPromo, wallet, hasEnoughFunds, onConfirmPayment, onTopUp,
+  gatewayFee, gatewayTotal, onlinePending, onlineProcessing, onPayOnline
 }: CheckoutBottomSheetProps) => {
   const [dragY, setDragY] = useState(0);
   const startY = useRef<number | null>(null);
@@ -175,7 +189,7 @@ export const CheckoutBottomSheet = ({
               style={{ minHeight: '60px', height: '60px', borderRadius: '9999px' }}
               className="w-full border-none outline-none flex items-center justify-center bg-orange-500 hover:bg-orange-600 text-white font-black text-lg transition-colors cursor-pointer active:scale-[0.98]"
             >
-              Confirm Payment
+              Pay with Vendi wallet
             </button>
           ) : (
             <button 
@@ -183,9 +197,43 @@ export const CheckoutBottomSheet = ({
               style={{ minHeight: '60px', height: '60px', borderRadius: '9999px' }}
               className="w-full border-none outline-none flex items-center justify-center bg-gray-900 dark:bg-white hover:opacity-90 text-white dark:text-gray-900 font-black text-lg transition-colors cursor-pointer active:scale-[0.98]"
             >
-              Top Up Wallet
+              Top up Vendi wallet
             </button>
           )}
+
+          {/* Pay online with Monnify — the fee is shown here, before the buyer
+              taps, so they see the full amount and can choose the wallet path
+              instead (no gateway fee). The escrow amounts stay exact: the fee
+              sits on top of the total. */}
+          <div className="mt-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="h-px flex-1 bg-gray-200 dark:bg-gray-800" />
+              <span className="text-[11px] font-black text-gray-500 uppercase tracking-widest">Or pay online with Monnify</span>
+              <div className="h-px flex-1 bg-gray-200 dark:bg-gray-800" />
+            </div>
+            <div className="flex justify-between items-center text-sm mb-4">
+              <span className="text-gray-500 font-bold">Monnify fee</span>
+              <span className="font-black text-gray-900 dark:text-white">₦{gatewayFee.toLocaleString()}</span>
+            </div>
+            <button
+              onClick={onPayOnline}
+              disabled={onlineProcessing}
+              style={{ minHeight: '60px', height: '60px', borderRadius: '9999px' }}
+              className="w-full outline-none flex items-center justify-center gap-2 border-2 border-gray-900 dark:border-white bg-transparent text-gray-900 dark:text-white font-black text-lg transition-colors cursor-pointer active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait"
+            >
+              {onlineProcessing && (
+                <span className="w-5 h-5 shrink-0 rounded-full border-2 border-current border-t-transparent animate-spin" aria-hidden="true" />
+              )}
+              {onlineProcessing
+                ? (onlinePending ? 'Checking payment...' : 'Opening Monnify...')
+                : (onlinePending ? 'Check my Monnify payment' : `Pay ₦${gatewayTotal.toLocaleString()} with Monnify`)}
+            </button>
+            <p className="text-center text-[11px] text-gray-400 font-bold mt-3">
+              {onlinePending
+                ? 'Payment started — tap to check whether Monnify has confirmed it.'
+                : 'The Monnify fee is charged on top — paying from your wallet has no gateway fee.'}
+            </p>
+          </div>
         </div>
       </div>
     </div>,

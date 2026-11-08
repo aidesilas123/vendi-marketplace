@@ -95,6 +95,46 @@ Deno.serve(async (req) => {
       const paymentStatus = String(ev.paymentStatus ?? 'PAID').toUpperCase();
       if (paymentStatus !== 'PAID') return ok(`Ignored payment status ${paymentStatus}`);
 
+      // Monnify checkout payment? Our paymentReference is echoed in the
+      // event. If a checkout row exists for it, this is an escrow payment,
+      // NOT a wallet top-up — hand it to the reconcile function, which
+      // verifies the payment with Monnify and creates the escrow (or
+      // refunds). The reconcile is the single writer for checkout escrows,
+      // so this webhook never creates one itself. A non-200 from reconcile
+      // makes this throw, so Monnify retries the webhook later.
+      const checkoutRef = String(ev.paymentReference ?? '');
+      let checkoutRow: { id: string; reference: string; status: string } | null = null;
+      if (checkoutRef) {
+        const { data } = await supabase.from('transactions')
+          .select('id, reference, status')
+          .eq('reference', checkoutRef).eq('type', 'debit').maybeSingle();
+        checkoutRow = data;
+      }
+      if (!checkoutRow && ev.transactionReference) {
+        // Fallback: match by Monnify's own reference, stored at initialize.
+        const { data } = await supabase.from('transactions')
+          .select('id, reference, status')
+          .eq('metadata->>monnify_transaction_reference', String(ev.transactionReference))
+          .eq('type', 'debit').maybeSingle();
+        checkoutRow = data;
+      }
+      if (checkoutRow) {
+        const reconcileRes = await fetch(`${supabaseUrl}/functions/v1/monnify-checkout-reconcile`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${supabaseKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            paymentReference: checkoutRow.reference,
+            monnifyTransactionReference: ev.transactionReference ?? null,
+          }),
+        });
+        if (!reconcileRes.ok) {
+          const text = await reconcileRes.text().catch(() => '');
+          throw new Error(`Checkout reconcile failed (${reconcileRes.status}): ${text.slice(0, 200)}`);
+        }
+        console.log('Checkout escrow processed for', checkoutRow.reference);
+        return ok('Checkout processed');
+      }
+
       // Same amount the original code credited (after Monnify's fee). Change to ev.amountPaid
       // if you want users credited the full amount and Vendi to absorb the fee.
       const amountPaid = Number(ev.settlementAmount ?? ev.amountPaid);

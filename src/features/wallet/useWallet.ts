@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from 'react';
 import useSWR from 'swr';
 import { supabase } from '@/lib/supabase';
+import { ensureChannel, dropChannel } from '@/lib/realtime';
 import { callEdge } from './walletApi';
 import type { WalletTx } from './txUtils';
 
@@ -193,22 +194,32 @@ export function useWallet() {
 
   // Realtime: new deposits / status changes appear without a manual refresh.
   // Needs Realtime enabled for `wallets` and `transactions` in Supabase; harmless if it isn't.
+  // One shared channel per wallet (realtime.ts): the old per-mount topic
+  // `wallet-${walletId}-${Date.now()}` collided whenever this effect ran
+  // twice in the same millisecond — supabase.channel() returned the
+  // already-subscribed channel and .on('postgres_changes') threw
+  // "cannot add postgres_changes callbacks after subscribe()", uncaught,
+  // which killed the whole wallet page (and only the wallet page — no
+  // other page builds a channel this way). ensureChannel creates it
+  // once, wires the handlers once, and a re-run is a no-op, never a throw.
   const walletId = data?.wallet?.id;
+  const mutateRef = useRef(mutate);
+  mutateRef.current = mutate;
   useEffect(() => {
     if (!walletId) return;
-    const channel = supabase
-      .channel(`wallet-${walletId}-${Date.now()}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'wallets', filter: `id=eq.${walletId}` }, () => {
-        void mutate();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions', filter: `wallet_id=eq.${walletId}` }, () => {
-        void mutate();
-      })
-      .subscribe();
+    const topic = `wallet-${walletId}`;
+    ensureChannel(topic, (ch) => {
+      ch.on('postgres_changes', { event: '*', schema: 'public', table: 'wallets', filter: `id=eq.${walletId}` }, () => {
+        void mutateRef.current();
+      });
+      ch.on('postgres_changes', { event: '*', schema: 'public', table: 'transactions', filter: `wallet_id=eq.${walletId}` }, () => {
+        void mutateRef.current();
+      });
+    });
     return () => {
-      void supabase.removeChannel(channel);
+      dropChannel(topic);
     };
-  }, [walletId, mutate]);
+  }, [walletId]);
 
   return {
     userId,

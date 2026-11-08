@@ -39,7 +39,7 @@ export default function SafetyCenterPage() {
       icon: locationOutline,
       tint: 'text-green-500',
       title: 'Meet in public spaces',
-      body: 'Always arrange meetups in busy, well-lit campus areas like the library, student union, or cafeterias.',
+      body: 'Always arrange meetups in busy, well-lit campus areas like Gardens, Class rooms, or cafeterias.',
     },
     {
       icon: closeCircleOutline,

@@ -361,9 +361,10 @@ export const AppShell = ({ children }: AppShellProps) => {
     setIsSidebarOpen(false);
   }, [pathname]);
 
-  // Native deep-link return (e.g. Google sign-in): the OS reopens the app with
-  // com.vendi.app://auth/callback?code=... — forward it to the callback page,
-  // which exchanges the code for a session. Skipped on web (not native).
+  // Native deep-link return (Google sign-in, Monnify payment): the OS
+  // reopens the app with com.vendi.app://... — forward it to the right page.
+  // Auth returns go to /auth/callback (code → session); a payment return
+  // goes to /buy, which reconciles the Monnify payment. Skipped on web.
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
     let removed = false;
@@ -384,6 +385,18 @@ export const AppShell = ({ children }: AppShellProps) => {
         }
         const qs = params.toString();
         router.push(qs ? `/reset-password?${qs}` : '/reset-password');
+      } else if (url.includes('payment-return')) {
+        // Monnify checkout return: the OS reopened the app after payment.
+        // Forward to the buy page, which reconciles the payment (idempotent)
+        // once the product has loaded. The modal's onClose reconcile is the
+        // fallback if this event is missed.
+        const query = url.split('?')[1]?.split('#')[0] ?? '';
+        const params = new URLSearchParams(query);
+        const productId = params.get('productId') ?? '';
+        const paymentReference = params.get('paymentReference') ?? '';
+        if (productId && paymentReference) {
+          router.push(`/buy?id=${encodeURIComponent(productId)}&paymentReference=${encodeURIComponent(paymentReference)}`);
+        }
       }
     }).then((l) => {
       if (removed) void l.remove();
