@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect } from 'react';
-import { IonIcon } from '@ionic/react';
+import { IonIcon } from '@/shared/Icon/Icon';
 import { closeOutline } from 'ionicons/icons';
 
 interface ModalProps {
@@ -52,7 +52,7 @@ export const Modal = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby={title ? 'modal-title' : undefined}
-        className={`relative w-full ${maxWidth} bg-white dark:bg-[#171717] rounded-3xl shadow-2xl border border-gray-100 dark:border-gray-800 animate-in fade-in zoom-in-95 duration-200 overflow-hidden flex flex-col max-h-[90vh]`}
+        className={`relative w-full ${maxWidth} bg-white dark:bg-[#171717] rounded-3xl shadow-2xl border border-gray-100 dark:border-gray-800 vendi-pop overflow-hidden flex flex-col max-h-[90vh]`}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">

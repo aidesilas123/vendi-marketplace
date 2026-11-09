@@ -132,23 +132,30 @@ Deno.serve(async (req) => {
       // so this webhook never creates one itself. A non-200 from reconcile
       // makes this throw, so Monnify retries the webhook later.
       const checkoutRef = String(ev.paymentReference ?? '');
-      let checkoutRow: { id: string; reference: string; status: string } | null = null;
+      let checkoutRow: { id: string; reference: string; status: string; metadata: any } | null = null;
       if (checkoutRef) {
         const { data } = await supabase.from('transactions')
-          .select('id, reference, status')
+          .select('id, reference, status, metadata')
           .eq('reference', checkoutRef).eq('type', 'debit').maybeSingle();
         checkoutRow = data;
       }
       if (!checkoutRow && ev.transactionReference) {
         // Fallback: match by Monnify's own reference, stored at initialize.
         const { data } = await supabase.from('transactions')
-          .select('id, reference, status')
+          .select('id, reference, status, metadata')
           .eq('metadata->>monnify_transaction_reference', String(ev.transactionReference))
           .eq('type', 'debit').maybeSingle();
         checkoutRow = data;
       }
       if (checkoutRow) {
-        const reconcileRes = await fetch(`${supabaseUrl}/functions/v1/monnify-checkout-reconcile`, {
+        // Fee payment (verification / sponsorship)? Route it to the fee
+        // reconcile, not the checkout reconcile — the fulfilment is different
+        // (file a verification / sponsor a listing, never an escrow).
+        const feeKind = checkoutRow.metadata?.kind;
+        const feeFn = feeKind === 'verification' || feeKind === 'sponsorship'
+          ? 'monnify-fee-reconcile'
+          : 'monnify-checkout-reconcile';
+        const reconcileRes = await fetch(`${supabaseUrl}/functions/v1/${feeFn}`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${supabaseKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -158,10 +165,10 @@ Deno.serve(async (req) => {
         });
         if (!reconcileRes.ok) {
           const text = await reconcileRes.text().catch(() => '');
-          throw new Error(`Checkout reconcile failed (${reconcileRes.status}): ${text.slice(0, 200)}`);
+          throw new Error(`${feeFn} failed (${reconcileRes.status}): ${text.slice(0, 200)}`);
         }
-        console.log('Checkout escrow processed for', checkoutRow.reference);
-        return ok('Checkout processed');
+        console.log(`${feeFn} processed for`, checkoutRow.reference);
+        return ok(feeKind === 'verification' || feeKind === 'sponsorship' ? 'Fee processed' : 'Checkout processed');
       }
 
       // Same amount the original code credited (after Monnify's fee). Change to ev.amountPaid

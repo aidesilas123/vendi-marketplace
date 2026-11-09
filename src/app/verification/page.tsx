@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
 import { supabase } from '@/lib/supabase';
@@ -14,6 +14,8 @@ import { ImageViewer } from '@/shared/ImageViewer/ImageViewer';
 import { GalleryPicker } from '@/app/chats/components/GalleryPicker';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { registerBackHandler } from '@/shared/HardwareBackButton';
+import { showGlobalToast } from '@/shared/Toast/Toast';
+import { payWithMonnify } from '@/lib/monnify';
 import {
   chevronBackOutline,
   shieldCheckmarkOutline,
@@ -28,6 +30,12 @@ import {
   hourglassOutline,
   closeOutline
 } from 'ionicons/icons';
+
+// One-time verification fee. Change this number to change the fee. Keep in
+// sync with VERIFICATION_FEE in charge-verification-fee/index.ts. The fee is
+// charged once per user (a rejected applicant retries free), and the badge
+// lasts until revoked — there is no renewal.
+const VERIFICATION_FEE = 1500;
 
 type VerificationStatus = 'none' | 'pending' | 'approved' | 'stopped';
 type UploadTarget = 'doc' | 'selfie' | null;
@@ -177,6 +185,33 @@ export default function VerificationPage() {
     }
   );
 
+  // Amount paid for this verification (shown on the pending screen, so the
+  // user has a record of the payment). Looked up by the fee reference on the
+  // verification row; falls back to the latest 'Verification fee' debit.
+  const { data: feePaidAmount } = useSWR(
+    sessionUser && latestVerification ? ['verification-fee-paid', sessionUser.id, latestVerification.fee_reference ?? ''] : null,
+    async ([, userId, ref]: [string, string, string]) => {
+      if (ref) {
+        const { data } = await supabase
+          .from('transactions')
+          .select('amount')
+          .eq('reference', ref)
+          .maybeSingle();
+        if (data) return Math.abs(Number(data.amount));
+      }
+      const { data } = await supabase
+        .from('transactions')
+        .select('amount')
+        .eq('user_id', userId)
+        .eq('type', 'debit')
+        .eq('title', 'Verification fee')
+        .eq('status', 'successful')
+        .order('created_at', { ascending: false })
+        .limit(1);
+      return data && data.length > 0 ? Math.abs(Number(data[0].amount)) : null;
+    }
+  );
+
   const isLoading = profileLoading || verificationLoading;
   const status: VerificationStatus = profile?.is_verified
     ? 'approved'
@@ -217,9 +252,52 @@ export default function VerificationPage() {
   const [docUrl, setDocUrl] = useState('');
   const [selfieUrl, setSelfieUrl] = useState('');
 
+  // Step slide, same as the seller dashboard: 180ms ease-out, the current
+  // step slides out (full width + fade), the next slides in. Written straight
+  // to the element's style so the slide doesn't re-render on every frame.
+  const SLIDE_MS = 180;
+  const contentRef = useRef<HTMLDivElement>(null);
+  const slideBusy = useRef(false);
+  const slideTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const slideRaf = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      slideTimers.current.forEach(clearTimeout);
+      slideTimers.current = [];
+      if (slideRaf.current !== null) cancelAnimationFrame(slideRaf.current);
+    };
+  }, []);
+  const setSlideStyle = (x: number, opacity: number, animate: boolean) => {
+    const el = contentRef.current;
+    if (!el) return;
+    el.style.transition = animate
+      ? `transform ${SLIDE_MS}ms ease-out, opacity ${SLIDE_MS}ms ease-out`
+      : 'none';
+    el.style.transform = x === 0 ? '' : `translate3d(${x}px, 0, 0)`;
+    el.style.opacity = opacity === 1 ? '' : String(opacity);
+  };
   const goToStep = (next: number) => {
-    setDirection(next > step ? 1 : -1);
-    setStep(next);
+    if (next === step || slideBusy.current) return;
+    const dir = next > step ? 1 : -1;
+    setDirection(dir);
+    const width = contentRef.current?.offsetWidth ?? window.innerWidth;
+    slideBusy.current = true;
+    // 1) current step slides out
+    setSlideStyle(-dir * width, 0, true);
+    slideTimers.current.push(setTimeout(() => {
+      // 2) switch step while invisible, parked just off the opposite side
+      setStep(next);
+      setSlideStyle(dir * width * 0.35, 0, false);
+      // 3) new step slides in
+      slideRaf.current = requestAnimationFrame(() => {
+        slideRaf.current = requestAnimationFrame(() => {
+          setSlideStyle(0, 1, true);
+          slideTimers.current.push(setTimeout(() => {
+            slideBusy.current = false;
+          }, SLIDE_MS));
+        });
+      });
+    }, SLIDE_MS));
   };
 
   /* ---------------- Upload state ---------------- */
@@ -230,6 +308,12 @@ export default function VerificationPage() {
   const [reviewLoaded, setReviewLoaded] = useState<{ doc: boolean; selfie: boolean }>({ doc: false, selfie: false });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [monnifyProcessing, setMonnifyProcessing] = useState(false);
+  const [monnifyPending, setMonnifyPending] = useState(false);
+  // Monnify fee + total for display (fee + 1.5% gateway fee). The server is
+  // authoritative; these are only the numbers shown before the modal opens.
+  const monnifyFee = Math.ceil(VERIFICATION_FEE * 0.015);
+  const monnifyTotal = VERIFICATION_FEE + monnifyFee;
   const [modalConfig, setModalConfig] = useState({ isOpen: false, title: '', message: '', type: 'info', onConfirm: () => {} });
   const showError = (title: string, message: string) =>
     setModalConfig({ isOpen: true, title, message, type: 'error', onConfirm: () => setModalConfig(prev => ({ ...prev, isOpen: false })) });
@@ -346,16 +430,144 @@ export default function VerificationPage() {
     else setSelfieUrl('');
   };
 
-  const handleSubmit = async () => {
+  // Reconciles a Monnify fee payment (up to 3 attempts). The webhook usually
+  // settles it first; this is the safety net that also covers a missed webhook.
+  const reconcileFee = async (paymentReference: string, transactionReference: string | null, cancelled: boolean) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/monnify-fee-reconcile`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token ?? ''}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentReference, transactionReference, cancelled }),
+      });
+      const body = await res.json().catch(() => null);
+      if (body?.paid) return body;
+      if (body?.cancelled || body?.dead || body?.not_started) return body;
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    return null;
+  };
+
+  const submitWithMonnify = async () => {
+    if (!profile || !docUrl || !selfieUrl) return;
+    setMonnifyProcessing(true);
+    try {
+      const apiKey = process.env.NEXT_PUBLIC_MONNIFY_API_KEY;
+      const contractCode = process.env.NEXT_PUBLIC_MONNIFY_CONTRACT_CODE;
+      if (!apiKey || !contractCode) {
+        showError('Online payment is not set up yet', 'Please pay from your wallet instead.');
+        return;
+      }
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) throw new Error('Please sign in again to submit.');
+      const initRes = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/monnify-fee-initialize`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'verification',
+          document_url: docUrl,
+          selfie_url: selfieUrl,
+          document_type: docType,
+        }),
+      });
+      const init = await initRes.json().catch(() => null);
+      if (!initRes.ok || !init?.success) throw new Error(init?.error || 'Could not start the online payment.');
+      if (init.alreadyPaid) {
+        // Fee was already paid (a previous attempt) — file the application.
+        const { error } = await supabase.from('verifications').insert({
+          user_id: profile.id,
+          document_type: docType,
+          document_url: docUrl,
+          selfie_url: selfieUrl,
+          status: 'pending',
+          fee_paid: true,
+        });
+        if (error) throw error;
+        await refetchVerification();
+        setRetrying(false);
+        setStep(1);
+        return;
+      }
+      const result = await payWithMonnify({
+        apiKey,
+        contractCode,
+        amount: init.gatewayTotal,
+        reference: init.paymentReference,
+        customerName: init.customerName,
+        customerEmail: init.customerEmail,
+        paymentDescription: 'Vendi verification fee',
+        metadata: { kind: 'verification' },
+      });
+      // Modal closed — a payment may have started, now check it.
+      setMonnifyPending(true);
+      const outcome = await reconcileFee(init.paymentReference, result.transactionReference ?? null, !result.completed);
+      if (outcome?.paid) {
+        // The reconcile filed the verification row. Refresh and show it.
+        await refetchVerification();
+        setRetrying(false);
+        setStep(1);
+        showGlobalToast('Verification submitted. We will review it shortly.');
+        return;
+      }
+      if (outcome?.cancelled) {
+        showError('Payment cancelled', 'No charge was made. You can try again when ready.');
+        return;
+      }
+      if (outcome?.not_started) {
+        showError('Payment never started', 'This payment never started. You can start a new one.');
+        return;
+      }
+      showError('Payment not confirmed yet', 'Your application will appear once Monnify confirms the payment.');
+    } catch (err: any) {
+      showError('Submission Error', err.message || 'Could not submit your verification. Please try again.');
+    } finally {
+      setMonnifyProcessing(false);
+      setMonnifyPending(false);
+    }
+  };
+
+  const submitWithWallet = async () => {
     if (!profile || !docUrl || !selfieUrl) return;
     setIsSubmitting(true);
     try {
+      // Wallet: one-time fee, charged before the application is filed.
+      // A rejected applicant retries free (the edge function skips the charge
+      // when a verifications row already exists for this user).
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) throw new Error('Please sign in again to submit.');
+      const chargeRes = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/charge-verification-fee`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const charge = await chargeRes.json().catch(() => null);
+      if (!chargeRes.ok || !charge?.success) {
+        if (charge?.error === 'insufficient') {
+          setModalConfig({
+            isOpen: true,
+            title: 'Not enough in your wallet',
+            message: `Verification costs ₦${VERIFICATION_FEE.toLocaleString()} once. Your wallet balance is below that — please fund your wallet first, then come back and submit.`,
+            type: 'error',
+            onConfirm: () => {
+              setModalConfig((prev) => ({ ...prev, isOpen: false }));
+              router.push('/wallet');
+            },
+          });
+          return;
+        }
+        throw new Error(charge?.error || 'Could not charge the verification fee.');
+      }
       const { error } = await supabase.from('verifications').insert({
         user_id: profile.id,
         document_type: docType,
         document_url: docUrl,
         selfie_url: selfieUrl,
-        status: 'pending'
+        status: 'pending',
+        fee_paid: true,
+        fee_reference: charge.reference ?? null,
       });
       if (error) throw error;
       await refetchVerification();
@@ -457,6 +669,11 @@ export default function VerificationPage() {
                     ? `Average review time: ~${avgWaitHours} hour${avgWaitHours === 1 ? '' : 's'}`
                     : 'Average review time: under 48 hours'}
                 </p>
+                {feePaidAmount != null && (
+                  <p className="text-xs font-bold text-foreground mt-2">
+                    Amount paid: ₦{Number(feePaidAmount).toLocaleString()} (one-time)
+                  </p>
+                )}
               </div>
             </div>
 
@@ -604,11 +821,8 @@ export default function VerificationPage() {
               ))}
             </div>
 
-            {/* Direction-aware slide container */}
-            <div
-              key={step}
-              className={`animate-in fade-in duration-300 ${direction === 1 ? 'slide-in-from-right-8' : 'slide-in-from-left-8'}`}
-            >
+            {/* Step slide container (seller-dashboard slide, ref-driven) */}
+            <div ref={contentRef}>
 
               {/* STEP 1: Why get verified */}
               {step === 1 && (
@@ -640,8 +854,12 @@ export default function VerificationPage() {
                       </li>
                     ))}
                   </ul>
-                  <Button onClick={() => goToStep(2)} className="w-full !rounded-full !py-4 shadow-[0_8px_30px_rgba(249,115,22,0.3)] !bg-orange-500 hover:!bg-orange-600 text-white font-black text-lg flex items-center justify-center gap-2 active:scale-[0.98] transition-all">
-                    Start Verification <VIcon mounted={isMounted} icon={arrowForwardOutline} className="text-xl" />
+                  <div className="mb-6 rounded-2xl bg-orange-500/10 border border-orange-500/20 px-4 py-3">
+                    <p className="text-sm font-bold text-foreground">One-time fee: ₦{VERIFICATION_FEE.toLocaleString()}</p>
+                    <p className="text-xs font-medium text-muted-foreground mt-0.5">You will be charged ₦{VERIFICATION_FEE.toLocaleString()} once when you submit. The badge lasts until revoked — no renewal, and a rejected application retries free.</p>
+                  </div>
+                  <Button onClick={() => goToStep(2)} className="w-full !rounded-full !py-3 shadow-[0_8px_30px_rgba(249,115,22,0.3)] !bg-orange-500 hover:!bg-orange-600 text-white font-black text-base flex items-center justify-center gap-2 active:scale-[0.98] transition-all">
+                    Start Verification <VIcon mounted={isMounted} icon={arrowForwardOutline} className="text-lg" />
                   </Button>
                 </div>
               )}
@@ -713,8 +931,8 @@ export default function VerificationPage() {
                   </div>
 
                   <div className="flex gap-4">
-                    <Button onClick={() => goToStep(1)} className="!rounded-full !py-4 !bg-muted !text-foreground font-bold flex-1 active:scale-[0.98]">Back</Button>
-                    <Button onClick={() => goToStep(3)} disabled={!docUrl || !!uploading} className="!rounded-full !py-4 !bg-orange-500 text-white font-black flex-[2] disabled:opacity-50 active:scale-[0.98] shadow-lg">Next Step</Button>
+                    <Button onClick={() => goToStep(1)} className="!rounded-full !py-3 !bg-muted !text-foreground font-bold text-base flex-1 active:scale-[0.98]">Back</Button>
+                    <Button onClick={() => goToStep(3)} disabled={!docUrl || !!uploading} className="!rounded-full !py-3 !bg-orange-500 text-white font-black text-base flex-[2] disabled:opacity-50 active:scale-[0.98] shadow-lg">Next Step</Button>
                   </div>
                 </div>
               )}
@@ -768,8 +986,8 @@ export default function VerificationPage() {
                   </div>
 
                   <div className="flex gap-4">
-                    <Button onClick={() => goToStep(2)} className="!rounded-full !py-4 !bg-muted !text-foreground font-bold flex-1 active:scale-[0.98]">Back</Button>
-                    <Button onClick={() => goToStep(4)} disabled={!selfieUrl || !!uploading} className="!rounded-full !py-4 !bg-orange-500 text-white font-black flex-[2] disabled:opacity-50 active:scale-[0.98] shadow-lg">Review</Button>
+                    <Button onClick={() => goToStep(2)} className="!rounded-full !py-3 !bg-muted !text-foreground font-bold text-base flex-1 active:scale-[0.98]">Back</Button>
+                    <Button onClick={() => goToStep(4)} disabled={!selfieUrl || !!uploading} className="!rounded-full !py-3 !bg-orange-500 text-white font-black text-base flex-[2] disabled:opacity-50 active:scale-[0.98] shadow-lg">Review</Button>
                   </div>
                 </div>
               )}
@@ -778,7 +996,11 @@ export default function VerificationPage() {
               {step === 4 && (
                 <div className="flex flex-col">
                   <h2 className="text-2xl font-black text-foreground mb-2">Review &amp; Submit</h2>
-                  <p className="text-muted-foreground text-[15px] mb-8 font-medium">Tap an image to view it fullscreen. Make sure both are clear and readable.</p>
+                  <p className="text-muted-foreground text-[15px] mb-4 font-medium">Tap an image to view it fullscreen. Make sure both are clear and readable.</p>
+                  <div className="mb-8 rounded-2xl bg-orange-500/10 border border-orange-500/20 px-4 py-3">
+                    <p className="text-sm font-bold text-foreground">One-time fee: ₦{VERIFICATION_FEE.toLocaleString()}</p>
+                    <p className="text-xs font-medium text-muted-foreground mt-0.5">Paid once. The badge lasts until revoked — no renewal, and a rejected application retries free.</p>
+                  </div>
 
                   <div className="grid grid-cols-2 gap-5 mb-10">
                     {([
@@ -806,12 +1028,57 @@ export default function VerificationPage() {
                     ))}
                   </div>
 
-                  <div className="flex gap-4">
-                    <Button onClick={() => goToStep(3)} disabled={isSubmitting} className="!rounded-full !py-4 !bg-muted !text-foreground font-bold flex-1 active:scale-[0.98]">Back</Button>
-                    <Button onClick={handleSubmit} disabled={isSubmitting} className="!rounded-full !py-4 !bg-orange-500 text-white font-black flex-[2] disabled:opacity-50 active:scale-[0.98] shadow-[0_8px_30px_rgba(249,115,22,0.3)]">
-                      {isSubmitting ? 'Submitting…' : 'Submit Verification'}
-                    </Button>
+                  {/* Payment — same buttons and loading as the /buy checkout sheet */}
+                  <div className="flex justify-between items-center text-sm mb-4">
+                    <span className="text-gray-500 font-bold">Verification fee</span>
+                    <span className="font-black text-gray-900 dark:text-white">₦{VERIFICATION_FEE.toLocaleString()}</span>
                   </div>
+                  <div className="flex justify-between items-center text-sm mb-6">
+                    <span className="text-gray-500 font-bold">Monnify fee (online only)</span>
+                    <span className="font-black text-gray-900 dark:text-white">₦{monnifyFee.toLocaleString()}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void submitWithWallet()}
+                    disabled={isSubmitting || monnifyProcessing}
+                    style={{ minHeight: '60px', height: '60px', borderRadius: '9999px' }}
+                    className="w-full border-none outline-none flex items-center justify-center gap-2 bg-orange-500 hover:bg-orange-600 text-white font-black text-lg transition-colors cursor-pointer active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait"
+                  >
+                    {isSubmitting && (
+                      <span className="w-5 h-5 shrink-0 rounded-full border-2 border-current border-t-transparent animate-spin" aria-hidden="true" />
+                    )}
+                    {isSubmitting ? 'Processing…' : `Pay ₦${VERIFICATION_FEE.toLocaleString()} from wallet`}
+                  </button>
+                  <div className="flex items-center gap-3 mt-6 mb-4">
+                    <div className="h-px flex-1 bg-gray-200 dark:bg-gray-800" />
+                    <span className="text-[11px] font-black text-gray-500 uppercase tracking-widest">Or pay online with Monnify</span>
+                    <div className="h-px flex-1 bg-gray-200 dark:bg-gray-800" />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void submitWithMonnify()}
+                    disabled={isSubmitting || monnifyProcessing}
+                    style={{ minHeight: '60px', height: '60px', borderRadius: '9999px' }}
+                    className="w-full outline-none flex items-center justify-center gap-2 border-2 border-gray-900 dark:border-white bg-transparent text-gray-900 dark:text-white font-black text-lg transition-colors cursor-pointer active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait"
+                  >
+                    {monnifyProcessing && (
+                      <span className="w-5 h-5 shrink-0 rounded-full border-2 border-current border-t-transparent animate-spin" aria-hidden="true" />
+                    )}
+                    {monnifyProcessing
+                      ? (monnifyPending ? 'Checking payment...' : 'Opening Monnify...')
+                      : `Pay ₦${monnifyTotal.toLocaleString()} with Monnify`}
+                  </button>
+                  <p className="text-center text-[11px] text-gray-400 font-bold mt-3">
+                    The Monnify fee is charged on top — paying from your wallet has no gateway fee.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => goToStep(3)}
+                    disabled={isSubmitting || monnifyProcessing}
+                    className="mt-6 text-sm font-bold text-muted-foreground hover:text-foreground active:scale-[0.98] disabled:opacity-50"
+                  >
+                    ← Back
+                  </button>
                 </div>
               )}
 

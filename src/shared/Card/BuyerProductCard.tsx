@@ -13,7 +13,7 @@ import { calcFees, naira } from '@/lib/pricing';
 import { useSavedIds } from '@/shared/hooks/useSavedIds';
 import { usePlatformSettings } from '@/shared/hooks/usePlatformSettings';
 import { useImpressionTracking } from '@/lib/impressions';
-import { imageOutline, schoolOutline, timeOutline, eyeOutline, bookmarkOutline, bookmark, star, flameOutline } from 'ionicons/icons';
+import { imageOutline, schoolOutline, timeOutline, eyeOutline, bookmarkOutline, bookmark, star, flameOutline, megaphoneOutline } from 'ionicons/icons';
 import { VanIcon } from '@/shared/Icon/VanIcon';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 
@@ -62,6 +62,7 @@ interface BuyerProductCardProps {
     views_count?: number;
     delivery_available?: boolean;
     _trending?: boolean;
+    sponsored_until?: string | null;
     seller_id: string;
     seller: {
       id: string;
@@ -223,12 +224,20 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
           {product.condition}
         </div>
 
-        {product._trending && (
-          <div className="absolute top-8 left-2 bg-orange-500 text-white text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider z-10 pointer-events-none flex items-center gap-0.5">
-            <IonIcon icon={flameOutline} className="text-[10px]" />
-            Trending
-          </div>
-        )}
+        <div className="absolute top-8 left-2 flex flex-col items-start gap-1 z-10 pointer-events-none">
+          {product._trending && (
+            <div className="bg-orange-500 text-white text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-0.5">
+              <IonIcon icon={flameOutline} className="text-[10px]" />
+              Trending
+            </div>
+          )}
+          {product.sponsored_until && new Date(product.sponsored_until).getTime() > Date.now() && (
+            <div className="bg-blue-600 text-white text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-0.5">
+              <IonIcon icon={megaphoneOutline} className="text-[10px]" />
+              Sponsored
+            </div>
+          )}
+        </div>
 
         {product.status === 'SOLD' && (
           <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-20 pointer-events-none">

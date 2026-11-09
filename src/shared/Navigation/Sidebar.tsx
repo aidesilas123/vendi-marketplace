@@ -22,7 +22,8 @@ import {
   shieldHalfOutline,
   flagOutline,
   helpCircleOutline,
-  peopleOutline
+  peopleOutline,
+  megaphoneOutline
 } from 'ionicons/icons';
 import { Avatar } from '@/shared/Avatar';
 import { Modal } from '@/shared/Modal/Modal';
@@ -207,6 +208,7 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
   const ACCOUNT_LINKS: { name: string; icon: string; path: string; badge?: number; hide?: boolean }[] = [
     { name: 'My Profile', icon: personOutline, path: targetId ? `/profile?id=${targetId}` : '/profile' },
     { name: 'Verification', icon: shieldCheckmarkOutline, path: '/verification' },
+    { name: 'Sponsorships', icon: megaphoneOutline, path: '/sponsorships', hide: !badgeCounts?.isSeller },
     { name: 'My Reviews', icon: starOutline, path: '/reviews', badge: badgeCounts?.newReviews ?? 0 },
     { name: 'Questions', icon: chatbubblesOutline, path: '/questions', badge: badgeCounts?.unanswered ?? 0, hide: !badgeCounts?.isSeller },
     { name: 'Saved Items', icon: bookmarkOutline, path: '/saved' },

@@ -3,6 +3,7 @@
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import useSWR from 'swr';
+import useSWRInfinite from 'swr/infinite';
 import { supabase } from '@/lib/supabase';
 import { BuyerProductCard } from '@/shared/Card/BuyerProductCard';
 import { Searchbar } from '@/shared/Searchbar/Searchbar';
@@ -34,94 +35,76 @@ const EMPTY: any[] = [];
 
 // How many Official (admin) listings may sit pinned at the top of the feed.
 // More than this, and the boost crowds out everyone else's listings.
-const ADMIN_PAGE_SIZE = 30; // one admin post per 30-item page
-
 /**
- * Distributes admin posts down the feed: one admin post per 30-item page,
- * a different one on each page, instead of stacking them at the top. The
- * first page's admin post sits at the very top; the next page's admin post
- * appears after the first 30 items, and so on as the user scrolls and loads
- * more (each load is 30 items). Rotates daily so a different admin post
- * leads each day.
+ * Server-side feed fetch. Calls the feed_products RPC (ranking + unseen +
+ * daily shuffle + admin spread, all in SQL), which returns product ids in
+ * final display order for one page; the app then fetches the full rows by id
+ * and keeps RPC order. If the RPC is missing (SQL not run yet), falls back
+ * to a plain date-ordered query so the feed never breaks.
  */
-function boostAdminListings(products: any[]): any[] {
-  const admin = products.filter((p: any) => p.seller?.is_admin === true);
-  if (admin.length === 0) return products;
-  const rest = products.filter((p: any) => p.seller?.is_admin !== true);
-  const day = Math.floor(Date.now() / 86400000);
-  const start = day % admin.length;
-  const perPage = ADMIN_PAGE_SIZE - 1; // one slot per page is the admin post
-  const out: any[] = [];
-  let adminIdx = 0;
-  for (let pageStart = 0; pageStart < rest.length; pageStart += perPage) {
-    const adminPost = admin[(start + adminIdx) % admin.length];
-    if (adminPost && adminIdx < admin.length) {
-      out.push(adminPost);
-      adminIdx++;
-    }
-    out.push(...rest.slice(pageStart, pageStart + perPage));
-  }
-  while (adminIdx < admin.length) {
-    out.push(admin[(start + adminIdx) % admin.length]);
-    adminIdx++;
-  }
-  return out;
-}
-
-/**
- * Feed ranking (option 1: weighted score). Freshness + engagement + a small
- * verified-seller boost. Weights live here so they are easy to tune once
- * the feed has been watched for a while.
- */
-const RANK_WEIGHTS = {
-  open: 10,            // each product-page open
-  save: 15,            // each save / bookmark (stronger intent)
-  question: 5,         // each question asked on the listing
-  verified: 10,        // verified seller bonus
-  freshMax: 50,        // a brand-new listing starts at +50
-  freshDecayPerDay: 3, // loses 3 points a day, reaches 0 after ~17 days
-};
-
-function scoreProduct(
-  p: any,
-  eng?: { opens: number; impressions: number; saves: number; questions: number }
-): number {
-  const ageDays = Math.max(0, (Date.now() - new Date(p.created_at).getTime()) / 86400000);
-  const freshness = Math.max(0, RANK_WEIGHTS.freshMax - ageDays * RANK_WEIGHTS.freshDecayPerDay);
-  const verified = p.seller?.is_verified ? RANK_WEIGHTS.verified : 0;
-  const engagement =
-    (eng?.opens ?? 0) * RANK_WEIGHTS.open +
-    (eng?.saves ?? 0) * RANK_WEIGHTS.save +
-    (eng?.questions ?? 0) * RANK_WEIGHTS.question;
-  return freshness + engagement + verified;
-}
-
-async function rankProductsByScore(products: any[]): Promise<any[]> {
-  if (products.length === 0) return products;
-  const ids = products.map((p: any) => p.id);
-  const { data, error } = await supabase.rpc('product_engagement', { p_product_ids: ids });
-  // If the RPC is missing (SQL not run yet), keep date order — never break the feed.
-  if (error) return products;
-  const eng = new Map<string, { opens: number; impressions: number; saves: number; questions: number }>();
-  for (const row of data ?? []) {
-    eng.set(row.product_id, {
-      opens: Number(row.opens ?? 0),
-      impressions: Number(row.impressions ?? 0),
-      saves: Number(row.saves ?? 0),
-      questions: Number(row.questions ?? 0),
-    });
-  }
-  const scored = products.map((p: any) => {
-    const e = eng.get(p.id);
-    const engagement =
-      (e?.opens ?? 0) * RANK_WEIGHTS.open +
-      (e?.saves ?? 0) * RANK_WEIGHTS.save +
-      (e?.questions ?? 0) * RANK_WEIGHTS.question;
-    // Trending = real engagement (3 opens, or 2 saves, or a mix), not just fresh.
-    return { ...p, _score: scoreProduct(p, e), _trending: engagement >= 30 };
+async function fetchRankedFeed(opts: {
+  category: string;
+  campus: string | null;
+  university: string | null;
+  limit: number;
+  offset: number;
+  minPrice?: number | null;
+  maxPrice?: number | null;
+  deliveryOnly?: boolean;
+}): Promise<any[]> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const viewerId = session?.user?.id ?? null;
+  const { data: rows, error: rpcError } = await supabase.rpc('feed_products', {
+    p_viewer_id: viewerId,
+    p_campus: opts.campus,
+    p_university: opts.university,
+    p_category: opts.category,
+    p_limit: opts.limit,
+    p_offset: opts.offset,
+    p_min_price: opts.minPrice ?? null,
+    p_max_price: opts.maxPrice ?? null,
+    p_delivery_only: opts.deliveryOnly ?? false,
   });
-  scored.sort((a: any, b: any) => b._score - a._score);
-  return scored;
+  if (rpcError) {
+    // SQL not run yet: date order, same page window.
+    const { data, error } = await supabase
+      .from('products')
+      .select('*, seller:users(username, is_verified, is_admin, average_rating, avatar_url), product_views(count)')
+      .in('status', ['ACTIVE', 'SOLD'])
+      .order('created_at', { ascending: false })
+      .range(opts.offset, opts.offset + opts.limit - 1);
+    if (error) throw error;
+    return (data ?? []).map((product: any) => ({
+      ...product,
+      views_count: product.product_views?.[0]?.count ?? 0,
+      _trending: false,
+    }));
+  }
+  const ids = (rows ?? []).map((r: any) => r.product_id);
+  if (ids.length === 0) return [];
+  const trending = new Map<string, boolean>((rows ?? []).map((r: any) => [String(r.product_id), !!r.trending]));
+  const { data, error } = await supabase
+    .from('products')
+    .select('*, seller:users(username, is_verified, is_admin, average_rating, avatar_url), product_views(count)')
+    .in('id', ids);
+  if (error) throw error;
+  const now = Date.now();
+  const validProducts = (data ?? []).filter((prod: any) => {
+    if (prod.status === 'ACTIVE') return true;
+    if (prod.status === 'SOLD') {
+      const soldDate = new Date(prod.updated_at || prod.created_at).getTime();
+      return (now - soldDate) / (1000 * 60 * 60) <= 24;
+    }
+    return false;
+  });
+  const withViews = validProducts.map((product: any) => ({
+    ...product,
+    views_count: product.product_views?.[0]?.count ?? 0,
+    _trending: trending.get(product.id) ?? false,
+  }));
+  const order = new Map<string, number>(ids.map((id: string, idx: number) => [id, idx]));
+  withViews.sort((a: any, b: any) => (order.get(a.id) ?? 99) - (order.get(b.id) ?? 99));
+  return withViews;
 }
 
 /**
@@ -251,58 +234,18 @@ async function fetchProducts(
     return filtered;
   }
 
-  let q = supabase
-    .from('products')
-    .select('*, seller:users(username, is_verified, is_admin, average_rating, avatar_url), product_views(count)')
-    .in('status', ['ACTIVE', 'SOLD'])
-    // Official (admin) listings always come first, then newest first.
-    .order('is_admin', { foreignTable: 'seller', ascending: false })
-    .order('created_at', { ascending: false });
-
-  // The feed is restricted to the viewer's campus (chosen at signup).
-  if (campus) q = q.eq('campus', campus);
-  if (university) q = q.eq('university_id', university);
-
-  // Price range + delivery filter (in the query, so paging stays correct).
-  if (opts.minPrice != null) q = q.gte('base_price', opts.minPrice);
-  if (opts.maxPrice != null) q = q.lte('base_price', opts.maxPrice);
-  if (opts.deliveryOnly) q = q.eq('delivery_available', true);
-
-  const isFiltered = category !== 'All';
-
-  if (category !== 'All') {
-    q = q.eq('category', category);
-  }
-  if (!isFiltered) {
-    q = q.limit(limitCount);
-  }
-
-  const { data, error } = await q;
-  if (error) throw error;
-
-  const now = Date.now();
-
-  // Keep all ACTIVE items, but drop SOLD items if they are > 24 hours old
-  const validProducts = (data ?? []).filter((p: any) => {
-    if (p.status === 'ACTIVE') return true;
-
-    if (p.status === 'SOLD') {
-      const soldDate = new Date(p.updated_at || p.created_at).getTime();
-      const hoursSinceSold = (now - soldDate) / (1000 * 60 * 60);
-      return hoursSinceSold <= 24;
-    }
-    return false;
+  // Non-search feed: ranked server-side (feed_products RPC). limitCount 0
+  // means "all matching" (filtered view); otherwise one page of that size.
+  return fetchRankedFeed({
+    category,
+    campus,
+    university,
+    limit: limitCount > 0 ? limitCount : 100,
+    offset: 0,
+    minPrice: opts.minPrice ?? null,
+    maxPrice: opts.maxPrice ?? null,
+    deliveryOnly: opts.deliveryOnly ?? false,
   });
-
-  const withViews = validProducts.map((product: any) => ({
-    ...product,
-    views_count: product.product_views?.[0]?.count ?? 0,
-  }));
-
-  // Rank by the algorithm (freshness + engagement), then the official boost
-  // on top (capped, rotating daily). Search results skip this — relevance wins there.
-  const ranked = await rankProductsByScore(withViews);
-  return boostAdminListings(ranked);
 }
 
 export default function HomeFeed() {
@@ -323,8 +266,6 @@ export default function HomeFeed() {
   const [deliveryOnly, setDeliveryOnly] = useState(false);
   const [popularSearches, setPopularSearches] = useState<string[]>([]);
 
-  const [limit, setLimit] = useState(INITIAL_PAGE_SIZE);
-  const [loadingMore, setLoadingMore] = useState(false);
 
   // Photo (visual) search: the ranked products for the picked photo, or null
   // when the normal feed is showing.
@@ -344,12 +285,6 @@ export default function HomeFeed() {
   const [searchFocused, setSearchFocused] = useState(false);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
 
-  // A new filter (or clearing back to All) restarts the unfiltered feed at 30.
-  // Without this, a Load-more limit sticks across filter changes, so returning
-  // to the unfiltered feed jumps straight to the larger count.
-  useEffect(() => {
-    setLimit(INITIAL_PAGE_SIZE);
-  }, [appliedCategory, appliedQuery]);
 
   // The searcher's campus + university (chosen at signup), for scoping the
   // feed, search and suggestions to their campus. Null until loaded (or if
@@ -469,33 +404,71 @@ export default function HomeFeed() {
 
   const filtersActive = appliedMinPrice != null || appliedMaxPrice != null || deliveryOnly;
   const isUnfiltered = appliedCategory === 'All' && !appliedQuery.trim() && !filtersActive;
-  const feedKey = !campusReady
-    ? null
-    : isUnfiltered
-      ? (['home-feed-unfiltered', limit, userCampus, userUniversity] as const)
-      : (['home-feed-filtered', appliedCategory, appliedQuery.trim(), userCampus, userUniversity, appliedMinPrice, appliedMaxPrice, deliveryOnly] as const);
 
-  const { data, error: feedError, mutate, isValidating } = useSWR(
-    feedKey,
-    () => {
-      if (isUnfiltered) {
-        return fetchProducts('All', '', limit, userCampus, userUniversity);
-      }
-      return fetchProducts(appliedCategory, appliedQuery.trim(), 0, userCampus, userUniversity, { minPrice: appliedMinPrice, maxPrice: appliedMaxPrice, deliveryOnly });
+  // Unfiltered feed: true append paging (30 per page). Each page fetches
+  // only its own 30 via the feed_products RPC — no re-fetch of earlier pages.
+  // Frozen: no revalidate on focus/reconnect, so coming back from a product
+  // never re-ranks the feed or moves items.
+  const {
+    data: infiniteData,
+    error: infiniteError,
+    size: infiniteSize,
+    setSize: setInfiniteSize,
+    mutate: mutateInfinite,
+    isValidating: infiniteValidating,
+  } = useSWRInfinite(
+    (pageIndex: number) => {
+      if (!campusReady || !isUnfiltered) return null;
+      return ['home-feed-unfiltered', pageIndex, userCampus, userUniversity] as const;
     },
+    ([, pageIndex]: any) => fetchRankedFeed({
+      category: 'All',
+      campus: userCampus,
+      university: userUniversity,
+      limit: INITIAL_PAGE_SIZE,
+      offset: pageIndex * INITIAL_PAGE_SIZE,
+    }),
     {
-      keepPreviousData: true,
-      revalidateOnReconnect: true,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      revalidateFirstPage: false,
       dedupingInterval: 10000,
-      // A bad network must surface as an error panel with Retry, not an
-      // endless skeleton: bounded retries, then the error below takes over.
       errorRetryCount: 2,
     }
   );
 
-  const products = data ?? EMPTY;
-  const isLoading = data === undefined;
-  const hasMore = isUnfiltered && (data ? data.length >= limit : false);
+  // Filtered / search feed: one fetch (search returns at most 50, ranked by
+  // relevance). Also frozen.
+  const filteredKey = !campusReady || isUnfiltered
+    ? null
+    : (['home-feed-filtered', appliedCategory, appliedQuery.trim(), userCampus, userUniversity, appliedMinPrice, appliedMaxPrice, deliveryOnly] as const);
+  const { data: filteredData, error: filteredError, mutate: mutateFiltered, isValidating: filteredValidating } = useSWR(
+    filteredKey,
+    () => fetchProducts(appliedCategory, appliedQuery.trim(), 0, userCampus, userUniversity, { minPrice: appliedMinPrice, maxPrice: appliedMaxPrice, deliveryOnly }),
+    {
+      keepPreviousData: true,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      dedupingInterval: 10000,
+      errorRetryCount: 2,
+    }
+  );
+
+  const infiniteProducts = useMemo(
+    () => (infiniteData ? (infiniteData as any[][]).flat() : EMPTY),
+    [infiniteData]
+  );
+  const products = isUnfiltered ? infiniteProducts : (filteredData ?? EMPTY);
+  const feedError = isUnfiltered ? infiniteError : filteredError;
+  const isValidating = isUnfiltered ? infiniteValidating : filteredValidating;
+  const isLoading = isUnfiltered ? infiniteData === undefined : filteredData === undefined;
+  // More pages exist when the last fetched page was full (30 items).
+  const lastPage = infiniteData && infiniteData.length > 0 ? infiniteData[infiniteData.length - 1] : null;
+  const hasMore = isUnfiltered && !!lastPage && lastPage.length >= INITIAL_PAGE_SIZE;
+  // Unified revalidate for pull-to-refresh / retry (only the active feed).
+  const mutate = useCallback(() => {
+    return isUnfiltered ? mutateInfinite() : mutateFiltered();
+  }, [isUnfiltered, mutateInfinite, mutateFiltered]);
 
   // Sort is client-side (after the fetch + algorithm rank). 'best' keeps the
   // algorithm order; the rest re-sort by date or price.
@@ -507,6 +480,26 @@ export default function HomeFeed() {
     if (sortBy === 'price_desc') arr.sort((a: any, b: any) => Number(b.base_price ?? 0) - Number(a.base_price ?? 0));
     return arr;
   }, [products, sortBy]);
+
+  // Auto load-more: when the sentinel near the bottom scrolls into view,
+  // fetch the next page (30). No button. Guarded so it never double-fires
+  // and stops when the last page came back short.
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const loadingMoreRef = useRef(false);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !isUnfiltered) return;
+    const io = new IntersectionObserver((entries) => {
+      if (!entries[0]?.isIntersecting) return;
+      if (loadingMoreRef.current || !hasMore || infiniteValidating) return;
+      loadingMoreRef.current = true;
+      void setInfiniteSize((n: number) => n + 1).finally(() => {
+        loadingMoreRef.current = false;
+      });
+    }, { rootMargin: '600px 0px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [isUnfiltered, hasMore, infiniteValidating, setInfiniteSize]);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -541,19 +534,19 @@ export default function HomeFeed() {
     }
   }, [mutate]);
 
+  // Frozen feed: only an explicit refresh (pull-to-refresh / 'refresh-feed')
+  // re-fetches. Coming back from a product (popstate) must NOT re-rank —
+  // the item would jump to the top. So no popstate listener here.
   useEffect(() => {
     const handleGlobalRefresh = () => { refreshFeed(); };
-    const handlePopState = () => { mutate(); };
     window.addEventListener('refresh-feed', handleGlobalRefresh);
-    window.addEventListener('popstate', handlePopState);
     return () => {
       window.removeEventListener('refresh-feed', handleGlobalRefresh);
-      window.removeEventListener('popstate', handlePopState);
     };
-  }, [refreshFeed, mutate]);
+  }, [refreshFeed]);
 
   const feedRef = useRef<HTMLDivElement>(null);
-  const { saveScroll } = useScrollRestore(feedRef, 'feed', data !== undefined);
+  const { saveScroll } = useScrollRestore(feedRef, 'feed', !isLoading);
 
   useEffect(() => registerBackHandler(() => {
     const main = document.getElementById('main-scroll-container');
@@ -563,6 +556,17 @@ export default function HomeFeed() {
       return true;
     }
   }), []);
+
+  // System back while the search suggestions are open closes just the
+  // dropdown (and dismisses the keyboard), not the whole app.
+  useEffect(() => {
+    if (!searchFocused) return;
+    return registerBackHandler(() => {
+      setSearchFocused(false);
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      return true;
+    });
+  }, [searchFocused]);
 
   useEffect(() => {
     if (searchQuery === appliedQuery && activeCategory === appliedCategory) {
@@ -695,12 +699,6 @@ export default function HomeFeed() {
     if (shouldRefresh) refreshFeed();
   };
 
-  const loadMoreProducts = async () => {
-    if (loadingMore || !hasMore) return;
-    setLoadingMore(true);
-    setLimit((prev) => prev + INITIAL_PAGE_SIZE);
-    setLoadingMore(false);
-  };
 
   // Suggestions shown under the search bar.
   const blurTimerRef = useRef<number | null>(null);
@@ -711,9 +709,51 @@ export default function HomeFeed() {
   const matchingRecent = typedQuery.length >= 2
     ? recentSearches.filter((s) => s.toLowerCase().includes(typedQuery))
     : recentSearches;
+  // Phrase suggestions: full natural queries the search actually understands
+  // ("phones below 200k", "laptops in samaru", "used laptop"). Built from the
+  // typed item + real data — locations and prices come from the listings the
+  // database already suggested, so a tapped phrase catches real items.
+  // Only for a bare item (no price/location/condition already typed).
+  const phraseSuggestions: string[] = (() => {
+    if (typedQuery.length < 2) return [];
+    const q = typedQuery;
+    if (/\b(below|under|less than|above|over|more than|used|new)\b/i.test(q)) return [];
+    if (/\bin\s+/i.test(q)) return [];
+    const item = q;
+    const out: string[] = [];
+    const push = (phrase: string) => {
+      if (out.length < 4 && !out.includes(phrase)) out.push(phrase);
+    };
+    // Locations: real places from the DB suggestions, else the user's campus.
+    const locs: string[] = [];
+    for (const sug of suggestions) {
+      if (sug.kind === 'location' || sug.kind === 'campus') {
+        const loc = sug.text.trim().toLowerCase();
+        if (loc && !locs.includes(loc)) locs.push(loc);
+      }
+      if (locs.length >= 2) break;
+    }
+    if (locs.length === 0 && userCampus) locs.push(userCampus.toLowerCase());
+    for (const loc of locs) push(`${item} in ${loc}`);
+    // Price: the most expensive matching title, rounded up to a clean 50k
+    // step, so the phrase definitely catches the items on the list.
+    const prices = suggestions
+      .filter((sug) => sug.kind === 'title' && sug.price != null)
+      .map((sug) => Number(sug.price));
+    if (prices.length > 0) {
+      const maxPrice = Math.max(...prices);
+      const rounded = Math.ceil(maxPrice / 50000) * 50000;
+      const k = Math.round(rounded / 1000);
+      push(`${item} below ${k}k`);
+    }
+    // Condition.
+    push(`used ${item}`);
+    push(`new ${item}`);
+    return out;
+  })();
   const showSuggestions = searchFocused && (
     (typedQuery.length === 0 && (recentSearches.length > 0 || popularSearches.length > 0)) ||
-    (typedQuery.length >= 2 && (suggestions.length > 0 || matchingCategories.length > 0 || matchingRecent.length > 0))
+    (typedQuery.length >= 2 && (suggestions.length > 0 || matchingCategories.length > 0 || matchingRecent.length > 0 || phraseSuggestions.length > 0))
   );
   const applySuggestion = (value: string) => {
     setVisualResults(null);
@@ -797,7 +837,7 @@ export default function HomeFeed() {
                 placeholder="Search items..."
               />
               {showSuggestions && (
-                <div className="absolute left-0 right-0 top-full mt-1 z-50 rounded-2xl bg-white dark:bg-[#171717] border border-gray-200 dark:border-gray-700 shadow-lg overflow-hidden">
+                <div className="absolute left-0 right-0 top-full mt-1 z-50 rounded-2xl bg-white dark:bg-[#171717] border border-gray-200 dark:border-gray-700 shadow-lg max-h-[55vh] overflow-y-auto overscroll-contain">
                   {typedQuery.length === 0 ? (
                     <div>
                       {recentSearches.length > 0 && (
@@ -877,6 +917,27 @@ export default function HomeFeed() {
                           <span className="truncate">{s}</span>
                         </button>
                       ))}
+                      {phraseSuggestions.length > 0 && (
+                        <>
+                          <div className="flex items-center px-4 pt-3 pb-1">
+                            <span className="text-[11px] font-bold uppercase tracking-wide text-gray-400">Try searching</span>
+                          </div>
+                          {phraseSuggestions.map((phrase) => (
+                            <button
+                              key={`phrase:${phrase}`}
+                              type="button"
+                              onClick={() => applySuggestion(phrase)}
+                              className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-gray-900 dark:text-white active:bg-gray-100 dark:active:bg-white/5"
+                            >
+                              <span suppressHydrationWarning className="flex items-center justify-center text-orange-500">
+                                <IonIcon icon={searchOutline} className="text-base" />
+                              </span>
+                              <span className="truncate">{phrase}</span>
+                              <span className="ml-auto text-[11px] font-bold text-gray-400">Phrase</span>
+                            </button>
+                          ))}
+                        </>
+                      )}
                       {suggestions.map((s) => (
                         <button
                           key={`${s.kind}:${s.text}`}
@@ -914,6 +975,7 @@ export default function HomeFeed() {
               id="image-search-input"
               type="file"
               accept="image/*"
+              capture="environment"
               className="hidden"
               onChange={handleImagePicked}
             />
@@ -1002,7 +1064,7 @@ export default function HomeFeed() {
         </div>
 
         {/* PHOTO SEARCH RESULTS: replaces the feed while a photo search is active. */}
-        {visualResults !== null ? (
+        {(visualResults !== null || visualSearching) ? (
           <div>
             <div className="flex items-center justify-between px-1 pb-3">
               <p className="text-sm font-bold text-gray-900 dark:text-white">
@@ -1010,8 +1072,8 @@ export default function HomeFeed() {
                   ? 'Searching by photo...'
                   : visualError
                     ? 'Photo search failed'
-                    : visualResults.length > 0
-                      ? `${visualResults.length} similar ${visualResults.length === 1 ? 'item' : 'items'} found`
+                    : (visualResults?.length ?? 0) > 0
+                      ? `${visualResults!.length} similar ${visualResults!.length === 1 ? 'item' : 'items'} found`
                       : 'No similar items found'}
               </p>
               <button
@@ -1036,7 +1098,7 @@ export default function HomeFeed() {
                   onAction={() => { setVisualResults(null); setVisualError(null); }}
                 />
               </div>
-            ) : visualResults.length === 0 ? (
+            ) : (visualResults?.length ?? 0) === 0 ? (
               <div className="pt-10">
                 <EmptyState
                   icon={searchOutline}
@@ -1048,7 +1110,7 @@ export default function HomeFeed() {
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-5 lg:gap-6">
-                {visualResults.map((product: any) => (
+                {(visualResults ?? []).map((product: any) => (
                   <BuyerProductCard
                     key={product.id}
                     product={product}
@@ -1119,23 +1181,22 @@ export default function HomeFeed() {
             <>
               <div onClickCapture={saveScroll} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-5 lg:gap-6">
                 {sortedProducts.map((product: any) => (
-                  <BuyerProductCard
-                    key={product.id}
-                    product={product}
-                  />
+                  <div key={product.id} style={{ contentVisibility: 'auto', containIntrinsicSize: '0 340px' }}>
+                    <BuyerProductCard
+                      product={product}
+                    />
+                  </div>
                 ))}
               </div>
 
-              {isUnfiltered && hasMore && (
-                <div className="flex justify-center mt-8 mb-4">
-                  <button
-                    type="button"
-                    onClick={loadMoreProducts}
-                    disabled={loadingMore || isValidating}
-                    className="px-6 py-2.5 text-xs font-bold text-white bg-orange-500 hover:bg-orange-600 active:scale-95 rounded-full shadow-sm transition-all disabled:opacity-50"
-                  >
-                    {loadingMore || isValidating ? 'Loading more items...' : 'Load more items'}
-                  </button>
+              {isUnfiltered && (
+                <div ref={sentinelRef} className="flex justify-center mt-8 mb-4 min-h-10">
+                  {infiniteValidating && hasMore && (
+                    <div className="flex items-center gap-2 text-xs font-bold text-gray-500">
+                      <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-orange-500 border-t-transparent" />
+                      Loading more items...
+                    </div>
+                  )}
                 </div>
               )}
             </>

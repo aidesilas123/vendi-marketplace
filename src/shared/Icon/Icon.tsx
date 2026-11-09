@@ -40,7 +40,7 @@ export const IonIcon: React.FC<IconProps> = ({ icon, className, style, ...rest }
     );
   }
 
-  return <BaseIonIcon icon={icon} className={className} style={style} {...rest} />;
+  return <BaseIonIcon icon={icon} className={className} style={style} suppressHydrationWarning {...rest} />;
 };
 
-export default IonIcon;
+export default IonIcon;

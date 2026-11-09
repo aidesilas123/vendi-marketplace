@@ -621,3 +621,47 @@ entrypoint = "./functions/visual-search/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/visual-search/*.html" ]
+
+[functions.charge-verification-fee]
+enabled = true
+verify_jwt = false
+import_map = "./functions/charge-verification-fee/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/charge-verification-fee/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/charge-verification-fee/*.html" ]
+
+[functions.sponsor-listing]
+enabled = true
+verify_jwt = false
+import_map = "./functions/sponsor-listing/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/sponsor-listing/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/sponsor-listing/*.html" ]
+
+[functions.monnify-fee-initialize]
+enabled = true
+verify_jwt = false
+import_map = "./functions/monnify-fee-initialize/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/monnify-fee-initialize/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/monnify-fee-initialize/*.html" ]
+
+[functions.monnify-fee-reconcile]
+enabled = true
+verify_jwt = false
+import_map = "./functions/monnify-fee-reconcile/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/monnify-fee-reconcile/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/monnify-fee-reconcile/*.html" ]
