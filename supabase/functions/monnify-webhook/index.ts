@@ -43,7 +43,9 @@ async function adjustBalance(walletId: string, delta: number) {
   throw new Error('Wallet busy');
 }
 
-/** Marks a pending withdrawal failed and returns the money – exactly once. */
+/** Marks a pending withdrawal failed and returns the money – exactly once.
+ * Returns the refunded transaction, or null when there was nothing to refund
+ * (already settled, or an unknown reference). */
 async function failAndRefund(reference: string, fromStatuses: string[]) {
   const { data: tx } = await supabase
     .from('transactions')
@@ -55,11 +57,38 @@ async function failAndRefund(reference: string, fromStatuses: string[]) {
 
   if (!tx) {
     console.log('Disbursement failure for', reference, '- nothing to refund (already settled or unknown)');
-    return;
+    return null;
   }
   await adjustBalance(tx.wallet_id, Math.abs(Number(tx.amount)));
   console.log('Refunded', Math.abs(Number(tx.amount)), 'for failed withdrawal', reference);
+  return tx;
 }
+
+/** Sends a wallet push via send-push (server-to-server). Never throws — a
+ * failed push must not fail the webhook: the money is already moved, and
+ * Monnify retrying the webhook would not fix a dead token. */
+async function sendWalletPush(userId: string, title: string, body: string, data: Record<string, string>) {
+  try {
+    const res = await fetch(`${supabaseUrl}/functions/v1/send-push`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${supabaseKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId, type: 'wallet', title, body, route: '/wallet', data }),
+    });
+    if (!res.ok) {
+      console.warn('Wallet push failed:', res.status, (await res.text().catch(() => '')).slice(0, 200));
+    }
+  } catch (e) {
+    console.warn('Wallet push threw:', e);
+  }
+}
+
+/** The owner of a wallet, looked up by its Monnify virtual account number. */
+async function walletOwnerByAccountNumber(accountNumber: string): Promise<string | null> {
+  const { data } = await supabase.from('wallets').select('user_id').eq('virtual_account_number', accountNumber).maybeSingle();
+  return data?.user_id ?? null;
+}
+
+const naira = (n: number) => `₦${Math.round(n).toLocaleString()}`;
 
 const ok = (message: string) =>
   new Response(JSON.stringify({ message }), {
@@ -146,6 +175,13 @@ Deno.serve(async (req) => {
 
       const source = Array.isArray(ev.paymentSourceInformation) ? ev.paymentSourceInformation[0] : null;
 
+      // Did this reference already credit the wallet (a Monnify retry after
+      // an earlier attempt that already succeeded)? If so, the RPC dedupes
+      // the credit — and we must not send the push a second time.
+      const { data: existingCredit } = await supabase.from('transactions')
+        .select('id').eq('reference', String(transactionReference)).eq('type', 'credit').maybeSingle();
+      const alreadyCredited = !!existingCredit;
+
       const { data: result, error } = await supabase.rpc('process_monnify_funding', {
         p_account_number: String(accountNumber),
         p_amount: amountPaid,
@@ -166,28 +202,80 @@ Deno.serve(async (req) => {
         // Not one of our wallets (or a data problem). Answer 200 so Monnify stops retrying,
         // but make it loud in the logs.
         console.error('NO WALLET for account number', accountNumber, 'reference', transactionReference);
+      } else if (!alreadyCredited) {
+        // The money just landed — tell the owner. The webhook is the only
+        // place that sees a funding happen; the app never gets a callback,
+        // which is why this push never arrived before.
+        const ownerId = await walletOwnerByAccountNumber(accountNumber);
+        if (ownerId) {
+          await sendWalletPush(
+            ownerId,
+            `${naira(amountPaid)} added to your wallet`,
+            `Your bank transfer of ${naira(amountPaid)} has landed in your Vendi wallet.`,
+            { amount: String(amountPaid), reference: transactionReference },
+          );
+        } else {
+          console.warn('Funding credited but no wallet owner found for account', accountNumber);
+        }
       }
       return ok('Funding processed');
     }
 
     /* ---------------------------- Money out ----------------------------- */
     if (eventType === 'SUCCESSFUL_DISBURSEMENT') {
-      await supabase
+      const { data: tx } = await supabase
         .from('transactions')
         .update({ status: 'successful' })
         .eq('reference', ev.reference)
-        .eq('status', 'pending');
+        .eq('status', 'pending')
+        .select('id, wallet_id, amount')
+        .maybeSingle();
+      // A row comes back only the first time this moves pending → successful,
+      // so a Monnify retry can't send the push twice.
+      if (tx?.wallet_id) {
+        const { data: w } = await supabase.from('wallets').select('user_id').eq('id', tx.wallet_id).maybeSingle();
+        if (w?.user_id) {
+          await sendWalletPush(
+            w.user_id,
+            `${naira(Math.abs(Number(tx.amount) || 0))} sent to your bank`,
+            `Your withdrawal of ${naira(Math.abs(Number(tx.amount) || 0))} is on its way to your bank.`,
+            { amount: String(Math.abs(Number(tx.amount) || 0)), reference: String(ev.reference) },
+          );
+        }
+      }
       return ok('Withdrawal marked successful');
     }
 
     if (eventType === 'FAILED_DISBURSEMENT') {
-      await failAndRefund(String(ev.reference), ['pending']);
+      const tx = await failAndRefund(String(ev.reference), ['pending']);
+      if (tx) {
+        const { data: w } = await supabase.from('wallets').select('user_id').eq('id', tx.wallet_id).maybeSingle();
+        if (w?.user_id) {
+          await sendWalletPush(
+            w.user_id,
+            'Withdrawal failed — money returned',
+            `Your withdrawal of ${naira(Math.abs(Number(tx.amount) || 0))} could not be completed. The money has been returned to your wallet.`,
+            { amount: String(Math.abs(Number(tx.amount) || 0)), reference: String(ev.reference) },
+          );
+        }
+      }
       return ok('Withdrawal failed and refunded');
     }
 
     if (eventType === 'REVERSED_DISBURSEMENT') {
       // A transfer that looked successful can still be reversed by the bank
-      await failAndRefund(String(ev.reference), ['pending', 'successful']);
+      const tx = await failAndRefund(String(ev.reference), ['pending', 'successful']);
+      if (tx) {
+        const { data: w } = await supabase.from('wallets').select('user_id').eq('id', tx.wallet_id).maybeSingle();
+        if (w?.user_id) {
+          await sendWalletPush(
+            w.user_id,
+            'Withdrawal reversed — money returned',
+            `Your withdrawal of ${naira(Math.abs(Number(tx.amount) || 0))} was reversed by the bank. The money has been returned to your wallet.`,
+            { amount: String(Math.abs(Number(tx.amount) || 0)), reference: String(ev.reference) },
+          );
+        }
+      }
       return ok('Withdrawal reversed and refunded');
     }
 

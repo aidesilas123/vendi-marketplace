@@ -13,7 +13,8 @@ import { calcFees, naira } from '@/lib/pricing';
 import { useSavedIds } from '@/shared/hooks/useSavedIds';
 import { usePlatformSettings } from '@/shared/hooks/usePlatformSettings';
 import { useImpressionTracking } from '@/lib/impressions';
-import { imageOutline, schoolOutline, timeOutline, eyeOutline, bookmarkOutline, bookmark, star } from 'ionicons/icons';
+import { imageOutline, schoolOutline, timeOutline, eyeOutline, bookmarkOutline, bookmark, star, flameOutline } from 'ionicons/icons';
+import { VanIcon } from '@/shared/Icon/VanIcon';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 
 const timeAgo = (dateString: string) => {
@@ -59,12 +60,15 @@ interface BuyerProductCardProps {
     created_at: string;
     images: string[] | string | null;
     views_count?: number;
+    delivery_available?: boolean;
+    _trending?: boolean;
     seller_id: string;
     seller: {
       id: string;
       username: string;
       avatar_url?: string | null;
       is_verified: boolean;
+      is_admin?: boolean;
       average_rating?: number | string | null;
     };
   };
@@ -169,11 +173,15 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
             <span className="text-[10px] font-bold text-gray-900 dark:text-white truncate">@{product.seller?.username || 'user'}</span>
             <Badge isVerified={product.seller?.is_verified} className="flex-shrink-0" />
           </span>
-          {product.seller?.is_verified && (
+          {product.seller?.is_admin ? (
+            <span className="text-[7px] font-bold uppercase tracking-[0.1em] text-orange-500">
+              Official Account
+            </span>
+          ) : product.seller?.is_verified ? (
             <span className="text-[7px] font-bold uppercase tracking-[0.1em] text-green-600/80 dark:text-green-400/80">
               Verified student
             </span>
-          )}
+          ) : null}
         </span>
       </button>
 
@@ -215,6 +223,13 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
           {product.condition}
         </div>
 
+        {product._trending && (
+          <div className="absolute top-8 left-2 bg-orange-500 text-white text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider z-10 pointer-events-none flex items-center gap-0.5">
+            <IonIcon icon={flameOutline} className="text-[10px]" />
+            Trending
+          </div>
+        )}
+
         {product.status === 'SOLD' && (
           <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-20 pointer-events-none">
             <span className="bg-red-500 text-white font-black text-lg px-5 py-1.5 rounded-xl border-2 border-white transform -rotate-12 shadow-2xl tracking-widest uppercase">
@@ -244,6 +259,12 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
             <IonIcon icon={timeOutline} className="text-xs" />
             <span>{timeAgo(product.created_at)}</span>
           </div>
+          {product.delivery_available && (
+            <div className="flex items-center gap-1 flex-shrink-0 text-green-600 dark:text-green-400">
+              <VanIcon className="w-3.5 h-3.5" />
+              <span>Delivers</span>
+            </div>
+          )}
         </div>
         <div className="mt-auto flex items-center justify-between">
           <div className="flex items-center gap-1 text-[10px] font-black text-gray-700 dark:text-gray-300">

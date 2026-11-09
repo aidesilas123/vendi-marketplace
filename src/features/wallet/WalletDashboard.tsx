@@ -358,7 +358,9 @@ export default function WalletDashboard() {
     void reload();
   };
 
-  const balanceText = showBalance ? formatNaira(wallet?.balance ?? 0) : '₦ ••••••';
+  const totalBalance = Number(wallet?.balance ?? 0) + Number(wallet?.pending_balance ?? 0);
+  const pendingBalance = Number(wallet?.pending_balance ?? 0);
+  const balanceText = showBalance ? formatNaira(totalBalance) : '₦ ••••••';
   // Skeleton while loading, reloading, validating, or during pending retries.
   // The error panel ONLY appears when loading and retries have completely exhausted
   // AND an actual error was caught.
@@ -436,6 +438,24 @@ export default function WalletDashboard() {
                     )}
                   </div>
                 </div>
+
+                {pendingBalance > 0 && (
+                  <div className="mt-5">
+                    <p className="text-xs font-medium text-gray-500 dark:text-gray-400">Pending</p>
+                    <div className="mt-1.5 flex h-7 items-center">
+                      {reloading ? (
+                        <Spinner className="h-5 w-5" />
+                      ) : (
+                        <p className="text-lg font-bold tabular-nums text-amber-600 dark:text-amber-400">
+                          {showBalance ? formatNaira(pendingBalance) : '₦ ••••••'}
+                        </p>
+                      )}
+                    </div>
+                    <p className="mt-1 text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">
+                      From sales, waiting for the buyer&apos;s payment to clear with the bank. It moves to Withdrawable once it settles.
+                    </p>
+                  </div>
+                )}
               </div>
             </section>
           )}

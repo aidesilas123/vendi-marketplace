@@ -110,7 +110,7 @@ async function fetchActivity(): Promise<{ transactions: any[]; savedItems: any[]
     .from('saved_items')
     .select(`
       product_id,
-      products (*, seller:users(id, username, full_name, avatar_url, is_verified, average_rating, whatsapp))
+      products (*, seller:users(id, username, full_name, avatar_url, is_verified, is_admin, average_rating, whatsapp))
     `)
     .eq('user_id', user.id)
     .order('created_at', { ascending: false });
@@ -125,6 +125,7 @@ async function fetchActivity(): Promise<{ transactions: any[]; savedItems: any[]
         username: p.seller?.username || p.seller?.full_name?.split(' ')[0] || 'User',
         avatar_url: p.seller?.avatar_url,
         is_verified: p.seller?.is_verified,
+        is_admin: p.seller?.is_admin,
         average_rating: p.seller?.average_rating,
         whatsapp: p.seller?.whatsapp
       }

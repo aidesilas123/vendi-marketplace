@@ -24,8 +24,13 @@ import Link from 'next/link';
 /* -------------------------------------------------------------------------- */
 
 const TABS = ['Post Item', 'Active', 'Pending Review', 'Approved', 'Sold', 'Draft', 'Rejected'];
-const CATEGORIES = ['Hostel Stuff', 'Electronics', 'Gadgets', 'Fashion', 'Books', 'Cooking Stuff', 'Other'];
+const CATEGORIES = ['Hostel Stuff', 'Accommodation', 'Electronics', 'Gadgets', 'Fashion', 'Books', 'Cooking Stuff', 'Furniture', 'Beauty & Care', 'Sports & Fitness', 'Shoes & Bags', 'Accessories', 'Food & Groceries', 'Vehicles', 'Other'];
 const CONDITIONS = ['New', 'Used'];
+const DELIVERY_AREAS = [
+  { value: 'within_campus', label: 'Within campus only' },
+  { value: 'on_off_campus', label: 'On or off campus' },
+  { value: 'worldwide', label: 'Worldwide' },
+];
 const QUANTITY_OPTIONS = [...Array.from({ length: 10 }, (_, i) => String(i + 1)), 'Bulk'];
 
 const TOTAL_STEPS = 5;
@@ -197,6 +202,8 @@ interface FormState {
   basePrice: string;          // raw number as text, no commas (e.g. "5000.5")
   allowNegotiation: boolean;
   lastPrice: string;          // raw number as text, no commas
+  deliveryAvailable: boolean;
+  deliveryArea: string;       // 'within_campus' | 'on_off_campus' | 'worldwide'
 }
 
 const getEmptyForm = (): FormState => ({
@@ -210,8 +217,57 @@ const getEmptyForm = (): FormState => ({
   images: [],
   basePrice: '',
   allowNegotiation: false,
-  lastPrice: ''
+  lastPrice: '',
+  deliveryAvailable: false,
+  deliveryArea: 'within_campus'
 });
+
+/* ------------------------------ seller draft ------------------------------ */
+
+// The listing form is a multi-step flow. Tapping "Terms & Policies" on the
+// final step navigates to /terms, which unmounts this dashboard and would
+// wipe everything the seller filled in. So the in-progress form is saved
+// to the device (localStorage) on every change and restored on mount.
+// It is cleared on a successful submit and when the form is reset.
+const SELLER_DRAFT_KEY = 'vendi-seller-draft';
+
+type SellerDraft = {
+  formData: FormState;
+  step: number;
+  acceptedTerms: boolean;
+  editingProductId: string | null;
+};
+
+function loadSellerDraft(): SellerDraft | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(SELLER_DRAFT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || !parsed.formData || typeof parsed.formData !== 'object') return null;
+    return parsed as SellerDraft;
+  } catch {
+    return null;
+  }
+}
+
+function saveSellerDraft(draft: SellerDraft) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(SELLER_DRAFT_KEY, JSON.stringify(draft));
+  } catch {
+    // Storage full or unavailable — the form still works, it just won't be restored.
+  }
+}
+
+function clearSellerDraft() {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(SELLER_DRAFT_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 // Older listings stored quantity as a number. Map anything outside 1-10 to Bulk.
 const normalizeQuantity = (q: unknown): string => {
@@ -238,7 +294,9 @@ const productToForm = (p: any): FormState => {
     images: p.images || [],
     basePrice: p.base_price?.toString() || '',
     allowNegotiation: hasLastPrice,
-    lastPrice: hasLastPrice ? String(p.last_price) : ''
+    lastPrice: hasLastPrice ? String(p.last_price) : '',
+    deliveryAvailable: p.delivery_available === true,
+    deliveryArea: p.delivery_area || 'within_campus'
   };
 };
 
@@ -365,6 +423,30 @@ export default function SellerDashboard() {
 
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [formData, setFormData] = useState<FormState>(getEmptyForm());
+
+  // Restore an in-progress listing draft (e.g. after visiting /terms and
+  // coming back). Runs once on mount; the save effect below skips its first
+  // run so it never overwrites the draft with the empty initial state.
+  useEffect(() => {
+    const draft = loadSellerDraft();
+    if (draft) {
+      setFormData({ ...getEmptyForm(), ...draft.formData });
+      setStep(draft.step >= 1 && draft.step <= TOTAL_STEPS ? draft.step : 1);
+      setAcceptedTerms(draft.acceptedTerms === true);
+      setEditingProductId(draft.editingProductId ?? null);
+    }
+  }, []);
+
+  const skipFirstDraftSaveRef = useRef(true);
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (skipFirstDraftSaveRef.current) {
+      skipFirstDraftSaveRef.current = false;
+      return;
+    }
+    saveSellerDraft({ formData, step, acceptedTerms, editingProductId });
+    setDraftSavedAt(Date.now());
+  }, [formData, step, acceptedTerms, editingProductId]);
 
   // The notification modal is now only for errors: listing SUBMIT errors,
   // settings errors and image-upload errors. Successful submits and
@@ -590,6 +672,7 @@ export default function SellerDashboard() {
     setStep(1);
     setFormData(getEmptyForm());
     setAcceptedTerms(false);
+    clearSellerDraft();
   };
 
   const handleSubmit = async () => {
@@ -733,7 +816,7 @@ export default function SellerDashboard() {
 
     const uid = userId ?? (await fetchCurrentUserId());
 
-    const { id: _id, created_at, updated_at, ai_flag_reason, ...rest } = full;
+    const { id: _id, created_at, updated_at, ai_flag_reason, search_vector: _searchVector, ...rest } = full;
     const copyData = {
       ...rest,
       seller_id: uid || full.seller_id,
@@ -1117,6 +1200,12 @@ export default function SellerDashboard() {
               </div>
             </div>
 
+            {draftSavedAt != null && (
+              <p className="text-[11px] font-bold text-green-600 dark:text-green-400 -mt-6 mb-6">
+                ✓ Draft saved — your progress is safe if you leave this page.
+              </p>
+            )}
+
             <div
               key={step}
                 className={`space-y-5 ${
@@ -1138,6 +1227,42 @@ export default function SellerDashboard() {
                         className={INPUT_CLASSES}
                       />
                     </div>
+
+                    {/* Offer delivery */}
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Offer delivery?</p>
+                        <p className="text-xs text-gray-500 mt-0.5">Bring the item to the buyer instead of meeting up.</p>
+                      </div>
+                      <ToggleSwitch
+                        enabled={formData.deliveryAvailable}
+                        onChange={(enabled) =>
+                          setFormData({ ...formData, deliveryAvailable: enabled })
+                        }
+                      />
+                    </div>
+
+                    {formData.deliveryAvailable && (
+                      <div className="animate-in fade-in slide-in-from-top-2">
+                        <label className={LABEL_CLASSES}>Delivery area</label>
+                        <div className="flex flex-wrap gap-2">
+                          {DELIVERY_AREAS.map((area) => (
+                            <button
+                              key={area.value}
+                              type="button"
+                              onClick={() => setFormData({ ...formData, deliveryArea: area.value })}
+                              className={`!px-4 !py-2 !rounded-full !text-xs !font-bold transition-all shadow-sm ${
+                                formData.deliveryArea === area.value
+                                  ? '!bg-orange-500 !text-white border border-orange-500'
+                                  : '!bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30'
+                              }`}
+                            >
+                              {area.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
 

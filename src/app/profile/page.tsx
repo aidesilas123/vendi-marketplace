@@ -25,7 +25,8 @@ import {
   imageOutline,
   pricetagOutline,
   addOutline,
-  timeOutline
+  timeOutline,
+  chatbubbleOutline
 } from 'ionicons/icons';
 
 export default function ProfilePage() {
@@ -61,6 +62,15 @@ export default function ProfilePage() {
     return user;
   });
   const isOwner = !!sessionUser && !!profileId && sessionUser.id === profileId;
+
+  /* Is the viewer an admin? Only an admin sees the "Message user" button below. */
+  const { data: viewerIsAdmin } = useSWR(
+    sessionUser && !isOwner ? ['viewer-is-admin', sessionUser.id] : null,
+    async ([, id]: [string, string]) => {
+      const { data } = await supabase.from('users').select('is_admin').eq('id', id).single();
+      return data?.is_admin === true;
+    }
+  );
 
   /* Profile + listings (ACTIVE, APPROVED and SOLD) */
   const { data: profileData, error: profileError } = useSWR(
@@ -169,7 +179,7 @@ export default function ProfilePage() {
   const handleDuplicate = async (id: string) => {
     const productToCopy = products.find(p => p.id === id);
     if (!productToCopy || !profileUser) return;
-    const { id: _, created_at, updated_at, ai_flag_reason, seller, ...rest } = productToCopy;
+    const { id: _, created_at, updated_at, ai_flag_reason, seller, search_vector: _searchVector, ...rest } = productToCopy;
     const { data, error } = await supabase
       .from('products')
       .insert({ ...rest, seller_id: profileUser.id, status: 'ACTIVE' })
@@ -344,9 +354,11 @@ export default function ProfilePage() {
                 <h2 className="text-2xl font-black text-foreground">{profileUser.full_name}</h2>
                 <Badge isVerified={profileUser.is_verified} />
               </div>
-              {profileUser.is_verified && (
-                <p className="text-[11px] font-black uppercase tracking-widest text-orange-500 mb-2">Verified Seller</p>
-              )}
+              {profileUser.is_admin ? (
+                <p className="text-[11px] font-black uppercase tracking-widest text-orange-500 mb-2">Official Account</p>
+              ) : profileUser.is_verified ? (
+                <p className="text-[11px] font-black uppercase tracking-widest text-green-600 dark:text-green-400 mb-2">Verified Student</p>
+              ) : null}
               <p className="text-sm font-bold text-muted-foreground mb-3">@{profileUser.username} • Joined {joinDate}</p>
               <div className="flex flex-wrap items-center justify-center gap-y-2 gap-x-4 text-xs font-bold text-muted-foreground">
                 <div className="flex items-center gap-1">
@@ -422,13 +434,23 @@ export default function ProfilePage() {
                   </Button>
                 </>
               ) : (
-                <Button
-                  variant="outline"
-                  onClick={() => router.push(`/report?seller=${profileId}`)}
-                  className="!py-3 !px-4 flex items-center justify-center gap-2 text-muted-foreground transition-transform active:scale-[0.98]"
-                >
-                  <IonIcon icon={warningOutline} className="text-lg" /> Report
-                </Button>
+                <>
+                  {viewerIsAdmin && sessionUser && profileId && (
+                    <Button
+                      onClick={() => router.push(`/chats?ref=admin-${sessionUser.id}-${profileId}&seller=${profileId}`)}
+                      className="!py-2.5 !px-5 !w-auto !bg-orange-500 !text-white rounded-full flex items-center justify-center gap-2 transition-transform active:scale-[0.98]"
+                    >
+                      <IonIcon icon={chatbubbleOutline} className="text-base" /> Message user
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    onClick={() => router.push(`/report?seller=${profileId}`)}
+                    className="!py-3 !px-4 flex items-center justify-center gap-2 text-muted-foreground transition-transform active:scale-[0.98]"
+                  >
+                    <IonIcon icon={warningOutline} className="text-lg" /> Report
+                  </Button>
+                </>
               )}
             </div>
           </div>

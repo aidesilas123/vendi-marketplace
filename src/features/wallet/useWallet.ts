@@ -14,6 +14,8 @@ export type Wallet = {
   id: string;
   user_id: string;
   balance: number | string;
+  /** Escrow payouts whose Monnify collection has not settled yet. NOT withdrawable. */
+  pending_balance: number | string;
   virtual_account_number: string | null;
   bank_name: string | null;
   account_name: string | null;
@@ -113,6 +115,22 @@ async function fetchWalletData(userId: string): Promise<WalletData> {
       wallet = await createWalletOnce(userId);
     } catch (e) {
       console.warn('[wallet] virtual account backfill failed, using existing row:', e);
+    }
+  }
+
+  // Move any matured pending payouts into the withdrawable balance, so the
+  // dashboard never shows money as pending after its settlement has landed.
+  // Best-effort: if the RPC is missing (SQL not run yet) or fails, the
+  // pending row still shows correctly and nothing breaks.
+  if (wallet) {
+    try {
+      const { data: moved } = await supabase.rpc('settle_wallet', { p_wallet_id: wallet.id });
+      if (moved && Number(moved) > 0) {
+        const { data: fresh } = await supabase.from('wallets').select('*').eq('id', wallet.id).maybeSingle();
+        if (fresh) wallet = fresh as Wallet;
+      }
+    } catch {
+      /* settle is best-effort */
     }
   }
 

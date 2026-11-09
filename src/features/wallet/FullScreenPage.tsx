@@ -11,6 +11,7 @@
 // (Done, Cancel…) can play the slide-out animation before unmounting.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { IonIcon } from '@ionic/react';
 import { arrowBackOutline } from 'ionicons/icons';
 import { PullToRefresh } from '@/shared/PullToRefresh/PullToRefresh';
@@ -43,10 +44,12 @@ export function FullScreenPage({
   zIndex = 100,
 }: Props) {
   const [entered, setEntered] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const closingRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
+    setMounted(true);
     const id = setTimeout(() => setEntered(true), 16);
     return () => {
       clearTimeout(id);
@@ -63,7 +66,12 @@ export function FullScreenPage({
 
   const render = (node: Renderable) => (typeof node === 'function' ? node(close) : node);
 
-  return (
+  // Portaled to document.body so it escapes the page-transition transform:
+  // a transformed ancestor traps in-page `fixed` and lets the bottom nav,
+  // which lives outside that transform, show through underneath the page.
+  // (Same rule as the bottom sheets: portal it, or the nav wins.)
+  if (!mounted || typeof document === 'undefined') return null;
+  return createPortal(
     <div
       className={`fixed inset-0 flex flex-col bg-gray-50 text-gray-900 transition-transform duration-300 ease-out dark:bg-background dark:text-white ${
         entered ? 'translate-x-0' : 'translate-x-full'
@@ -90,7 +98,8 @@ export function FullScreenPage({
       </PullToRefresh>
 
       {footer ? <div className="shrink-0">{render(footer)}</div> : null}
-    </div>
+    </div>,
+    document.body
   );
 }
 

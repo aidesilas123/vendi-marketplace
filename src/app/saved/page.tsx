@@ -29,6 +29,7 @@ type SavedProduct = {
     username: string;
     avatar_url?: string | null;
     is_verified: boolean;
+    is_admin?: boolean;
     average_rating?: number;
   };
 };
@@ -64,6 +65,7 @@ async function fetchSavedItems(): Promise<SavedProduct[] | null> {
           username,
           avatar_url,
           is_verified,
+          is_admin,
           average_rating
         )
       )

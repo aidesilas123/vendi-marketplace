@@ -21,12 +21,19 @@ import { IonIcon } from '@ionic/react';
 import {
   chevronBackOutline, shareOutline, eyeOutline, bookmarkOutline, bookmark, shieldCheckmarkOutline, star, starOutline,
   schoolOutline, locationOutline, timeOutline, sendOutline, expandOutline, imageOutline, flagOutline,
-  chatbubblesOutline, warningOutline, syncOutline, checkmarkCircleOutline
+  chatbubblesOutline, warningOutline, syncOutline, checkmarkCircleOutline, flameOutline
 } from 'ionicons/icons';
+import { VanIcon } from '@/shared/Icon/VanIcon';
 
 const CONTACT_REGEX = /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)|(\d{8,})/;
 const NETWORK_MSG = 'Network error. Check your connection and try again.';
 const PAGE_SIZE = 3;
+
+const DELIVERY_AREA_LABELS: Record<string, string> = {
+  within_campus: 'Within campus only',
+  on_off_campus: 'On or off campus',
+  worldwide: 'Worldwide',
+};
 
 /* ------------------------------------------------------------------ */
 /*  SWR keys                                                          */
@@ -41,7 +48,7 @@ const SETTINGS_KEY = 'product-details-settings';
 
 const EMPTY: any[] = []; // stable reference so memo hooks don't re-run every render
 
-const SELLER_JOIN = 'seller:users(id, username, full_name, avatar_url, is_verified, average_rating)';
+const SELLER_JOIN = 'seller:users(id, username, full_name, avatar_url, is_verified, is_admin, average_rating)';
 const REVIEW_BUYER_JOIN = 'buyer:buyer_id(full_name, avatar_url)';
 const QA_USER_JOIN = 'user:user_id(full_name, avatar_url, username)';
 
@@ -97,6 +104,7 @@ const mapSeller = (p: any) => ({
     username: p.seller?.username || p.seller?.full_name?.split(' ')[0] || 'User',
     avatar_url: p.seller?.avatar_url,
     is_verified: p.seller?.is_verified,
+    is_admin: p.seller?.is_admin,
     average_rating: p.seller?.average_rating
   }
 });
@@ -1008,6 +1016,16 @@ export default function ProductDetails() {
                 <span>{product.specific_location}</span>
               </div>
               <div className="flex items-center gap-1">
+                <VanIcon className="w-4 h-4 text-gray-400" />
+                {product.delivery_available ? (
+                  <span className="text-green-600 dark:text-green-400">
+                    Delivery available{product.delivery_area && DELIVERY_AREA_LABELS[product.delivery_area] ? ` · ${DELIVERY_AREA_LABELS[product.delivery_area]}` : ''}
+                  </span>
+                ) : (
+                  <span>Pickup only</span>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
                 <IonIcon icon={timeOutline} className="text-base text-gray-400" />
                 <span>Posted {timeAgo(product.created_at)}</span>
               </div>
@@ -1059,11 +1077,15 @@ export default function ProductDetails() {
                         <h3 className="font-black text-gray-900 hover:underline dark:text-white">{seller.full_name}</h3>
                         <Badge isVerified={seller.is_verified} />
                       </div>
-                      {seller.is_verified && (
+                      {seller.is_admin ? (
+                        <p className="mt-1 text-[10px] font-black uppercase tracking-[0.14em] text-orange-500 leading-none">
+                          Official Account
+                        </p>
+                      ) : seller.is_verified ? (
                         <p className="mt-1 text-[10px] font-black uppercase tracking-[0.14em] text-green-600 dark:text-green-400 leading-none">
                           Verified student
                         </p>
-                      )}
+                      ) : null}
                       <p className="mt-0.5 text-xs font-bold text-gray-500">
                         @{seller.username || seller.full_name?.split(' ')[0]?.toLowerCase() || 'seller'} • Joined {joinYear}
                       </p>

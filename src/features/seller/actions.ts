@@ -177,8 +177,12 @@ export async function submitProductAction(
       last_price: lastPrice, 
       status,
       ai_flag_reason: aiDecision?.reason || null,
+      delivery_available: formData.deliveryAvailable === true,
+      delivery_area: formData.deliveryAvailable ? formData.deliveryArea : null,
     };
 
+    // The id of the saved listing, so its photo can be fingerprinted for visual search.
+    let savedId: string | null = productId ?? null;
     if (productId) {
       const { data: updated, error } = await supabase
         .from('products')
@@ -191,9 +195,32 @@ export async function submitProductAction(
       if (!updated || updated.length === 0) {
         throw new Error("Listing not found, or you don't have permission to edit it.");
       }
+      savedId = updated[0].id;
     } else {
-      const { error } = await supabase.from('products').insert([productPayload]);
+      const { data: inserted, error } = await supabase
+        .from('products')
+        .insert([productPayload])
+        .select('id')
+        .single();
       if (error) throw new Error(error.message);
+      savedId = inserted?.id ?? null;
+    }
+
+    // Visual search: fingerprint the first photo so the listing can be found
+    // by photo. Fire-and-forget — a Jina failure must never block the save.
+    // Only public listings (ACTIVE here; an edit always reactivates to
+    // ACTIVE, APPROVED is only set by the 30-day aging SQL). Drafts, pending
+    // and rejected ones are not searchable, and the match RPC hides them anyway.
+    if (savedId && status === 'ACTIVE' && images.length > 0) {
+      const firstImage = images[0];
+      fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/embed-listing`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ product_id: savedId, image_url: firstImage }),
+      }).catch(() => { /* embed failure must not fail the save */ });
     }
 
     return { success: true, decision: aiDecision, status };

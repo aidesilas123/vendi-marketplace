@@ -397,7 +397,7 @@ export default function WithdrawPage({
             {/* Amount */}
             <div className="pt-4 text-center">
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                Available balance <span className="font-bold text-gray-900 dark:text-white">{formatNaira(balance)}</span>
+                Withdrawable balance <span className="font-bold text-gray-900 dark:text-white">{formatNaira(balance)}</span>
               </p>
               <div className="relative mt-6">
                 <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-base font-black text-orange-500">
@@ -508,7 +508,7 @@ export default function WithdrawPage({
           <>
             <ReceiptContent tx={receipt} />
             <p className="mx-auto max-w-xs px-6 pb-10 pt-2 text-center text-xs leading-relaxed text-gray-500 dark:text-gray-400">
-              Your bank transfer is being processed. This page updates once the bank confirms it.
+              Withdrawal submitted, payment will be received in your bank within 12 to 24 hours.
             </p>
           </>
         )}
