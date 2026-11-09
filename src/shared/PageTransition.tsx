@@ -23,8 +23,10 @@ export const PageTransition = ({
   // /chats opens instantly now (no zoom): the room felt glitchy under
   // the zoom, so it renders plain with a short fade instead, in every
   // stack mode. /login uses the same fade (no zoom) — the auth page
-  // should feel instant too. Other pages keep the directional zoom untouched.
-  const isFadeOnly = ['/chats', '/login'].includes(pagePath ?? pathname);
+  // should feel instant too. The feed ("/") uses it as well: the zoom
+  // back to a heavy feed was janky, and the fade is lighter and faster
+  // (150ms, no transform). Other pages keep the directional zoom untouched.
+  const isFadeOnly = ['/chats', '/login', '/'].includes(pagePath ?? pathname);
 
   // Back direction is decided once per pathname: isBackNavigation() reads a
   // 2.5s popstate window, so calling it on every render could flip the
@@ -92,11 +94,11 @@ export const PageTransition = ({
     return <>{children}</>;
   }
 
-  // /chats and /login: instant, no zoom — plain div with a short
-  // 150ms fade (vendi-fade-in ends opaque, forwards, so it can never
-  // stick invisible). The list itself lazy-loads in the room (render
-  // cap: 20 bubbles first, rest after 300ms). Kept-tab reveals and the
-  // first mount were already plain; this makes enter/back plain too.
+  // /chats, /login and the feed: instant, no zoom — plain div with
+  // a short 150ms fade (vendi-fade-in ends opaque, forwards, so it can
+  // never stick invisible). The list itself lazy-loads in the room
+  // (render cap: 20 bubbles first, rest after 300ms). Kept-tab reveals
+  // and the first mount were already plain; this makes enter/back plain too.
   if (isFadeOnly) {
     return (
       <div key={pagePath ?? pathname} className="w-full min-h-full vendi-fade-in">

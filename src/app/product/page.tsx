@@ -176,25 +176,31 @@ async function fetchSellerReviews(sellerId: string) {
 async function fetchSellerOtherItems(sellerId: string, productId: string) {
   const { data, error } = await supabase
     .from('products')
-    .select(`*, ${SELLER_JOIN}`)
+    .select(`*, ${SELLER_JOIN}, product_views(count)`)
     .eq('status', 'ACTIVE')
     .eq('seller_id', sellerId)
     .neq('id', productId)
     .limit(4);
   if (error) throw error;
-  return (data ?? []).map(mapSeller) as any[];
+  return (data ?? []).map((p: any) => ({
+    ...mapSeller(p),
+    views_count: p.product_views?.[0]?.count ?? 0,
+  })) as any[];
 }
 
 async function fetchSimilarItems(category: string, productId: string) {
   const { data, error } = await supabase
     .from('products')
-    .select(`*, ${SELLER_JOIN}`)
+    .select(`*, ${SELLER_JOIN}, product_views(count)`)
     .eq('status', 'ACTIVE')
     .eq('category', category)
     .neq('id', productId)
     .limit(4);
   if (error) throw error;
-  return (data ?? []).map(mapSeller) as any[];
+  return (data ?? []).map((p: any) => ({
+    ...mapSeller(p),
+    views_count: p.product_views?.[0]?.count ?? 0,
+  })) as any[];
 }
 
 async function fetchQuestions(productId: string) {

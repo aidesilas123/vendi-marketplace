@@ -42,7 +42,7 @@ const TAB_STORAGE_KEY = 'seller_active_tab'; // remembers the tab when you come 
 const PAGE_SIZE = 30; // listings fetched per tab; "Load more" adds another page
 
 // The listing grid only needs these columns. Full rows are fetched on demand for edit/duplicate.
-const LISTING_COLUMNS = 'id, title, base_price, condition, status, created_at, images';
+const LISTING_COLUMNS = 'id, title, base_price, condition, status, created_at, images, sponsored_until';
 
 // SWR cache keys
 const LISTINGS_KEY = 'seller-products';
@@ -1605,6 +1605,7 @@ export default function SellerDashboard() {
                       status={product.status}
                       createdAt={product.created_at}
                       imageUrl={product.images?.[0]}
+                      sponsoredUntil={product.sponsored_until}
                       onEdit={requestEdit}
                       onDelete={requestDelete}
                       onDuplicate={requestDuplicate}

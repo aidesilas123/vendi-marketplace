@@ -5,6 +5,7 @@ import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import useSWR from 'swr';
 import useSWRInfinite from 'swr/infinite';
 import { supabase } from '@/lib/supabase';
+import { showGlobalToast } from '@/shared/Toast/Toast';
 import { BuyerProductCard } from '@/shared/Card/BuyerProductCard';
 import { Searchbar } from '@/shared/Searchbar/Searchbar';
 import { Dropdown } from '@/shared/Dropdown';
@@ -37,10 +38,10 @@ const EMPTY: any[] = [];
 // More than this, and the boost crowds out everyone else's listings.
 /**
  * Server-side feed fetch. Calls the feed_products RPC (ranking + unseen +
- * daily shuffle + admin spread, all in SQL), which returns product ids in
- * final display order for one page; the app then fetches the full rows by id
- * and keeps RPC order. If the RPC is missing (SQL not run yet), falls back
- * to a plain date-ordered query so the feed never breaks.
+ * per-refresh shuffle + admin/sponsored spread, all in SQL), which returns
+ * product ids in final display order for one page; the app then fetches the
+ * full rows by id and keeps RPC order. If the RPC is missing (SQL not run
+ * yet), falls back to a plain date-ordered query so the feed never breaks.
  */
 async function fetchRankedFeed(opts: {
   category: string;
@@ -51,6 +52,7 @@ async function fetchRankedFeed(opts: {
   minPrice?: number | null;
   maxPrice?: number | null;
   deliveryOnly?: boolean;
+  seed?: number;
 }): Promise<any[]> {
   const { data: { session } } = await supabase.auth.getSession();
   const viewerId = session?.user?.id ?? null;
@@ -64,6 +66,7 @@ async function fetchRankedFeed(opts: {
     p_min_price: opts.minPrice ?? null,
     p_max_price: opts.maxPrice ?? null,
     p_delivery_only: opts.deliveryOnly ?? false,
+    p_seed: opts.seed ?? 0,
   });
   if (rpcError) {
     // SQL not run yet: date order, same page window.
@@ -106,6 +109,12 @@ async function fetchRankedFeed(opts: {
   withViews.sort((a: any, b: any) => (order.get(a.id) ?? 99) - (order.get(b.id) ?? 99));
   return withViews;
 }
+
+// Campus + university for the signed-in user, cached at module level so a
+// feed remount (back from a product) starts with it instead of waiting for
+// the async lookup — the feed SWR key is set at once and the cached feed
+// renders with no skeleton flash.
+let cachedCampus: { campus: string | null; university: string | null } | null = null;
 
 /**
  * Downscales a photo to max 512px and returns raw base64 JPEG (no data: prefix),
@@ -267,6 +276,14 @@ export default function HomeFeed() {
   const [popularSearches, setPopularSearches] = useState<string[]>([]);
 
 
+  // Feed shuffle seed: random per mount, read by the feed fetcher on every
+  // page. It is a ref (not in the SWR key) so changing it never flashes the
+  // skeleton — the refresh just revalidates with the new seed and the order
+  // changes in place. A fresh seed on each explicit refresh means a different
+  // list order on every refresh; back-navigation never revalidates, so the
+  // order stays put while you browse.
+  const feedSeedRef = useRef(Math.floor(Math.random() * 1e9));
+
   // Photo (visual) search: the ranked products for the picked photo, or null
   // when the normal feed is showing.
   const [visualResults, setVisualResults] = useState<any[] | null>(null);
@@ -276,9 +293,12 @@ export default function HomeFeed() {
   // The searcher's campus + university (chosen at signup), for scoping the
   // feed, search and suggestions to their campus. Uppercase, to match how
   // products store them. campusReady flips once the lookup finishes.
-  const [userCampus, setUserCampus] = useState<string | null>(null);
-  const [userUniversity, setUserUniversity] = useState<string | null>(null);
-  const [campusReady, setCampusReady] = useState(false);
+  // The module cache survives feed remounts (back from a product), so the
+  // feed key is set immediately and SWR returns its cached data instead of
+  // flashing the skeleton while the campus lookup re-runs.
+  const [userCampus, setUserCampus] = useState<string | null>(cachedCampus?.campus ?? null);
+  const [userUniversity, setUserUniversity] = useState<string | null>(cachedCampus?.university ?? null);
+  const [campusReady, setCampusReady] = useState(!!cachedCampus);
 
   // Search suggestions (from the database) + recent searches (on this device).
   const [suggestions, setSuggestions] = useState<{ text: string; kind: string; price: number | null }[]>([]);
@@ -302,8 +322,11 @@ export default function HomeFeed() {
           .eq('id', userId)
           .maybeSingle();
         if (!cancelled) {
-          if (data?.campus) setUserCampus(String(data.campus).trim().toUpperCase());
-          if (data?.university_id) setUserUniversity(String(data.university_id).trim().toUpperCase());
+          const campus = data?.campus ? String(data.campus).trim().toUpperCase() : null;
+          const university = data?.university_id ? String(data.university_id).trim().toUpperCase() : null;
+          if (campus) setUserCampus(campus);
+          if (university) setUserUniversity(university);
+          cachedCampus = { campus, university };
         }
       } catch { /* campus stays null = unfiltered */ }
       finally {
@@ -427,6 +450,7 @@ export default function HomeFeed() {
       university: userUniversity,
       limit: INITIAL_PAGE_SIZE,
       offset: pageIndex * INITIAL_PAGE_SIZE,
+      seed: feedSeedRef.current,
     }),
     {
       revalidateOnFocus: false,
@@ -525,14 +549,23 @@ export default function HomeFeed() {
     setIsRefreshing(true);
     setBadgeY(0, true);
     try {
-      await mutate();
+      if (isUnfiltered) {
+        // New shuffle seed, then revalidate: every loaded page refetches with
+        // the new seed, so the order changes on each refresh. The SWR key does
+        // not change, so the cached list stays visible while it revalidates
+        // (no skeleton flash).
+        feedSeedRef.current = Math.floor(Math.random() * 1e9);
+        await mutateInfinite();
+      } else {
+        await mutate();
+      }
     } finally {
       setTimeout(() => {
         setIsRefreshing(false);
         setBadgeY(BADGE_HIDDEN, true);
       }, 500);
     }
-  }, [mutate]);
+  }, [isUnfiltered, mutate, mutateInfinite]);
 
   // Frozen feed: only an explicit refresh (pull-to-refresh / 'refresh-feed')
   // re-fetches. Coming back from a product (popstate) must NOT re-rank —
@@ -633,8 +666,11 @@ export default function HomeFeed() {
       }
       setVisualResults(Array.isArray(data.products) ? data.products : []);
     } catch (err: any) {
-      setVisualError(err?.message || 'Photo search failed. Please try again.');
+      const msg = err?.message || 'Photo search failed. Please try again.';
+      console.error('[visual-search]', err);
+      setVisualError(msg);
       setVisualResults([]);
+      showGlobalToast(msg, 'error');
     } finally {
       setVisualSearching(false);
     }
@@ -975,7 +1011,6 @@ export default function HomeFeed() {
               id="image-search-input"
               type="file"
               accept="image/*"
-              capture="environment"
               className="hidden"
               onChange={handleImagePicked}
             />

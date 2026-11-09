@@ -3,8 +3,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
-import { IonIcon } from '@ionic/react';
-import { imageOutline, timeOutline, ellipsisVertical, createOutline, trashOutline, copyOutline, checkmarkCircleOutline } from 'ionicons/icons';
+import { IonIcon } from '@/shared/Icon/Icon';
+import { imageOutline, timeOutline, ellipsisVertical, createOutline, trashOutline, copyOutline, checkmarkCircleOutline, megaphoneOutline } from 'ionicons/icons';
 
 const timeAgo = (dateString: string) => {
   const date = new Date(dateString);
@@ -42,6 +42,7 @@ interface ProductCardProps {
   status: string;
   createdAt: string;
   imageUrl?: string | null;
+  sponsoredUntil?: string | null;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
   onDuplicate: (id: string) => void;
@@ -52,7 +53,7 @@ const DROPDOWN_WIDTH = 208; // px — matches w-52 below
 const VIEWPORT_MARGIN = 8;  // keep a small gap from the screen edge
 
 export const ProductCard = ({
-  id, title, basePrice, condition, status, createdAt, imageUrl,
+  id, title, basePrice, condition, status, createdAt, imageUrl, sponsoredUntil,
   onEdit, onDelete, onDuplicate, onMarkSold
 }: ProductCardProps) => {
   const router = useRouter();
@@ -217,6 +218,12 @@ export const ProductCard = ({
           <IonIcon icon={imageOutline} className="text-4xl text-gray-300 dark:text-gray-700" />
         )}
         <div className="absolute top-2 left-2 bg-black/70 text-white text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider z-10">{condition}</div>
+        {sponsoredUntil && new Date(sponsoredUntil).getTime() > Date.now() && (
+          <div className="absolute top-8 left-2 bg-blue-600 text-white text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-0.5 z-10">
+            <IonIcon icon={megaphoneOutline} className="text-[10px]" />
+            Sponsored
+          </div>
+        )}
 
         {status === 'SOLD' && (
           <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-20">
