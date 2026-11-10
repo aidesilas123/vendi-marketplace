@@ -158,6 +158,12 @@ const isMobileDevice = () => {
   return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || ('ontouchstart' in window && window.innerWidth < 768);
 };
 
+const formatDuration = (seconds: number) => {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s < 10 ? '0' : ''}${s}`;
+};
+
 const safePlay = (audio: HTMLAudioElement) => {
   const p = audio.play();
   if (p !== undefined) {
@@ -167,6 +173,304 @@ const safePlay = (audio: HTMLAudioElement) => {
   }
 };
 
+// --- Composer ---
+// The input area lives in its own component with its OWN text state, so
+// typing re-renders only this small subtree — never the whole room (the
+// message list, header, and overlays). The room only learns the text when
+// the user hits send (onSendText). Everything the composer shows that comes
+// from the room (recording state, reply/edit target, deal status) arrives
+// as props, so it stays correct when the room re-renders for other reasons.
+// The typing-presence refs are the room's (passed down) so the room-switch
+// effect and the unmount cleanup can still reach them.
+type ComposerProps = {
+  txRef: string | null;
+  currentUser: any;
+  isDealClosed: boolean;
+  txStatus: string;
+  replyTarget: ReplyTarget | null;
+  editingMessageId: string | null;
+  editContent: string;
+  onCancelReply: () => void;
+  onCancelEdit: () => void;
+  recordState: RecordState;
+  recordingDuration: number;
+  liveLevels: number[];
+  micDragOpacity: number;
+  dragOffset: { x: number; y: number };
+  // Named exactly like the room's handlers so the extracted composer JSX
+  // needs no renames — these are the room's functions, passed down.
+  cancelRecordingAction: () => void;
+  togglePauseAction: () => void;
+  stopAndSendAction: () => void;
+  handlePointerDown: (e: React.PointerEvent<HTMLButtonElement>) => void;
+  handlePointerMove: (e: React.PointerEvent<HTMLButtonElement>) => void;
+  handlePointerUp: (e: React.PointerEvent<HTMLButtonElement>) => void;
+  handleAttachmentClick: () => void;
+  handleCameraClick: () => void;
+  onSendText: (text: string) => void;
+  broadcastActivity: (activity: PartnerActivity) => void;
+  renderWaveform: (opts: { live?: boolean; levels?: number[]; progress?: number; msgId?: string; url?: string }) => React.ReactNode;
+  myActivityRef: React.MutableRefObject<PartnerActivity>;
+  lastTypingBroadcastTime: React.MutableRefObject<number>;
+  typingStopTimeoutRef: React.MutableRefObject<NodeJS.Timeout | null>;
+};
+
+function Composer({
+  txRef, currentUser, isDealClosed, txStatus, replyTarget, editingMessageId, editContent,
+  onCancelReply, onCancelEdit, recordState, recordingDuration, liveLevels, micDragOpacity, dragOffset,
+  cancelRecordingAction, togglePauseAction, stopAndSendAction, handlePointerDown, handlePointerMove, handlePointerUp,
+  handleAttachmentClick, handleCameraClick, onSendText, broadcastActivity, renderWaveform,
+  myActivityRef, lastTypingBroadcastTime, typingStopTimeoutRef,
+}: ComposerProps) {
+  const [text, setText] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const resizeTextarea = () => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
+    }
+  };
+
+  // New room (txRef changed): drop the previous room's draft + typing state.
+  const prevTxRef = useRef(txRef);
+  useEffect(() => {
+    if (prevTxRef.current !== txRef) {
+      prevTxRef.current = txRef;
+      setText('');
+      if (typingStopTimeoutRef.current) clearTimeout(typingStopTimeoutRef.current);
+      broadcastActivity(null);
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    }
+  }, [txRef, broadcastActivity, typingStopTimeoutRef]);
+
+  // Replying focuses the box; starting an edit loads the message text.
+  const prevEditingRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (replyTarget) textareaRef.current?.focus();
+  }, [replyTarget]);
+  useEffect(() => {
+    if (editingMessageId && editingMessageId !== prevEditingRef.current) {
+      setText(editContent);
+      textareaRef.current?.focus();
+      requestAnimationFrame(resizeTextarea);
+    }
+    prevEditingRef.current = editingMessageId;
+  }, [editingMessageId, editContent]);
+
+  const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setText(e.target.value);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
+    }
+    const val = e.target.value.trim();
+    const now = Date.now();
+    // Broadcast typing presence with 2.2s heartbeat so it doesn't clear while continuously typing
+    if (val) {
+      if (myActivityRef.current !== 'typing' || now - lastTypingBroadcastTime.current > 1200) {
+        lastTypingBroadcastTime.current = now;
+        broadcastActivity('typing');
+      }
+      if (typingStopTimeoutRef.current) clearTimeout(typingStopTimeoutRef.current);
+      typingStopTimeoutRef.current = setTimeout(() => {
+        broadcastActivity(null);
+        lastTypingBroadcastTime.current = 0;
+      }, TYPING_BROADCAST_IDLE_MS);
+    } else {
+      if (typingStopTimeoutRef.current) clearTimeout(typingStopTimeoutRef.current);
+      if (myActivityRef.current === 'typing') {
+        broadcastActivity(null);
+        lastTypingBroadcastTime.current = 0;
+      }
+    }
+  };
+
+  const handleSend = () => {
+    const t = text.trim();
+    if (!t || !currentUser) return;
+    // Keep the keyboard open: focus first, synchronously inside the tap.
+    textareaRef.current?.focus();
+    if (typingStopTimeoutRef.current) clearTimeout(typingStopTimeoutRef.current);
+    broadcastActivity(null);
+    onSendText(t);
+    setText('');
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+  };
+
+  const handleCancelBanner = () => {
+    if (editingMessageId) {
+      setText('');
+      onCancelEdit();
+    } else {
+      onCancelReply();
+    }
+  };
+
+  return (
+      <div className="flex-shrink-0 px-2.5 pt-1 pb-[max(var(--sab),12px)] mb-1 bg-transparent relative z-50">
+        {/* Reply / Edit banner above the composer */}
+        {(replyTarget || editingMessageId) && (
+          <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between gap-2 bg-white dark:bg-[#1f2937] !rounded-xl px-3 py-2 shadow-md border-l-4 !border-orange-500 animate-in slide-in-from-bottom-2 duration-150">
+            <div className="flex flex-col overflow-hidden min-w-0 flex-1">
+              <span className="text-[11px] font-black !text-orange-500 uppercase tracking-wide">
+                {editingMessageId ? 'Editing message' : `Replying to ${replyTarget?.senderLabel}`}
+              </span>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                {replyTarget?.type === 'audio' && (
+                  <IonIcon icon={micOutline} className="text-orange-500 text-sm flex-shrink-0" />
+                )}
+                {replyTarget?.type === 'image' && (
+                  <IonIcon icon={imageOutline} className="text-orange-500 text-sm flex-shrink-0" />
+                )}
+                <span className="text-[13px] text-gray-600 dark:text-gray-300 truncate">
+                  {editingMessageId ? editContent : replyTarget?.content}
+                </span>
+              </div>
+            </div>
+            {replyTarget?.type === 'image' && replyTarget.mediaUrl && (
+              <img
+                src={replyTarget.mediaUrl}
+                alt="Reply preview"
+                className="w-10 h-10 object-cover !rounded-lg flex-shrink-0 border border-gray-200 dark:border-gray-700"
+              />
+            )}
+            <button
+              onClick={handleCancelBanner}
+              className="!p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 !rounded-full flex-shrink-0"
+            >
+              <IonIcon icon={closeOutline} className="text-xl" />
+            </button>
+          </div>
+        )}
+        {isDealClosed ? (
+          <div className="max-w-2xl mx-auto w-full min-w-0 bg-gray-100 dark:bg-gray-800/90 border border-gray-200 dark:border-gray-700/80 !rounded-2xl p-3.5 text-center shadow-sm">
+            <div className="flex items-center justify-center gap-2 text-gray-500 dark:text-gray-400">
+              <IonIcon icon={lockClosedOutline} className="text-base flex-shrink-0" />
+              <p className="text-xs sm:text-sm font-semibold">
+                This transaction is {txStatus}. Messages can no longer be sent.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="max-w-2xl mx-auto w-full min-w-0 flex items-end gap-2 relative">
+            {(recordState === 'locked' || recordState === 'paused') ? (
+              <>
+                <div className="flex-1 min-w-0 overflow-hidden bg-white dark:bg-black !rounded-[24px] min-h-[48px] flex items-center justify-between px-2 shadow-md border border-gray-200 dark:border-gray-700 transition-colors">
+                  <button
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); cancelRecordingAction(); }}
+                    className="!w-9 !h-9 !min-w-[36px] !min-h-[36px] !aspect-square !rounded-full flex items-center justify-center text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex-shrink-0 z-10"
+                  >
+                    <IonIcon icon={trashOutline} className="text-xl pointer-events-none" />
+                  </button>
+                  <div className="flex-1 min-w-0 flex items-center justify-center gap-1.5 overflow-hidden px-1">
+                    <span className="text-red-500 animate-pulse text-xs font-black flex-shrink-0">●</span>
+                    <span className="text-gray-900 dark:text-white font-mono text-sm tracking-wider font-medium flex-shrink-0 min-w-[36px]">
+                      {formatDuration(recordingDuration)}
+                    </span>
+                    {renderWaveform({ live: recordState === 'locked', levels: liveLevels })}
+                  </div>
+                  <button onClick={togglePauseAction} className="!w-9 !h-9 !min-w-[36px] !min-h-[36px] !aspect-square !rounded-full bg-gray-100 dark:bg-gray-700 flex items-center justify-center text-gray-900 dark:text-white active:scale-95 transition-transform flex-shrink-0 z-10">
+                    <IonIcon icon={recordState === 'locked' ? pauseOutline : playOutline} className="text-sm" />
+                  </button>
+                </div>
+                <button
+                  onClick={stopAndSendAction} disabled={!currentUser}
+                  className="!w-12 !h-12 !min-w-[48px] !min-h-[48px] !p-0 !rounded-full flex-shrink-0 !aspect-square !bg-orange-500 text-white !flex items-center justify-center shadow-lg active:scale-90 transition-transform disabled:opacity-50"
+                >
+                  <IonIcon icon={sendOutline} className="text-xl ml-1" />
+                </button>
+              </>
+            ) : (
+              <>
+                {recordState === 'holding' && (
+                  <div className="absolute left-0 right-[56px] top-0 bottom-0 z-10 flex items-center justify-between pl-4 pr-6 bg-white dark:bg-[#1f2937] !rounded-[24px] shadow-sm pointer-events-none">
+                    <div className="flex items-center gap-2">
+                      <IonIcon icon={micOutline} className="text-red-500 text-xl animate-pulse" />
+                      <span className="text-gray-900 dark:text-white font-mono text-base">{formatDuration(recordingDuration)}</span>
+                    </div>
+                    <div className="flex items-center gap-1 text-gray-400" style={{ opacity: micDragOpacity }}>
+                      <IonIcon icon={chevronBackOutline} className="text-lg animate-[bounce_1s_infinite]" style={{ animationDirection: 'reverse' }} />
+                      <span className="text-xs font-bold uppercase tracking-widest">Slide to cancel</span>
+                    </div>
+                  </div>
+                )}
+                <div className="flex-1 min-w-0 overflow-hidden bg-white dark:bg-black !rounded-[24px] min-h-[48px] flex items-end px-1 shadow-md border border-gray-200 dark:border-gray-700 py-1 z-0">
+                  <div className="flex items-center self-end mb-[3px] flex-shrink-0">
+                    <button onClick={handleAttachmentClick} className="!p-2 text-gray-500 dark:text-gray-400 active:scale-95 transition-transform !rounded-full">
+                      <IonIcon icon={attachOutline} className="text-[22px] pointer-events-none" />
+                    </button>
+                  </div>
+                  <textarea
+                    ref={textareaRef}
+                    value={text}
+                    onChange={handleInput}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        if (!isMobileDevice()) {
+                          e.preventDefault();
+                          handleSend();
+                        }
+                      }
+                    }}
+                    placeholder={editingMessageId ? 'Edit message' : 'Message'}
+                    className="flex-1 min-w-0 max-h-32 min-h-[40px] bg-transparent outline-none border-none resize-none px-2 py-2.5 text-[15px] text-gray-900 dark:text-white placeholder-gray-400 scrollbar-hide leading-tight"
+                    rows={1}
+                  />
+                  <div className="flex items-center self-end mb-[3px] pr-1 flex-shrink-0">
+                    <button onClick={handleCameraClick} className="!p-2 text-gray-500 dark:text-gray-400 active:scale-95 transition-transform !rounded-full">
+                      <IonIcon icon={cameraOutline} className="text-[22px] pointer-events-none" />
+                    </button>
+                  </div>
+                </div>
+                <div className="relative z-20 flex items-end flex-shrink-0">
+                  {recordState === 'holding' && (
+                    <div
+                      className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-none transition-transform duration-75"
+                      style={{ bottom: `${64 + Math.min(80, Math.max(0, -dragOffset.y))}px` }}
+                    >
+                       <div className={`!rounded-full p-3 shadow-xl mb-1 border transition-colors ${
+                         dragOffset.y < -60
+                           ? 'bg-orange-500 border-orange-500 text-white'
+                           : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 text-gray-500'
+                       }`}>
+                         <IonIcon icon={lockClosedOutline} className="text-xl" />
+                       </div>
+                       <IonIcon icon={chevronBackOutline} className="text-gray-400 text-xl rotate-90 animate-bounce" />
+                    </div>
+                  )}
+                  {text.trim() ? (
+                    <button
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={handleSend} disabled={!currentUser}
+                      className="!w-12 !h-12 !min-w-[48px] !min-h-[48px] !p-0 !rounded-full flex-shrink-0 !aspect-square !bg-orange-500 text-white !flex items-center justify-center shadow-lg active:scale-90 transition-transform disabled:opacity-50"
+                    >
+                      <IonIcon icon={sendOutline} className="text-xl ml-1" />
+                    </button>
+                  ) : (
+                    <button
+                      onPointerDown={handlePointerDown}
+                      onPointerMove={handlePointerMove}
+                      onPointerUp={handlePointerUp}
+                      onPointerCancel={handlePointerUp} disabled={!currentUser}
+                      style={{
+                        transform: `translate(${dragOffset.x}px, ${dragOffset.y}px) ${recordState === 'holding' ? 'scale(1.3)' : 'scale(1)'}`,
+                        opacity: micDragOpacity
+                      }}
+                      className={`!w-12 !h-12 !min-w-[48px] !min-h-[48px] !rounded-full flex-shrink-0 !aspect-square !flex items-center justify-center shadow-lg transition-transform touch-none select-none ${!currentUser ? 'opacity-50' : ''} ${recordState === 'holding' ? '!bg-orange-500 text-white' : '!bg-orange-500 text-white hover:!bg-orange-600'}`}
+                    >
+                      <IonIcon icon={micOutline} className="text-[22px]" />
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+  );
+}
+
 function DealRoomChat() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -174,7 +478,6 @@ function DealRoomChat() {
   const partnerId = searchParams.get('seller');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
   const pressTimeRef = useRef<number>(0);
   const activeStateRef = useRef<RecordState>('idle');
@@ -467,7 +770,6 @@ function DealRoomChat() {
     },
     [mutate]
   );
-  const [messageText, setMessageText] = useState('');
   const [showMenu, setShowMenu] = useState(false);
   const [partnerActivity, setPartnerActivity] = useState<PartnerActivity>(null);
   const [selectedMedia, setSelectedMedia] = useState<SelectedMedia | null>(null);
@@ -1195,35 +1497,10 @@ function DealRoomChat() {
     });
   }, [messages, currentUser, txRef]);
 
-  const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setMessageText(e.target.value);
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
-    }
-    const val = e.target.value.trim();
-    const now = Date.now();
-    // Broadcast typing presence with 2.2s heartbeat so it doesn't clear while continuously typing
-    if (val) {
-      if (myActivityRef.current !== 'typing' || now - lastTypingBroadcastTime.current > 1200) {
-        lastTypingBroadcastTime.current = now;
-        broadcastActivity('typing');
-      }
-      if (typingStopTimeoutRef.current) clearTimeout(typingStopTimeoutRef.current);
-      typingStopTimeoutRef.current = setTimeout(() => {
-        broadcastActivity(null);
-        lastTypingBroadcastTime.current = 0;
-      }, TYPING_BROADCAST_IDLE_MS);
-    } else {
-      if (typingStopTimeoutRef.current) clearTimeout(typingStopTimeoutRef.current);
-      if (myActivityRef.current === 'typing') {
-        broadcastActivity(null);
-        lastTypingBroadcastTime.current = 0;
-      }
-    }
-  };
-
   // --- Reply / Edit / Copy / Delete helpers ---
+  // (The composer owns the text box now: typing, the edit draft, and the
+  // textarea live in the Composer component, so these helpers no longer
+  // touch messageText or the textarea.)
   const getPreviewLabel = (msg: any): string => {
     if (msg.is_deleted) return 'This message was deleted';
     if (msg.message_type === 'text') return msg.content || '';
@@ -1236,8 +1513,6 @@ function DealRoomChat() {
   const cancelReply = () => setReplyTarget(null);
   const cancelEdit = () => {
     setEditingMessageId(null);
-    setMessageText('');
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
   };
 
   const handleReplyMessage = (msg: any) => {
@@ -1252,22 +1527,13 @@ function DealRoomChat() {
     });
     setOpenMenuFor(null);
     hapticImpact(ImpactStyle.Light);
-    textareaRef.current?.focus();
   };
 
   const handleEditMessage = (msg: any) => {
     if (msg.message_type !== 'text') return;
     setReplyTarget(null);
     setEditingMessageId(msg.id);
-    setMessageText(msg.content || '');
     setOpenMenuFor(null);
-    requestAnimationFrame(() => {
-      textareaRef.current?.focus();
-      if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto';
-        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
-      }
-    });
   };
 
   const handleCopyMessage = async (msg: any) => {
@@ -1512,25 +1778,17 @@ function DealRoomChat() {
     return meta;
   };
 
-  const handleSendText = async () => {
-    if (isDealClosed || !messageText.trim() || !currentUser || !txRef) return;
-    // Keep the keyboard open: tapping send moves focus to the button, which
-    // closes the keyboard. This runs synchronously inside the tap, so the
-    // composer regains focus (and the keyboard) right away.
-    textareaRef.current?.focus();
-    const textToSend = messageText.trim();
-
-    // Sending clears any in-flight typing presence immediately.
-    if (typingStopTimeoutRef.current) clearTimeout(typingStopTimeoutRef.current);
-    broadcastActivity(null);
+  // The Composer owns the text box and hands the text over on send (it also
+  // clears the box and the typing presence itself).
+  const handleSendText = async (textToSend: string) => {
+    const text = textToSend.trim();
+    if (isDealClosed || !text || !currentUser || !txRef) return;
 
     if (editingMessageId) {
       const idBeingEdited = editingMessageId;
-      updateMessages((prev) => prev.map((m) => m.id === idBeingEdited ? { ...m, content: textToSend, is_edited: true } : m));
-      setMessageText('');
+      updateMessages((prev) => prev.map((m) => m.id === idBeingEdited ? { ...m, content: text, is_edited: true } : m));
       setEditingMessageId(null);
-      if (textareaRef.current) textareaRef.current.style.height = 'auto';
-      const { error } = await supabase.from('messages').update({ content: textToSend, is_edited: true }).eq('id', idBeingEdited);
+      const { error } = await supabase.from('messages').update({ content: text, is_edited: true }).eq('id', idBeingEdited);
       if (error) {
         console.error('[Chat] Failed to save edit on the server (does your `messages` table have an `is_edited` boolean column?):', error.message);
       }
@@ -1539,7 +1797,7 @@ function DealRoomChat() {
 
     requestAnimationFrame(() => scrollToBottom(true));
 
-    void sendTextMessage(textToSend);
+    void sendTextMessage(text);
   };
 
   /** Core text send, shared by the composer and the native quick-reply deep link. */
@@ -1554,9 +1812,7 @@ function DealRoomChat() {
       ...replyMeta
     };
     setOptimisticMsgs((prev) => [...prev, optimisticMsg]);
-    setMessageText('');
     setReplyTarget(null);
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     const { data: savedMsg, error } = await supabase.from('messages').insert({
       transaction_ref: txRef, sender_id: currentUser.id, receiver_id: partnerId,
@@ -2062,7 +2318,7 @@ function DealRoomChat() {
 
   const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     e.stopPropagation();
-    if (isDealClosed || messageText.trim()) return;
+    if (isDealClosed) return;
     if (!currentUser) {
       showError('Hold On', 'Still loading your session — try again in a moment.');
       return;
@@ -2330,12 +2586,6 @@ function DealRoomChat() {
         }
       }
     } catch(err) { console.error(err) }
-  };
-
-  const formatDuration = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
   // --- Playback + drag-to-seek ---
@@ -3182,166 +3432,36 @@ function DealRoomChat() {
       )}
 
       {/* --- INPUT AREA --- */}
-      <div className="flex-shrink-0 px-2.5 pt-1 pb-[max(var(--sab),12px)] mb-1 bg-transparent relative z-50">
-        {/* Reply / Edit banner above the composer */}
-        {(replyTarget || editingMessageId) && (
-          <div className="max-w-2xl mx-auto mb-2 flex items-center justify-between gap-2 bg-white dark:bg-[#1f2937] !rounded-xl px-3 py-2 shadow-md border-l-4 !border-orange-500 animate-in slide-in-from-bottom-2 duration-150">
-            <div className="flex flex-col overflow-hidden min-w-0 flex-1">
-              <span className="text-[11px] font-black !text-orange-500 uppercase tracking-wide">
-                {editingMessageId ? 'Editing message' : `Replying to ${replyTarget?.senderLabel}`}
-              </span>
-              <div className="flex items-center gap-1.5 mt-0.5">
-                {replyTarget?.type === 'audio' && (
-                  <IonIcon icon={micOutline} className="text-orange-500 text-sm flex-shrink-0" />
-                )}
-                {replyTarget?.type === 'image' && (
-                  <IonIcon icon={imageOutline} className="text-orange-500 text-sm flex-shrink-0" />
-                )}
-                <span className="text-[13px] text-gray-600 dark:text-gray-300 truncate">
-                  {editingMessageId ? (messages.find(m => m.id === editingMessageId)?.content || '') : replyTarget?.content}
-                </span>
-              </div>
-            </div>
-            {replyTarget?.type === 'image' && replyTarget.mediaUrl && (
-              <img
-                src={replyTarget.mediaUrl}
-                alt="Reply preview"
-                className="w-10 h-10 object-cover !rounded-lg flex-shrink-0 border border-gray-200 dark:border-gray-700"
-              />
-            )}
-            <button
-              onClick={editingMessageId ? cancelEdit : cancelReply}
-              className="!p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 !rounded-full flex-shrink-0"
-            >
-              <IonIcon icon={closeOutline} className="text-xl" />
-            </button>
-          </div>
-        )}
-        {isDealClosed ? (
-          <div className="max-w-2xl mx-auto w-full min-w-0 bg-gray-100 dark:bg-gray-800/90 border border-gray-200 dark:border-gray-700/80 !rounded-2xl p-3.5 text-center shadow-sm">
-            <div className="flex items-center justify-center gap-2 text-gray-500 dark:text-gray-400">
-              <IonIcon icon={lockClosedOutline} className="text-base flex-shrink-0" />
-              <p className="text-xs sm:text-sm font-semibold">
-                This transaction is {txStatus}. Messages can no longer be sent.
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className="max-w-2xl mx-auto w-full min-w-0 flex items-end gap-2 relative">
-            {(recordState === 'locked' || recordState === 'paused') ? (
-              <>
-                <div className="flex-1 min-w-0 overflow-hidden bg-white dark:bg-black !rounded-[24px] min-h-[48px] flex items-center justify-between px-2 shadow-md border border-gray-200 dark:border-gray-700 transition-colors">
-                  <button
-                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); cancelRecordingAction(); }}
-                    className="!w-9 !h-9 !min-w-[36px] !min-h-[36px] !aspect-square !rounded-full flex items-center justify-center text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex-shrink-0 z-10"
-                  >
-                    <IonIcon icon={trashOutline} className="text-xl pointer-events-none" />
-                  </button>
-                  <div className="flex-1 min-w-0 flex items-center justify-center gap-1.5 overflow-hidden px-1">
-                    <span className="text-red-500 animate-pulse text-xs font-black flex-shrink-0">●</span>
-                    <span className="text-gray-900 dark:text-white font-mono text-sm tracking-wider font-medium flex-shrink-0 min-w-[36px]">
-                      {formatDuration(recordingDuration)}
-                    </span>
-                    {renderWaveform({ live: recordState === 'locked', levels: liveLevels })}
-                  </div>
-                  <button onClick={togglePauseAction} className="!w-9 !h-9 !min-w-[36px] !min-h-[36px] !aspect-square !rounded-full bg-gray-100 dark:bg-gray-700 flex items-center justify-center text-gray-900 dark:text-white active:scale-95 transition-transform flex-shrink-0 z-10">
-                    <IonIcon icon={recordState === 'locked' ? pauseOutline : playOutline} className="text-sm" />
-                  </button>
-                </div>
-                <button
-                  onClick={stopAndSendAction} disabled={!currentUser}
-                  className="!w-12 !h-12 !min-w-[48px] !min-h-[48px] !p-0 !rounded-full flex-shrink-0 !aspect-square !bg-orange-500 text-white !flex items-center justify-center shadow-lg active:scale-90 transition-transform disabled:opacity-50"
-                >
-                  <IonIcon icon={sendOutline} className="text-xl ml-1" />
-                </button>
-              </>
-            ) : (
-              <>
-                {recordState === 'holding' && (
-                  <div className="absolute left-0 right-[56px] top-0 bottom-0 z-10 flex items-center justify-between pl-4 pr-6 bg-white dark:bg-[#1f2937] !rounded-[24px] shadow-sm pointer-events-none">
-                    <div className="flex items-center gap-2">
-                      <IonIcon icon={micOutline} className="text-red-500 text-xl animate-pulse" />
-                      <span className="text-gray-900 dark:text-white font-mono text-base">{formatDuration(recordingDuration)}</span>
-                    </div>
-                    <div className="flex items-center gap-1 text-gray-400" style={{ opacity: micDragOpacity }}>
-                      <IonIcon icon={chevronBackOutline} className="text-lg animate-[bounce_1s_infinite]" style={{ animationDirection: 'reverse' }} />
-                      <span className="text-xs font-bold uppercase tracking-widest">Slide to cancel</span>
-                    </div>
-                  </div>
-                )}
-                <div className="flex-1 min-w-0 overflow-hidden bg-white dark:bg-black !rounded-[24px] min-h-[48px] flex items-end px-1 shadow-md border border-gray-200 dark:border-gray-700 py-1 z-0">
-                  <div className="flex items-center self-end mb-[3px] flex-shrink-0">
-                    <button onClick={handleAttachmentClick} className="!p-2 text-gray-500 dark:text-gray-400 active:scale-95 transition-transform !rounded-full">
-                      <IonIcon icon={attachOutline} className="text-[22px] pointer-events-none" />
-                    </button>
-                  </div>
-                  <textarea
-                    ref={textareaRef}
-                    value={messageText}
-                    onChange={handleInput}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        if (!isMobileDevice()) {
-                          e.preventDefault();
-                          handleSendText();
-                        }
-                      }
-                    }}
-                    placeholder={editingMessageId ? 'Edit message' : 'Message'}
-                    className="flex-1 min-w-0 max-h-32 min-h-[40px] bg-transparent outline-none border-none resize-none px-2 py-2.5 text-[15px] text-gray-900 dark:text-white placeholder-gray-400 scrollbar-hide leading-tight"
-                    rows={1}
-                  />
-                  <div className="flex items-center self-end mb-[3px] pr-1 flex-shrink-0">
-                    <button onClick={handleCameraClick} className="!p-2 text-gray-500 dark:text-gray-400 active:scale-95 transition-transform !rounded-full">
-                      <IonIcon icon={cameraOutline} className="text-[22px] pointer-events-none" />
-                    </button>
-                  </div>
-                </div>
-                <div className="relative z-20 flex items-end flex-shrink-0">
-                  {recordState === 'holding' && (
-                    <div
-                      className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-none transition-transform duration-75"
-                      style={{ bottom: `${64 + Math.min(80, Math.max(0, -dragOffset.y))}px` }}
-                    >
-                       <div className={`!rounded-full p-3 shadow-xl mb-1 border transition-colors ${
-                         dragOffset.y < -60
-                           ? 'bg-orange-500 border-orange-500 text-white'
-                           : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 text-gray-500'
-                       }`}>
-                         <IonIcon icon={lockClosedOutline} className="text-xl" />
-                       </div>
-                       <IonIcon icon={chevronBackOutline} className="text-gray-400 text-xl rotate-90 animate-bounce" />
-                    </div>
-                  )}
-                  {messageText.trim() ? (
-                    <button
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={handleSendText} disabled={!currentUser}
-                      className="!w-12 !h-12 !min-w-[48px] !min-h-[48px] !p-0 !rounded-full flex-shrink-0 !aspect-square !bg-orange-500 text-white !flex items-center justify-center shadow-lg active:scale-90 transition-transform disabled:opacity-50"
-                    >
-                      <IonIcon icon={sendOutline} className="text-xl ml-1" />
-                    </button>
-                  ) : (
-                    <button
-                      onPointerDown={handlePointerDown}
-                      onPointerMove={handlePointerMove}
-                      onPointerUp={handlePointerUp}
-                      onPointerCancel={handlePointerUp} disabled={!currentUser}
-                      style={{
-                        transform: `translate(${dragOffset.x}px, ${dragOffset.y}px) ${recordState === 'holding' ? 'scale(1.3)' : 'scale(1)'}`,
-                        opacity: micDragOpacity
-                      }}
-                      className={`!w-12 !h-12 !min-w-[48px] !min-h-[48px] !rounded-full flex-shrink-0 !aspect-square !flex items-center justify-center shadow-lg transition-transform touch-none select-none ${!currentUser ? 'opacity-50' : ''} ${recordState === 'holding' ? '!bg-orange-500 text-white' : '!bg-orange-500 text-white hover:!bg-orange-600'}`}
-                    >
-                      <IonIcon icon={micOutline} className="text-[22px]" />
-                    </button>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-        )}
-      </div>
+      <Composer
+        txRef={txRef}
+        currentUser={currentUser}
+        isDealClosed={isDealClosed}
+        txStatus={txStatus}
+        replyTarget={replyTarget}
+        editingMessageId={editingMessageId}
+        editContent={editingMessageId ? (messages.find(m => m.id === editingMessageId)?.content || '') : ''}
+        onCancelReply={cancelReply}
+        onCancelEdit={cancelEdit}
+        recordState={recordState}
+        recordingDuration={recordingDuration}
+        liveLevels={liveLevels}
+        micDragOpacity={micDragOpacity}
+        dragOffset={dragOffset}
+        cancelRecordingAction={cancelRecordingAction}
+        togglePauseAction={togglePauseAction}
+        stopAndSendAction={stopAndSendAction}
+        handlePointerDown={handlePointerDown}
+        handlePointerMove={handlePointerMove}
+        handlePointerUp={handlePointerUp}
+        handleAttachmentClick={handleAttachmentClick}
+        handleCameraClick={handleCameraClick}
+        onSendText={handleSendText}
+        broadcastActivity={broadcastActivity}
+        renderWaveform={renderWaveform}
+        myActivityRef={myActivityRef}
+        lastTypingBroadcastTime={lastTypingBroadcastTime}
+        typingStopTimeoutRef={typingStopTimeoutRef}
+      />
 
 
 

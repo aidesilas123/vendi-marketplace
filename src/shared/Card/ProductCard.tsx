@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { IonIcon } from '@/shared/Icon/Icon';
 import { imageOutline, timeOutline, ellipsisVertical, createOutline, trashOutline, copyOutline, checkmarkCircleOutline, megaphoneOutline } from 'ionicons/icons';
+import { optimizeImageUrl } from '@/lib/images';
 
 const timeAgo = (dateString: string) => {
   const date = new Date(dateString);
@@ -19,20 +20,13 @@ const timeAgo = (dateString: string) => {
   return `${days}d ago`;
 };
 
-// Cards show a small square image, so asking Supabase for a resized copy saves a lot of data on mobile.
-// Image transformations are only available on some Supabase plans, so this is OFF by default.
-// Turn it on if your plan includes them. If a resized image fails to load, the card falls
-// back to the original automatically.
+// Cards show a small square image, so asking the host for a resized copy saves a lot
+// of data and decode time on mobile. Supabase transformations are only available on
+// some plans, so that path stays OFF by default (see USE_IMAGE_TRANSFORMS);
+// Cloudinary transformations are free-tier and always on. If a resized image fails
+// to load, the card falls back to the original automatically.
 const USE_IMAGE_TRANSFORMS = false;
 const THUMB_WIDTH = 400;
-const THUMB_QUALITY = 70;
-
-const toThumbnail = (url: string) => {
-  const marker = '/storage/v1/object/public/';
-  if (!USE_IMAGE_TRANSFORMS || !url.includes(marker)) return url;
-  const resized = url.replace(marker, '/storage/v1/render/image/public/');
-  return `${resized}${resized.includes('?') ? '&' : '?'}width=${THUMB_WIDTH}&quality=${THUMB_QUALITY}`;
-};
 
 interface ProductCardProps {
   id: string;
@@ -72,7 +66,7 @@ export const ProductCard = ({
     setImageFailed(false);
   }, [imageUrl]);
 
-  const imageSrc = imageUrl ? (thumbFailed ? imageUrl : toThumbnail(imageUrl)) : null;
+  const imageSrc = imageUrl ? (thumbFailed ? imageUrl : optimizeImageUrl(imageUrl, THUMB_WIDTH, USE_IMAGE_TRANSFORMS)) : null;
 
   const handleImageError = () => {
     if (!thumbFailed && imageUrl && imageSrc !== imageUrl) {

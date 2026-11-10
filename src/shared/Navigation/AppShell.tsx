@@ -204,12 +204,17 @@ export const AppShell = ({ children }: AppShellProps) => {
     }
   };
 
-  // Bottom rubber-band bounce for every page that scrolls in the shell's main
-  // container. Top is off: pages with pull-to-refresh (feed, inbox) own that
-  // edge. The hook ignores touches inside nested scrollers (e.g. the
+  // Rubber-band bounce for pages that scroll in the shell's main
+  // container. Top is off on routes that own their own pull-to-refresh
+  // (/messages has its strip, /chats and /notifications use the shared
+  // PullToRefresh) — the shell band and the page loader would fight over
+  // the same pull. /messages has no bottom bounce of its own either, and
+  // a short list must not move at all, so its bottom edge is off too.
+  // The hook ignores touches inside nested scrollers (e.g. the
   // transactions page's own container), so they never double-bounce.
   const bounceRef = useRef<HTMLDivElement>(null);
-  useRubberBand(bounceRef, { scrollerId: 'main-scroll-container', top: true, bottom: true, ready: showShell });
+  const ownsPull = pathname === '/messages' || pathname === '/notifications' || pathname === '/chats';
+  useRubberBand(bounceRef, { scrollerId: 'main-scroll-container', top: !ownsPull, bottom: pathname !== '/messages', ready: showShell });
 
   // Browser tab title follows the page. Every page is a client component,
   // so per-page `metadata` exports aren't available — one map covers all.

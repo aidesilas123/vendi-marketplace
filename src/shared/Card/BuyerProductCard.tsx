@@ -10,6 +10,7 @@ import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { IonIcon } from '@ionic/react';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { calcFees, naira } from '@/lib/pricing';
+import { optimizeImageUrl } from '@/lib/images';
 import { useSavedIds } from '@/shared/hooks/useSavedIds';
 import { usePlatformSettings } from '@/shared/hooks/usePlatformSettings';
 import { useImpressionTracking } from '@/lib/impressions';
@@ -37,15 +38,6 @@ const formatViews = (n: number) => {
   return `${n} ${label}`;
 };
 
-/**
- * Ask Supabase for a smaller image. If image transformations aren't enabled on your
- * plan (or the URL isn't a Supabase one), the card falls back to the original on error.
- */
-const optimizeImage = (url: string, width = 480) => {
-  const marker = '/storage/v1/object/public/';
-  if (!url.includes(marker) || url.includes('?')) return url;
-  return url.replace(marker, '/storage/v1/render/image/public/') + `?width=${width}&quality=70`;
-};
 
 interface BuyerProductCardProps {
   product: {
@@ -102,7 +94,7 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
     return null;
   }, [product.images]);
 
-  const imageSrc = coverImage ? (useOriginalImage ? coverImage : optimizeImage(coverImage)) : null;
+  const imageSrc = coverImage ? (useOriginalImage ? coverImage : optimizeImageUrl(coverImage)) : null;
 
   // Cached images can finish loading before React attaches onLoad, so check on mount too
   const imgRef = useCallback((img: HTMLImageElement | null) => {

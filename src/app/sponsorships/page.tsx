@@ -16,7 +16,7 @@ import { payWithMonnify } from '@/lib/monnify';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { Modal } from '@/shared/Modal/Modal';
 import { IonIcon } from '@/shared/Icon/Icon';
-import { megaphoneOutline, chevronBackOutline } from 'ionicons/icons';
+import { megaphoneOutline, chevronBackOutline, flash } from 'ionicons/icons';
 
 // Keep in sync with SPONSOR_PRICE / SPONSOR_DAYS in sponsor-listing/index.ts.
 const SPONSOR_PRICE = 1000;
@@ -46,12 +46,35 @@ type BoostRecord = {
   created_at: string;
   views: number | null;
   image: string | null;
+  product_id: string | null;
 };
 
 const sponsoredUntilLabel = (p: MyListing) => {
   if (!p.sponsored_until) return '';
   const d = new Date(p.sponsored_until);
   return d.toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' });
+};
+
+const DAY_MS = 86400000;
+
+// Boost progress: how far through the current boost a listing is. The start
+// is the listing's earliest boost payment in the history; without one,
+// sponsored_until minus 7 days (a fresh boost). An extension makes the span
+// 14 days, so the bar keeps filling instead of restarting.
+const boostProgress = (p: MyListing, history: BoostRecord[]) => {
+  if (!p.sponsored_until) return null;
+  const end = new Date(p.sponsored_until).getTime();
+  if (Number.isNaN(end)) return null;
+  const starts = history
+    .filter((h) => h.product_id === p.id)
+    .map((h) => new Date(h.created_at).getTime())
+    .filter((t) => !Number.isNaN(t));
+  const start = starts.length > 0 ? Math.min(...starts) : end - SPONSOR_DAYS * DAY_MS;
+  const totalDays = Math.max(Math.round((end - start) / DAY_MS), 1);
+  const elapsedDays = (Date.now() - start) / DAY_MS;
+  const pct = Math.min(Math.max((elapsedDays / totalDays) * 100, 0), 100);
+  const day = Math.min(Math.max(Math.ceil(elapsedDays), 1), totalDays);
+  return { pct, label: `Day ${day} of ${totalDays}` };
 };
 
 export default function SponsorshipsPage() {
@@ -129,6 +152,7 @@ export default function SponsorshipsPage() {
         created_at: t.created_at,
         views: prod ? prod.views : null,
         image: prod?.image ?? null,
+        product_id: pid,
       };
     });
   }, []);
@@ -348,6 +372,7 @@ export default function SponsorshipsPage() {
           <div className="flex flex-col gap-3">
             {listings.map((listing) => {
               const sponsored = isSponsored(listing);
+              const progress = sponsored ? boostProgress(listing, history) : null;
               const busy = sponsoringId === listing.id;
               const cover = listing.images?.[0] ?? null;
               return (
@@ -366,6 +391,23 @@ export default function SponsorshipsPage() {
                       </p>
                     ) : (
                       <p className="text-xs font-medium text-muted-foreground mt-1">Not sponsored</p>
+                    )}
+                    {progress && (
+                      <div className="mt-2">
+                        <div className="relative h-1.5 rounded-full bg-gray-200 dark:bg-white/10">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-orange-500 via-green-500 to-purple-500"
+                            style={{ width: `${progress.pct}%` }}
+                          />
+                          <span
+                            className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 animate-pulse"
+                            style={{ left: `${progress.pct}%` }}
+                          >
+                            <IonIcon icon={flash} className="text-[11px] text-orange-500" />
+                          </span>
+                        </div>
+                        <p className="text-[11px] font-bold text-muted-foreground mt-1">{progress.label}</p>
+                      </div>
                     )}
                     <button
                       type="button"

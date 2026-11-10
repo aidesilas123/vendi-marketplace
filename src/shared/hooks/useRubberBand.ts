@@ -18,6 +18,13 @@
 //    the default, 'main-scroll-container'. A page with its own scroller passes its id.
 //  - `ready` is for pages that return early (loading / not-found) before the wrapper
 //    exists. Pass false until the wrapper is rendered so the listeners attach later.
+//
+// Perf: the touchmove handler must NEVER read layout (scrollTop / scrollHeight /
+// clientHeight). A read forces a synchronous layout whenever the DOM is dirty —
+// images landing, live updates — so every touchmove frame paid a layout and the
+// fling died instead of gliding. Edge state is cached and refreshed only from the
+// scroller's `scroll` event (layout is already clean there), a ResizeObserver, and
+// once per gesture on touchstart. onMove reads plain variables only.
 
 import { useEffect, RefObject } from 'react';
 
@@ -50,13 +57,30 @@ export function useRubberBand(
     let axis: 'x' | 'y' | null = null;
     let edge: 1 | -1 | 0 = 0; // 1 = pulling down at the top, -1 = pulling up at the bottom
 
-    const isScrollable = () => scroller.scrollHeight > scroller.clientHeight + 1;
-    const atTop = () => scroller.scrollTop <= 0;
-    const atBottom = () => scroller.scrollTop >= scroller.scrollHeight - scroller.clientHeight - 1;
+    // Cached edge state — the ONLY layout reads live here, refreshed from
+    // scroll/resize (layout already clean) and once per gesture.
+    let scrollable = false;
+    let atTop = true;
+    let atBottom = false;
+
+    const refreshEdge = () => {
+      scrollable = scroller.scrollHeight > scroller.clientHeight + 1;
+      atTop = scroller.scrollTop <= 0;
+      atBottom = scroller.scrollTop >= scroller.scrollHeight - scroller.clientHeight - 1;
+    };
+    refreshEdge();
+
+    const onScroll = () => refreshEdge();
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+
+    const ro = new ResizeObserver(refreshEdge);
+    ro.observe(scroller);
+    ro.observe(content);
 
     const onStart = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
-      if (!isScrollable()) return;
+      refreshEdge();
+      if (!scrollable) return;
       // If the touch starts inside a nested scroller (a page with its own
       // scroll container, e.g. the transactions list or a PullToRefresh
       // body), that scroller owns the gesture — otherwise the page would
@@ -88,9 +112,9 @@ export function useRubberBand(
       if (axis !== 'y') return;
 
       if (edge === 0) {
-        if (!isScrollable()) return;
-        if (top && dy > 0 && atTop()) edge = 1;
-        else if (bottom && dy < 0 && atBottom()) edge = -1;
+        if (!scrollable) return;
+        if (top && dy > 0 && atTop) edge = 1;
+        else if (bottom && dy < 0 && atBottom) edge = -1;
         else return;
         startY = t.clientY; // measure the pull from the moment the edge was reached
         return;
@@ -119,10 +143,12 @@ export function useRubberBand(
     scroller.addEventListener('touchcancel', release);
 
     return () => {
+      scroller.removeEventListener('scroll', onScroll);
       scroller.removeEventListener('touchstart', onStart);
       scroller.removeEventListener('touchmove', onMove);
       scroller.removeEventListener('touchend', release);
       scroller.removeEventListener('touchcancel', release);
+      ro.disconnect();
       content.style.transition = '';
       content.style.transform = '';
     };

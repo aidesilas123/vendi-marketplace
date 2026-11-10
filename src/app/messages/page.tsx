@@ -2,6 +2,7 @@
 // src/app/messages/page.tsx
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import useSWR, { mutate as globalMutate } from 'swr';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
@@ -249,6 +250,160 @@ const rubber = (distance: number) =>
 const PULL_THRESHOLD = 64; // px of stretch needed to trigger a refresh
 const STRIP_REST_H = 52; // strip height while the refresh spinner runs
 
+// Message preview for one inbox row (module-level so the memoized row can
+// use it without closing over page state).
+function renderMessagePreview(msg: any, userId: string | null | undefined) {
+  const isMe = msg.sender_id === userId;
+
+  // WhatsApp-style ticks: single grey = sent, double grey = delivered, double orange = read
+  const tickIcon = isMe ? (
+    <IonIcon
+      icon={msg.status === 'sent' ? checkmarkOutline : checkmarkDoneOutline}
+      className={`text-[16px] mr-1 shrink-0 ${
+        msg.status === 'read' ? 'text-orange-500' : 'text-gray-400'
+      }`}
+    />
+  ) : null;
+
+  if (msg.is_deleted) {
+    return (
+      <div className="flex items-center text-gray-400 text-sm italic">
+        <IonIcon icon={closeOutline} className="text-[15px] mr-1 shrink-0" />
+        <span className="truncate">This message was deleted</span>
+      </div>
+    );
+  }
+
+  if (msg.message_type === 'audio') {
+    return (
+      <div className="flex items-center text-gray-500 dark:text-gray-400 text-sm">
+        {tickIcon}
+        <IonIcon icon={micOutline} className="text-orange-500 text-[15px] mr-1 shrink-0" />
+        <span className="truncate">Voice message</span>
+      </div>
+    );
+  }
+
+  if (msg.message_type === 'image') {
+    return (
+      <div className="flex items-center text-gray-500 dark:text-gray-400 text-sm">
+        {tickIcon}
+        <IonIcon icon={imageOutline} className="text-[15px] mr-1 shrink-0" />
+        <span className="truncate">Photo</span>
+      </div>
+    );
+  }
+
+  if (msg.message_type === 'video') {
+    return (
+      <div className="flex items-center text-gray-500 dark:text-gray-400 text-sm">
+        {tickIcon}
+        <IonIcon icon={playOutline} className="text-[15px] mr-1 shrink-0" />
+        <span className="truncate">Video</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center text-gray-500 dark:text-gray-400 text-sm w-full">
+      {tickIcon}
+      <span className="truncate">{msg.content}</span>
+    </div>
+  );
+}
+
+type ChatRowProps = {
+  chat: any;
+  userId: string | null | undefined;
+  activity?: 'typing' | 'recording';
+  onOpen: (chat: any) => void;
+  onPrefetch: (chat: any) => void;
+  onViewImage: (image: string) => void;
+};
+
+// One inbox row, memoized: typing in the search box re-renders the page,
+// but a row only re-renders when its own chat object (or activity) changes,
+// so keystrokes stay cheap even with a long list.
+const ChatRow = React.memo(function ChatRow({ chat, userId, activity, onOpen, onPrefetch, onViewImage }: ChatRowProps) {
+  return (
+    <div
+      // Warm the room before the tap lands: hover (desktop) /
+      // touchstart (mobile) fires ahead of the click, so the heavy
+      // /chats chunk is already loading when the user taps and the
+      // zoom starts with the page ready. Next dedupes repeat
+      // prefetches for the same URL, so no guard is needed.
+      onMouseEnter={() => onPrefetch(chat)}
+      onTouchStart={() => onPrefetch(chat)}
+      onClick={() => onOpen(chat)}
+      className="w-full flex items-center gap-3 px-4 py-2.5 text-left active:bg-gray-100 dark:active:bg-white/5 transition-colors cursor-pointer"
+    >
+      {/* Product Thumbnail — click opens ImageViewer, shows product image instead of user avatar */}
+      <div
+        onClick={(e) => {
+          e.stopPropagation();
+          if (chat.product?.image) {
+            onViewImage(chat.product.image);
+          }
+        }}
+        className="w-12 h-12 rounded-2xl overflow-hidden bg-gray-100 dark:bg-gray-800 flex-shrink-0 cursor-pointer active:scale-95 transition-transform border border-gray-200 dark:border-gray-700/60 shadow-sm relative flex items-center justify-center"
+      >
+        {chat.product?.image ? (
+          <img
+            src={chat.product.image}
+            alt={chat.product.title || "Product"}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center bg-orange-500/10 dark:bg-orange-500/20 text-orange-500">
+            <IonIcon icon={bagOutline} className="text-xl" />
+          </div>
+        )}
+      </div>
+
+      <div className="flex-1 min-w-0 border-b border-gray-100 dark:border-white/5 pb-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 min-w-0 truncate">
+            <h3 className="text-[15px] font-semibold text-gray-900 dark:text-white truncate">
+              {chat.partner?.full_name || 'Vendi User'}
+            </h3>
+            <Badge isVerified={!!chat.partner?.is_verified} size={15} className="shrink-0" />
+          </div>
+          <span
+            className={`text-[12px] shrink-0 ${
+              chat.unreadCount > 0
+                ? 'text-orange-500 font-bold'
+                : 'text-gray-400 font-medium'
+            }`}
+          >
+            {formatTime(chat.latestMessage.created_at)}
+          </span>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 mt-0.5">
+          <div className="flex-1 min-w-0">
+            {activity === 'typing' ? (
+              <span className="text-[13px] font-bold text-orange-500 animate-pulse tracking-wide">
+                typing...
+              </span>
+            ) : activity === 'recording' ? (
+              <span className="text-[13px] font-bold text-orange-500 animate-pulse flex items-center gap-1 tracking-wide">
+                <IonIcon icon={micOutline} className="text-sm shrink-0" /> recording voice note...
+              </span>
+            ) : (
+              renderMessagePreview(chat.latestMessage, userId)
+            )}
+          </div>
+          {chat.unreadCount > 0 && (
+            <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-orange-500 text-white text-[11px] font-bold flex items-center justify-center shadow-sm">
+              {chat.unreadCount}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
 export default function MessagesList() {
   const router = useRouter();
   // undefined = session still checking, null = signed out, string = signed in
@@ -258,6 +413,8 @@ export default function MessagesList() {
   const [searchQuery, setSearchQuery] = useState('');
   const [activityMap, setActivityMap] = useState<Record<string, 'typing' | 'recording'>>({});
   const [viewingImages, setViewingImages] = useState<string[]>([]);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
   const activityTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
 
   // Rubber-band pull-to-refresh: ONLY the list body stretches — the sticky
@@ -440,9 +597,11 @@ export default function MessagesList() {
     }
   }, [mutate]);
 
-  // Body-only rubber band: finger on the list, drag down while the page is at
-  // the top → the strip stretches elastically. Header stays exactly put.
-  // Mouse events mirror the same logic so the pull can be tested on desktop.
+  // Pull-to-refresh: finger on the list, drag down while the page is at
+  // the top → the spinner draws down from the viewport top (portaled, over
+  // the header). The list itself never moves, so a single row can never
+  // scroll away or hide. Mouse events mirror the same logic so the pull
+  // can be tested on desktop.
   useEffect(() => {
     const zone = pullZoneRef.current;
     if (!zone) return;
@@ -536,65 +695,22 @@ export default function MessagesList() {
     });
   }, [chats, activeFilter, searchQuery]);
 
-  const renderMessagePreview = (msg: any) => {
-    const isMe = msg.sender_id === userId;
+  // Stable row callbacks — the memoized rows only re-render when their own
+  // chat object changes, so typing in the search box stays cheap.
+  const handlePrefetchChat = useCallback((chat: any) => {
+    void router.prefetch(`/chats?seller=${chat.partner?.id}&ref=${chat.transaction_ref}`);
+  }, [router]);
 
-    // WhatsApp-style ticks: single grey = sent, double grey = delivered, double orange = read
-    const tickIcon = isMe ? (
-      <IonIcon
-        icon={msg.status === 'sent' ? checkmarkOutline : checkmarkDoneOutline}
-        className={`text-[16px] mr-1 shrink-0 ${
-          msg.status === 'read' ? 'text-orange-500' : 'text-gray-400'
-        }`}
-      />
-    ) : null;
-
-    if (msg.is_deleted) {
-      return (
-        <div className="flex items-center text-gray-400 text-sm italic">
-          <IonIcon icon={closeOutline} className="text-[15px] mr-1 shrink-0" />
-          <span className="truncate">This message was deleted</span>
-        </div>
-      );
+  const handleOpenChat = useCallback((chat: any) => {
+    if (chat.partner?.id) {
+      void globalMutate(['chat-partner', chat.partner.id], chat.partner, false);
     }
+    router.push(`/chats?seller=${chat.partner?.id}&ref=${chat.transaction_ref}`);
+  }, [router]);
 
-    if (msg.message_type === 'audio') {
-      return (
-        <div className="flex items-center text-gray-500 dark:text-gray-400 text-sm">
-          {tickIcon}
-          <IonIcon icon={micOutline} className="text-orange-500 text-[15px] mr-1 shrink-0" />
-          <span className="truncate">Voice message</span>
-        </div>
-      );
-    }
-
-    if (msg.message_type === 'image') {
-      return (
-        <div className="flex items-center text-gray-500 dark:text-gray-400 text-sm">
-          {tickIcon}
-          <IonIcon icon={imageOutline} className="text-[15px] mr-1 shrink-0" />
-          <span className="truncate">Photo</span>
-        </div>
-      );
-    }
-
-    if (msg.message_type === 'video') {
-      return (
-        <div className="flex items-center text-gray-500 dark:text-gray-400 text-sm">
-          {tickIcon}
-          <IonIcon icon={playOutline} className="text-[15px] mr-1 shrink-0" />
-          <span className="truncate">Video</span>
-        </div>
-      );
-    }
-
-    return (
-      <div className="flex items-center text-gray-500 dark:text-gray-400 text-sm w-full">
-        {tickIcon}
-        <span className="truncate">{msg.content}</span>
-      </div>
-    );
-  };
+  const handleViewImage = useCallback((image: string) => {
+    setViewingImages([image]);
+  }, []);
 
   // No pt-safe on the root: the app shell already pads the status bar.
   return (
@@ -644,17 +760,22 @@ export default function MessagesList() {
           visibly behind the tabs or search bar. min-h keeps the empty
           area below a short list pullable too. */}
       <div ref={pullZoneRef} data-pull-zone className="max-w-md mx-auto min-h-[50dvh]">
-        {/* Rubber-band strip: grows elastically above the list while pulling */}
-        <div
-          ref={stripRef}
-          className="overflow-hidden flex items-center justify-center"
-          style={{
-            height: refreshing ? STRIP_REST_H : 0,
-            transition: dragging ? 'none' : 'height 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
-          }}
-        >
-          <PullSpinner spinning={refreshing} progress={1} size={28} />
-        </div>
+        {/* Refresh spinner: portaled to the viewport top so it draws down
+            from the top of the page, over the header — never under it, and
+            the list itself never moves. */}
+        {mounted && createPortal(
+          <div
+            ref={stripRef}
+            className="fixed inset-x-0 top-0 z-[70] overflow-hidden flex items-center justify-center pointer-events-none"
+            style={{
+              height: refreshing ? STRIP_REST_H : 0,
+              transition: dragging ? 'none' : 'height 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
+            }}
+          >
+            <PullSpinner spinning={refreshing} progress={1} size={28} />
+          </div>,
+          document.body
+        )}
         {userId === undefined || isLoading ? (
           <div className="flex flex-col items-center justify-center pt-24 gap-3">
             <PullSpinner spinning size={32} />
@@ -675,87 +796,15 @@ export default function MessagesList() {
           </div>
         ) : filteredChats.length > 0 ? (
           filteredChats.map((chat) => (
-            <div
+            <ChatRow
               key={chat.transaction_ref}
-              // Warm the room before the tap lands: hover (desktop) /
-              // touchstart (mobile) fires ahead of the click, so the heavy
-              // /chats chunk is already loading when the user taps and the
-              // zoom starts with the page ready. Next dedupes repeat
-              // prefetches for the same URL, so no guard is needed.
-              onMouseEnter={() => { void router.prefetch(`/chats?seller=${chat.partner?.id}&ref=${chat.transaction_ref}`); }}
-              onTouchStart={() => { void router.prefetch(`/chats?seller=${chat.partner?.id}&ref=${chat.transaction_ref}`); }}
-              onClick={() => {
-                if (chat.partner?.id) {
-                  void globalMutate(['chat-partner', chat.partner.id], chat.partner, false);
-                }
-                router.push(`/chats?seller=${chat.partner?.id}&ref=${chat.transaction_ref}`);
-              }}
-              className="w-full flex items-center gap-3 px-4 py-2.5 text-left active:bg-gray-100 dark:active:bg-white/5 transition-colors cursor-pointer"
-            >
-              {/* Product Thumbnail — click opens ImageViewer, shows product image instead of user avatar */}
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (chat.product?.image) {
-                    setViewingImages([chat.product.image]);
-                  }
-                }}
-                className="w-12 h-12 rounded-2xl overflow-hidden bg-gray-100 dark:bg-gray-800 flex-shrink-0 cursor-pointer active:scale-95 transition-transform border border-gray-200 dark:border-gray-700/60 shadow-sm relative flex items-center justify-center"
-              >
-                {chat.product?.image ? (
-                  <img
-                    src={chat.product.image}
-                    alt={chat.product.title || "Product"}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center bg-orange-500/10 dark:bg-orange-500/20 text-orange-500">
-                    <IonIcon icon={bagOutline} className="text-xl" />
-                  </div>
-                )}
-              </div>
-
-              <div className="flex-1 min-w-0 border-b border-gray-100 dark:border-white/5 pb-2.5">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 min-w-0 truncate">
-                    <h3 className="text-[15px] font-semibold text-gray-900 dark:text-white truncate">
-                      {chat.partner?.full_name || 'Vendi User'}
-                    </h3>
-                    <Badge isVerified={!!chat.partner?.is_verified} size={15} className="shrink-0" />
-                  </div>
-                  <span
-                    className={`text-[12px] shrink-0 ${
-                      chat.unreadCount > 0
-                        ? 'text-orange-500 font-bold'
-                        : 'text-gray-400 font-medium'
-                    }`}
-                  >
-                    {formatTime(chat.latestMessage.created_at)}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between gap-2 mt-0.5">
-                  <div className="flex-1 min-w-0">
-                    {activityMap[chat.transaction_ref] === 'typing' ? (
-                      <span className="text-[13px] font-bold text-orange-500 animate-pulse tracking-wide">
-                        typing...
-                      </span>
-                    ) : activityMap[chat.transaction_ref] === 'recording' ? (
-                      <span className="text-[13px] font-bold text-orange-500 animate-pulse flex items-center gap-1 tracking-wide">
-                        <IonIcon icon={micOutline} className="text-sm shrink-0" /> recording voice note...
-                      </span>
-                    ) : (
-                      renderMessagePreview(chat.latestMessage)
-                    )}
-                  </div>
-                  {chat.unreadCount > 0 && (
-                    <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-orange-500 text-white text-[11px] font-bold flex items-center justify-center shadow-sm">
-                      {chat.unreadCount}
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
+              chat={chat}
+              userId={userId}
+              activity={activityMap[chat.transaction_ref]}
+              onOpen={handleOpenChat}
+              onPrefetch={handlePrefetchChat}
+              onViewImage={handleViewImage}
+            />
           ))
         ) : (
           <div className="flex flex-col items-center justify-center pt-24 px-6 text-center">

@@ -24,7 +24,8 @@ import Link from 'next/link';
 /* -------------------------------------------------------------------------- */
 
 const TABS = ['Post Item', 'Active', 'Pending Review', 'Approved', 'Sold', 'Draft', 'Rejected'];
-const CATEGORIES = ['Hostel Stuff', 'Accommodation', 'Electronics', 'Gadgets', 'Fashion', 'Books', 'Cooking Stuff', 'Furniture', 'Beauty & Care', 'Sports & Fitness', 'Shoes & Bags', 'Accessories', 'Food & Groceries', 'Vehicles', 'Other'];
+// Same order as the feed's category tabs ('All' first there, 'Other' last here).
+const CATEGORIES = ['Gadgets', 'Electronics', 'Fashion', 'Books', 'Cooking Stuff', 'Hostel Stuff', 'Accommodation', 'Furniture', 'Beauty & Care', 'Sports & Fitness', 'Shoes & Bags', 'Accessories', 'Food & Groceries', 'Vehicles', 'Other'];
 const CONDITIONS = ['New', 'Used'];
 const DELIVERY_AREAS = [
   { value: 'within_campus', label: 'Within campus only' },
@@ -209,17 +210,20 @@ interface FormState {
 const getEmptyForm = (): FormState => ({
   location: '',
   title: '',
-  category: CATEGORIES[0],
-  condition: CONDITIONS[1],
+  // Nothing is pre-picked: the seller must consciously choose a category,
+  // condition, quantity, and (when delivery is on) a delivery area. A wrong
+  // default would otherwise be submitted without them noticing.
+  category: '',
+  condition: '',
   specifications: '',
-  quantity: '1',
+  quantity: '',
   description: '',
   images: [],
   basePrice: '',
   allowNegotiation: false,
   lastPrice: '',
   deliveryAvailable: false,
-  deliveryArea: 'within_campus'
+  deliveryArea: ''
 });
 
 /* ------------------------------ seller draft ------------------------------ */
@@ -286,8 +290,8 @@ const productToForm = (p: any): FormState => {
   return {
     location: p.specific_location || '',
     title: p.title || '',
-    category: p.category || CATEGORIES[0],
-    condition: p.condition || CONDITIONS[1],
+    category: p.category || '',
+    condition: p.condition || '',
     specifications: p.specifications || '',
     quantity: normalizeQuantity(p.quantity),
     description: p.description || '',
@@ -296,7 +300,7 @@ const productToForm = (p: any): FormState => {
     allowNegotiation: hasLastPrice,
     lastPrice: hasLastPrice ? String(p.last_price) : '',
     deliveryAvailable: p.delivery_available === true,
-    deliveryArea: p.delivery_area || 'within_campus'
+    deliveryArea: p.delivery_area || ''
   };
 };
 
@@ -337,12 +341,14 @@ const AutoGrowTextarea = ({
   value,
   onChange,
   placeholder,
-  singleLine = false
+  singleLine = false,
+  invalid = false
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   singleLine?: boolean;
+  invalid?: boolean;
 }) => {
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -363,7 +369,7 @@ const AutoGrowTextarea = ({
       onKeyDown={(e) => {
         if (singleLine && e.key === 'Enter') e.preventDefault();
       }}
-      className={`${INPUT_CLASSES} resize-none overflow-hidden leading-snug`}
+      className={`${INPUT_CLASSES} resize-none overflow-hidden leading-snug${invalid ? ' !border-red-500' : ''}`}
     />
   );
 };
@@ -415,6 +421,9 @@ export default function SellerDashboard() {
   const [tabHydrated, setTabHydrated] = useState(false); // true once the saved tab has been restored
   const [step, setStep] = useState(1);
   const [stepDirection, setStepDirection] = useState<'forward' | 'back'>('forward');
+  // True after the seller taps Next on an unfinished step: the empty fields
+  // of that step turn red with a "required" note instead of advancing.
+  const [showStepErrors, setShowStepErrors] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
 
@@ -649,18 +658,58 @@ export default function SellerDashboard() {
     settings !== null &&
     formData.location.trim() !== '' &&
     formData.title.trim() !== '' &&
+    formData.category !== '' &&
+    formData.condition !== '' &&
+    formData.quantity !== '' &&
     formData.description.trim() !== '' &&
     formData.images.length > 0 &&
     numericPrice > 0 &&
     (formData.category !== 'Gadgets' || formData.specifications.trim() !== '') &&
+    (!formData.deliveryAvailable || formData.deliveryArea !== '') &&
     lastPriceValid &&
     acceptedTerms;
 
   /* ------------------------------ step navigation ------------------------------ */
 
+  // Which required fields of the given step are still empty. Step 5 has no
+  // Next button (Submit is disabled until the whole form is valid), so it
+  // is not listed here.
+  const stepMissing = (s: number): string[] => {
+    const missing: string[] = [];
+    if (s === 1) {
+      if (formData.location.trim() === '') missing.push('location');
+      if (formData.deliveryAvailable && formData.deliveryArea === '') missing.push('deliveryArea');
+    } else if (s === 2) {
+      if (formData.title.trim() === '') missing.push('title');
+      if (formData.category === '') missing.push('category');
+      if (formData.condition === '') missing.push('condition');
+      if (formData.category === 'Gadgets' && formData.specifications.trim() === '') missing.push('specifications');
+    } else if (s === 3) {
+      if (formData.quantity === '') missing.push('quantity');
+      if (formData.description.trim() === '') missing.push('description');
+    } else if (s === 4) {
+      if (formData.images.length === 0) missing.push('images');
+    }
+    return missing;
+  };
+  // Recomputed every render, so a flagged field clears its error the moment
+  // the seller fills it.
+  const missing = stepMissing(step);
+  const req = (key: string) =>
+    showStepErrors && missing.includes(key) ? (
+      <p className="text-xs text-red-500 mt-1.5">required</p>
+    ) : null;
+
   // Steps change instantly — no artificial loading spinner between steps.
   const goToStep = (next: number) => {
     if (next < 1 || next > TOTAL_STEPS) return;
+    // Forward only when the current step is finished. Otherwise stay and
+    // flag the empty fields instead of silently advancing.
+    if (next > step && stepMissing(step).length > 0) {
+      setShowStepErrors(true);
+      return;
+    }
+    setShowStepErrors(false);
     setStepDirection(next > step ? 'forward' : 'back');
     setStep(next);
   };
@@ -1224,8 +1273,9 @@ export default function SellerDashboard() {
                         placeholder="Where can buyers meet you?"
                         value={formData.location}
                         onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-                        className={INPUT_CLASSES}
+                        className={`${INPUT_CLASSES}${showStepErrors && missing.includes('location') ? ' !border-red-500' : ''}`}
                       />
+                      {req('location')}
                     </div>
 
                     {/* Offer delivery */}
@@ -1261,6 +1311,7 @@ export default function SellerDashboard() {
                             </button>
                           ))}
                         </div>
+                        {req('deliveryArea')}
                       </div>
                     )}
                   </>
@@ -1276,7 +1327,9 @@ export default function SellerDashboard() {
                         placeholder="e.g. iPhone 12 Pro Max"
                         value={formData.title}
                         onChange={(title) => setFormData({ ...formData, title })}
+                        invalid={showStepErrors && missing.includes('title')}
                       />
+                      {req('title')}
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
@@ -1287,7 +1340,9 @@ export default function SellerDashboard() {
                           value={formData.category}
                           options={CATEGORIES}
                           onChange={(category) => setFormData({ ...formData, category })}
+                          invalid={showStepErrors && missing.includes('category')}
                         />
+                        {req('category')}
                       </div>
                       <div>
                         <label className={LABEL_CLASSES}>Condition</label>
@@ -1296,7 +1351,9 @@ export default function SellerDashboard() {
                           value={formData.condition}
                           options={CONDITIONS}
                           onChange={(condition) => setFormData({ ...formData, condition })}
+                          invalid={showStepErrors && missing.includes('condition')}
                         />
+                        {req('condition')}
                       </div>
                     </div>
 
@@ -1307,7 +1364,9 @@ export default function SellerDashboard() {
                           placeholder="e.g. 128GB, 85% Battery Health, No scratches"
                           value={formData.specifications}
                           onChange={(specifications) => setFormData({ ...formData, specifications })}
+                          invalid={showStepErrors && missing.includes('specifications')}
                         />
+                        {req('specifications')}
                       </div>
                     )}
                   </>
@@ -1323,7 +1382,9 @@ export default function SellerDashboard() {
                         value={formData.quantity}
                         options={QUANTITY_OPTIONS}
                         onChange={(quantity) => setFormData({ ...formData, quantity })}
+                        invalid={showStepErrors && missing.includes('quantity')}
                       />
+                      {req('quantity')}
                     </div>
                     <div>
                       <label className={LABEL_CLASSES}>Description</label>
@@ -1332,8 +1393,9 @@ export default function SellerDashboard() {
                         placeholder="Describe the item in detail. Listings are checked for prohibited items and spam."
                         value={formData.description}
                         onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                        className={`${INPUT_CLASSES} resize-none`}
+                        className={`${INPUT_CLASSES} resize-none${showStepErrors && missing.includes('description') ? ' !border-red-500' : ''}`}
                       />
+                      {req('description')}
                     </div>
                   </>
                 )}
@@ -1342,13 +1404,16 @@ export default function SellerDashboard() {
                 {step === 4 && (
                   <div>
                     <label className={LABEL_CLASSES}>Upload Images (Max 5)</label>
-                    <ImageUploader
-                      images={formData.images}
-                      onChange={(newImages) => setFormData({ ...formData, images: newImages })}
-                      onError={(errorMsg) => setNotification({ type: 'error', message: errorMsg })}
-                      onUploadingStateChange={(status) => setIsImagesUploading(status)}
-                      maxImages={5}
-                    />
+                    <div className={showStepErrors && missing.includes('images') ? 'rounded-2xl ring-2 ring-red-500' : ''}>
+                      <ImageUploader
+                        images={formData.images}
+                        onChange={(newImages) => setFormData({ ...formData, images: newImages })}
+                        onError={(errorMsg) => setNotification({ type: 'error', message: errorMsg })}
+                        onUploadingStateChange={(status) => setIsImagesUploading(status)}
+                        maxImages={5}
+                      />
+                    </div>
+                    {req('images')}
                   </div>
                 )}
 

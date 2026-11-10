@@ -14,12 +14,12 @@ import { IonIcon } from '@ionic/react';
 import {
   chevronBackOutline,
   cameraOutline,
-  imageOutline,
   saveOutline,
   syncOutline,
   checkmarkCircleOutline,
   closeCircleOutline
 } from 'ionicons/icons';
+import { PhotoSourceSheet } from '@/shared/PhotoSourceSheet';
 import { NIGERIAN_UNIVERSITIES } from '@/constants/universities';
 
 // --- Cloudinary config — pull from env, unsigned upload preset only.
@@ -329,49 +329,12 @@ export default function EditProfilePage() {
       )}
 
       {/* Avatar source choice sheet */}
-      {showAvatarSheet && (
-        <div className="fixed inset-0 z-[100]">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setShowAvatarSheet(false)} />
-          <div className="absolute bottom-0 left-0 right-0 bg-background rounded-t-3xl p-4 pb-[max(1rem,var(--sab))]">
-            <div className="max-w-xl mx-auto">
-              <div className="w-12 h-1.5 bg-muted rounded-full mx-auto mb-4" />
-              <button
-                type="button"
-                onClick={() => cameraInputRef.current?.click()}
-                className="w-full flex items-center gap-4 p-4 rounded-2xl active:bg-muted transition-colors text-left"
-              >
-                <span className="w-11 h-11 rounded-full bg-orange-500/10 flex items-center justify-center shrink-0">
-                  <IonIcon icon={cameraOutline} className="text-orange-500 text-xl" />
-                </span>
-                <span>
-                  <span className="block font-bold text-foreground">Take Photo</span>
-                  <span className="block text-xs text-muted-foreground">Use your camera</span>
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => { setShowAvatarSheet(false); setShowGallery(true); }}
-                className="w-full flex items-center gap-4 p-4 rounded-2xl active:bg-muted transition-colors text-left"
-              >
-                <span className="w-11 h-11 rounded-full bg-orange-500/10 flex items-center justify-center shrink-0">
-                  <IonIcon icon={imageOutline} className="text-orange-500 text-xl" />
-                </span>
-                <span>
-                  <span className="block font-bold text-foreground">Choose from Gallery</span>
-                  <span className="block text-xs text-muted-foreground">Pick an existing photo</span>
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowAvatarSheet(false)}
-                className="w-full mt-2 py-3.5 rounded-full font-bold text-muted-foreground active:bg-muted transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <PhotoSourceSheet
+        isOpen={showAvatarSheet}
+        onClose={() => setShowAvatarSheet(false)}
+        onTakePhoto={() => cameraInputRef.current?.click()}
+        onChooseGallery={() => setShowGallery(true)}
+      />
 
       {/* Shared gallery picker */}
       {showGallery && (

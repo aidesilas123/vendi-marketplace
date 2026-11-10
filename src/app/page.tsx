@@ -18,6 +18,7 @@ import { VanIcon } from '@/shared/Icon/VanIcon';
 import { useHideOnScroll } from '@/shared/hooks/useHideOnScroll';
 import { useScrollRestore } from '@/shared/hooks/useScrollRestore';
 import { registerBackHandler } from '@/shared/HardwareBackButton';
+import { PhotoSourceSheet } from '@/shared/PhotoSourceSheet';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
 const CATEGORIES = ['All', 'Gadgets', 'Electronics', 'Fashion', 'Books', 'Cooking Stuff', 'Hostel Stuff', 'Accommodation', 'Furniture', 'Beauty & Care', 'Sports & Fitness', 'Shoes & Bags', 'Accessories', 'Food & Groceries', 'Vehicles'];
@@ -115,6 +116,10 @@ async function fetchRankedFeed(opts: {
 // the async lookup — the feed SWR key is set at once and the cached feed
 // renders with no skeleton flash.
 let cachedCampus: { campus: string | null; university: string | null } | null = null;
+
+// Last photo-search results, cached at module level so coming back from a
+// product page restores them instead of clearing the search.
+let cachedVisualResults: any[] | null = null;
 
 /**
  * Downscales a photo to max 512px and returns raw base64 JPEG (no data: prefix),
@@ -286,9 +291,12 @@ export default function HomeFeed() {
 
   // Photo (visual) search: the ranked products for the picked photo, or null
   // when the normal feed is showing.
-  const [visualResults, setVisualResults] = useState<any[] | null>(null);
+  const [visualResults, setVisualResults] = useState<any[] | null>(cachedVisualResults);
   const [visualSearching, setVisualSearching] = useState(false);
   const [visualError, setVisualError] = useState<string | null>(null);
+  const [showPhotoSheet, setShowPhotoSheet] = useState(false);
+  const photoTakeInputRef = useRef<HTMLInputElement>(null);
+  const photoGalleryInputRef = useRef<HTMLInputElement>(null);
 
   // The searcher's campus + university (chosen at signup), for scoping the
   // feed, search and suggestions to their campus. Uppercase, to match how
@@ -579,7 +587,11 @@ export default function HomeFeed() {
   }, [refreshFeed]);
 
   const feedRef = useRef<HTMLDivElement>(null);
-  const { saveScroll } = useScrollRestore(feedRef, 'feed', !isLoading);
+  // Ready once the feed is loaded — or as soon as photo results are on
+  // screen, since those render from cache and don't need the feed data.
+  // Otherwise a slow feed fetch can outlast the 2.5s back-navigation window
+  // and the restore would land at the top instead of where you were.
+  const { saveScroll } = useScrollRestore(feedRef, 'feed', !isLoading || visualResults !== null);
 
   useEffect(() => registerBackHandler(() => {
     const main = document.getElementById('main-scroll-container');
@@ -648,6 +660,7 @@ export default function HomeFeed() {
     setVisualSearching(true);
     setVisualError(null);
     setVisualResults(null);
+    cachedVisualResults = null;
     try {
       const base64 = await fileToSearchBase64(file);
       const { data: { session } } = await supabase.auth.getSession();
@@ -664,7 +677,9 @@ export default function HomeFeed() {
       if (!res.ok || !data?.success) {
         throw new Error(data?.error || 'Photo search failed. Please try again.');
       }
-      setVisualResults(Array.isArray(data.products) ? data.products : []);
+      const products = Array.isArray(data.products) ? data.products : [];
+      setVisualResults(products);
+      cachedVisualResults = products;
     } catch (err: any) {
       const msg = err?.message || 'Photo search failed. Please try again.';
       console.error('[visual-search]', err);
@@ -930,7 +945,7 @@ export default function HomeFeed() {
                         <button
                           key={c}
                           type="button"
-                          onClick={() => { setVisualResults(null); setVisualError(null); setActiveCategory(c); setSearchQuery(''); setSearchFocused(false); }}
+                          onClick={() => { setVisualResults(null); setVisualError(null); cachedVisualResults = null; setActiveCategory(c); setSearchQuery(''); setSearchFocused(false); }}
                           className="w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm text-gray-900 dark:text-white active:bg-gray-100 dark:active:bg-white/5"
                         >
                           <span suppressHydrationWarning className="flex items-center justify-center text-orange-500">
@@ -998,31 +1013,53 @@ export default function HomeFeed() {
               )}
             </div>
 
-            <label
-              htmlFor="image-search-input"
+            <button
+              type="button"
+              onClick={() => setShowPhotoSheet(true)}
               aria-label="Search with an image"
-              className="flex-shrink-0 w-9 h-9 rounded-full bg-white dark:bg-[#171717] border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-center text-orange-500 cursor-pointer active:scale-95 transition-transform"
+              // !-prefixed: globals.css sets `a, button { height: auto !important }`,
+              // which flattens a plain h-9/rounded-full on a <button> (it was a
+              // <label> before, so it used to be round).
+              className="flex-shrink-0 !w-9 !h-9 !rounded-full bg-white dark:bg-[#171717] border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-center text-orange-500 cursor-pointer active:scale-95 transition-transform"
             >
               <span suppressHydrationWarning className="flex items-center justify-center">
                 <IonIcon icon={cameraOutline} className="text-lg" />
               </span>
-            </label>
+            </button>
+            {/* Take Photo: no capture attribute — the forced back-camera mode
+                broke the return on Android WebView, so the system picker
+                offers the camera instead. */}
             <input
+              ref={photoTakeInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleImagePicked}
+            />
+            <input
+              ref={photoGalleryInputRef}
               id="image-search-input"
               type="file"
               accept="image/*"
               className="hidden"
               onChange={handleImagePicked}
             />
+            <PhotoSourceSheet
+              isOpen={showPhotoSheet}
+              onClose={() => setShowPhotoSheet(false)}
+              onTakePhoto={() => photoTakeInputRef.current?.click()}
+              onChooseGallery={() => photoGalleryInputRef.current?.click()}
+            />
           </div>
 
-          {/* Categories */}
-          <div className="flex overflow-x-auto scrollbar-hide gap-2 pt-2 pb-2 px-4 md:px-8">
+          {/* Categories — pan-x claims sideways swipes for this row so the
+              vertical scroller can't steal them. */}
+          <div className="flex overflow-x-auto scrollbar-hide gap-2 pt-2 pb-2 px-4 md:px-8" style={{ touchAction: 'pan-x' }}>
             {CATEGORIES.map((cat) => (
               <button
                 key={cat}
-                onClick={() => { setVisualResults(null); setVisualError(null); setActiveCategory(cat); }}
-                className={`!whitespace-nowrap flex-shrink-0 !px-4 !py-2 !rounded-full !text-xs !font-bold transition-all shadow-sm ${
+                onClick={() => { setVisualResults(null); setVisualError(null); cachedVisualResults = null; setActiveCategory(cat); }}
+                className={`!whitespace-nowrap flex-shrink-0 !px-3 !py-1.5 !rounded-full !text-xs !font-bold transition-all shadow-sm ${
                   activeCategory === cat
                     ? '!bg-orange-500 !text-white border border-orange-500'
                     : '!bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30'
@@ -1037,7 +1074,8 @@ export default function HomeFeed() {
               the feed itself is already ranked by the algorithm (Best match),
               so these controls are for refining a search. */}
           {appliedQuery.trim() !== '' && (
-            <div className="flex items-center gap-2 px-4 md:px-8 pb-2">
+            <div className="flex items-center gap-2 px-4 md:px-8 pb-2 overflow-x-auto scrollbar-hide" style={{ touchAction: 'pan-x' }}>
+              <div className="flex-shrink-0">
               <Dropdown
                 ariaLabel="Sort"
                 value={sortBy}
@@ -1049,6 +1087,7 @@ export default function HomeFeed() {
                 ]}
                 onChange={(v) => setSortBy(v as typeof sortBy)}
               />
+              </div>
               <input
                 type="text"
                 inputMode="numeric"
@@ -1057,7 +1096,7 @@ export default function HomeFeed() {
                 onChange={(e) => setMinPriceInput(e.target.value.replace(/[^0-9]/g, ''))}
                 onBlur={applyPriceFilter}
                 onKeyDown={(e) => { if (e.key === 'Enter') { applyPriceFilter(); (e.target as HTMLInputElement).blur(); } }}
-                className="w-20 !px-3 !py-2 !rounded-full !text-xs !font-bold !bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30 outline-none placeholder:text-gray-400"
+                className="flex-shrink-0 w-20 !px-3 !py-2 !rounded-full !text-xs !font-bold !bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30 outline-none placeholder:text-gray-400"
               />
               <input
                 type="text"
@@ -1067,7 +1106,7 @@ export default function HomeFeed() {
                 onChange={(e) => setMaxPriceInput(e.target.value.replace(/[^0-9]/g, ''))}
                 onBlur={applyPriceFilter}
                 onKeyDown={(e) => { if (e.key === 'Enter') { applyPriceFilter(); (e.target as HTMLInputElement).blur(); } }}
-                className="w-20 !px-3 !py-2 !rounded-full !text-xs !font-bold !bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30 outline-none placeholder:text-gray-400"
+                className="flex-shrink-0 w-20 !px-3 !py-2 !rounded-full !text-xs !font-bold !bg-orange-100 !text-gray-700 dark:!bg-orange-500/20 dark:!text-gray-200 border border-orange-200 dark:border-orange-500/30 outline-none placeholder:text-gray-400"
               />
               <button
                 type="button"
@@ -1113,7 +1152,7 @@ export default function HomeFeed() {
               </p>
               <button
                 type="button"
-                onClick={() => { setVisualResults(null); setVisualError(null); }}
+                onClick={() => { setVisualResults(null); setVisualError(null); cachedVisualResults = null; }}
                 className="text-xs font-bold text-orange-500 active:scale-95 transition-transform"
               >
                 Clear
@@ -1130,7 +1169,7 @@ export default function HomeFeed() {
                   title="Photo search failed"
                   description={visualError}
                   actionText="Try again"
-                  onAction={() => { setVisualResults(null); setVisualError(null); }}
+                  onAction={() => { setVisualResults(null); setVisualError(null); cachedVisualResults = null; }}
                 />
               </div>
             ) : (visualResults?.length ?? 0) === 0 ? (
@@ -1140,11 +1179,14 @@ export default function HomeFeed() {
                   title="No similar items found"
                   description="Try a clearer photo of the item, or search by name instead."
                   actionText="Clear photo search"
-                  onAction={() => { setVisualResults(null); setVisualError(null); }}
+                  onAction={() => { setVisualResults(null); setVisualError(null); cachedVisualResults = null; }}
                 />
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-5 lg:gap-6">
+              // onClickCapture saves the scroll position before navigating to
+              // a result — without it, coming back lands at the top even
+              // though the results themselves are restored from cache.
+              <div onClickCapture={saveScroll} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-5 lg:gap-6">
                 {(visualResults ?? []).map((product: any) => (
                   <BuyerProductCard
                     key={product.id}
@@ -1216,7 +1258,7 @@ export default function HomeFeed() {
             <>
               <div onClickCapture={saveScroll} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 md:gap-5 lg:gap-6">
                 {sortedProducts.map((product: any) => (
-                  <div key={product.id} style={{ contentVisibility: 'auto', containIntrinsicSize: '0 340px' }}>
+                  <div key={product.id}>
                     <BuyerProductCard
                       product={product}
                     />

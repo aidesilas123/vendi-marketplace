@@ -8,6 +8,7 @@ import useSWR, { useSWRConfig } from 'swr';
 import { supabase } from '@/lib/supabase';
 import { notify } from '@/lib/notify';
 import { calcFees, naira } from '@/lib/pricing';
+import { optimizeImageUrl } from '@/lib/images';
 import { BuyerProductCard } from '@/shared/Card/BuyerProductCard';
 import { Avatar } from '@/shared/Avatar';
 import { Badge } from '@/shared/Badge';
@@ -501,7 +502,7 @@ const ProductGallery = React.memo(function ProductGallery({
             {images.map((img, idx) => (
               <div key={idx} onClick={onOpen} className="relative flex h-full min-w-full flex-shrink-0 snap-center items-center justify-center bg-black">
                 <img
-                  src={img}
+                  src={optimizeImageUrl(img, 1200)}
                   alt={`${title} - Image ${idx + 1}`}
                   loading={idx === 0 ? 'eager' : 'lazy'}
                   decoding="async"

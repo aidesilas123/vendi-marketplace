@@ -48,6 +48,8 @@ interface DropdownProps {
   disabled?: boolean;
   className?: string;
   ariaLabel?: string;
+  /** Missing required field: the trigger border turns red. */
+  invalid?: boolean;
 }
 
 const MENU_MAX_HEIGHT = 224; // px, matches max-h-56
@@ -65,7 +67,8 @@ export const Dropdown = ({
   placeholder = 'Select',
   disabled = false,
   className = '',
-  ariaLabel
+  ariaLabel,
+  invalid = false
 }: DropdownProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [openUp, setOpenUp] = useState(false);
@@ -164,7 +167,7 @@ export const Dropdown = ({
         disabled={disabled}
         onClick={() => (isOpen ? close() : open())}
         className={`w-full flex items-center justify-between gap-2 text-left !bg-transparent !border ${
-          isOpen ? '!border-orange-500' : '!border-orange-500/30'
+          invalid ? '!border-red-500' : isOpen ? '!border-orange-500' : '!border-orange-500/30'
         } focus:!border-orange-500 !px-4 !py-3 !text-sm !font-normal !rounded-2xl outline-none transition-colors disabled:opacity-60 ${
           selected
             ? '!text-gray-900 dark:!text-white'
