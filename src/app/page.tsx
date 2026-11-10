@@ -13,12 +13,13 @@ import { EmptyState } from '@/shared/EmptyState';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import IonIcon from '@/shared/Icon/Icon';
-import { searchOutline, cameraOutline, cloudOfflineOutline, timeOutline, trendingUpOutline } from 'ionicons/icons';
+import { searchOutline, cameraOutline, cloudOfflineOutline, timeOutline, trendingUpOutline, shieldCheckmarkOutline, closeOutline } from 'ionicons/icons';
 import { VanIcon } from '@/shared/Icon/VanIcon';
 import { useHideOnScroll } from '@/shared/hooks/useHideOnScroll';
 import { useScrollRestore } from '@/shared/hooks/useScrollRestore';
 import { registerBackHandler } from '@/shared/HardwareBackButton';
 import { PhotoSourceSheet } from '@/shared/PhotoSourceSheet';
+import Link from 'next/link';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
 const CATEGORIES = ['All', 'Gadgets', 'Electronics', 'Fashion', 'Books', 'Cooking Stuff', 'Hostel Stuff', 'Accommodation', 'Furniture', 'Beauty & Care', 'Sports & Fitness', 'Shoes & Bags', 'Accessories', 'Food & Groceries', 'Vehicles'];
@@ -308,6 +309,15 @@ export default function HomeFeed() {
   const [userUniversity, setUserUniversity] = useState<string | null>(cachedCampus?.university ?? null);
   const [campusReady, setCampusReady] = useState(!!cachedCampus);
 
+  // "New to Vendi?" card: accounts created in the last 7 days see it once on
+  // the plain feed, until dismissed. The flag lives on the device.
+  const HOW_IT_WORKS_KEY = 'vendi-how-it-works-dismissed';
+  const [isNewAccount, setIsNewAccount] = useState(false);
+  const [howItWorksDismissed, setHowItWorksDismissed] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try { return window.localStorage.getItem(HOW_IT_WORKS_KEY) === '1'; } catch { return false; }
+  });
+
   // Search suggestions (from the database) + recent searches (on this device).
   const [suggestions, setSuggestions] = useState<{ text: string; kind: string; price: number | null }[]>([]);
   const [searchFocused, setSearchFocused] = useState(false);
@@ -323,6 +333,7 @@ export default function HomeFeed() {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         const userId = session?.user?.id;
+        const createdAt = session?.user?.created_at;
         if (!userId) return;
         const { data } = await supabase
           .from('users')
@@ -335,6 +346,8 @@ export default function HomeFeed() {
           if (campus) setUserCampus(campus);
           if (university) setUserUniversity(university);
           cachedCampus = { campus, university };
+          // New account (created in the last 7 days) -> show the "how it works" card once.
+          if (createdAt && Date.now() - new Date(createdAt).getTime() < 7 * 24 * 60 * 60 * 1000) setIsNewAccount(true);
         }
       } catch { /* campus stays null = unfiltered */ }
       finally {
@@ -346,6 +359,12 @@ export default function HomeFeed() {
 
   // Recent searches live on this device only (localStorage), most recent first.
   const RECENT_SEARCHES_KEY = 'vendi-recent-searches';
+
+  // Dismissing the "how it works" card (or tapping through to the page) hides it for good.
+  const dismissHowItWorks = () => {
+    try { window.localStorage.setItem(HOW_IT_WORKS_KEY, '1'); } catch { /* ignore */ }
+    setHowItWorksDismissed(true);
+  };
   const saveRecentSearch = (q: string) => {
     const value = q.trim();
     if (!value) return;
@@ -1136,6 +1155,39 @@ export default function HomeFeed() {
             {stripOpen && <PullSpinner spinning />}
           </div>
         </div>
+
+        {/* NEW-USER CARD: "See how Vendi works". Only for accounts created in
+            the last 7 days, only on the plain feed (no search / photo results),
+            and never again once dismissed. */}
+        {isNewAccount && !howItWorksDismissed && appliedQuery.trim() === '' && visualResults === null && !visualSearching && (
+          <div className="mx-1 mt-1 mb-3 rounded-2xl bg-orange-500/10 p-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-orange-500 text-white flex items-center justify-center flex-shrink-0">
+                <span suppressHydrationWarning className="flex items-center justify-center">
+                  <IonIcon icon={shieldCheckmarkOutline} className="text-xl" />
+                </span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[15px] font-black text-gray-900 dark:text-white">New to Vendi?</p>
+                <p className="text-[13px] text-gray-600 dark:text-gray-300 leading-relaxed mt-0.5">
+                  Buying is safe here — your money stays in escrow until you confirm delivery.
+                </p>
+                <Link
+                  href="/how-it-works"
+                  onClick={dismissHowItWorks}
+                  className="inline-flex items-center mt-2.5 !px-4 !py-2 !rounded-full bg-orange-500 text-white text-[13px] font-black active:scale-95 transition-transform"
+                >
+                  See how Vendi works
+                </Link>
+              </div>
+              <button onClick={dismissHowItWorks} aria-label="Dismiss" className="!p-1.5 -m-1.5 text-gray-400 active:scale-95 transition-transform flex-shrink-0">
+                <span suppressHydrationWarning className="flex items-center justify-center">
+                  <IonIcon icon={closeOutline} className="text-xl" />
+                </span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* PHOTO SEARCH RESULTS: replaces the feed while a photo search is active. */}
         {(visualResults !== null || visualSearching) ? (

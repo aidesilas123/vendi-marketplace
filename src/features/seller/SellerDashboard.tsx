@@ -5,7 +5,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { useRouter } from 'next/navigation';
 import { IonIcon } from '@/shared/Icon/Icon';
-import { alertCircleOutline, imageOutline, checkmarkCircleOutline, chatbubblesOutline, eyeOutline, bagHandleOutline, layersOutline, chevronForwardOutline } from 'ionicons/icons';
+import { alertCircleOutline, imageOutline, checkmarkCircleOutline, chatbubblesOutline, eyeOutline, bagHandleOutline, layersOutline, chevronForwardOutline, shieldCheckmarkOutline, megaphoneOutline } from 'ionicons/icons';
 import { Button } from '@/shared/Button';
 import { Modal } from '@/shared/Modal/Modal';
 import { ConfirmModal } from '@/shared/ConfirmModal';
@@ -158,7 +158,7 @@ async function fetchSellerOverview(userId: string) {
 
   const { data: products } = await supabase
     .from('products')
-    .select('id, title, status')
+    .select('id, title, status, product_views(count)')
     .eq('seller_id', userId);
   const all = (products ?? []) as any[];
   const ids = all.map((p) => p.id);
@@ -166,7 +166,7 @@ async function fetchSellerOverview(userId: string) {
   const rejected = all.filter((p) => p.status === 'REJECTED').slice(0, 3);
 
   if (ids.length === 0) {
-    return { activeCount: 0, views7d: 0, unanswered: 0, orders7d: 0, rejected: [] as any[] };
+    return { activeCount: 0, views7d: 0, unanswered: 0, orders7d: 0, rejected: [] as any[], milestoneListings: [] as { id: string; title: string; views: number }[] };
   }
 
   const [viewsRes, qaRes, ordersRes] = await Promise.all([
@@ -184,6 +184,10 @@ async function fetchSellerOverview(userId: string) {
     unanswered,
     orders7d: ordersRes.count ?? 0,
     rejected,
+    // Live listings with their total view counts, for the "hit 20 views — boost it" prompt.
+    milestoneListings: all
+      .filter((p) => p.status === 'ACTIVE' || p.status === 'APPROVED')
+      .map((p) => ({ id: p.id, title: p.title, views: p.product_views?.[0]?.count ?? 0 })),
   };
 }
 
@@ -268,6 +272,36 @@ function clearSellerDraft() {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.removeItem(SELLER_DRAFT_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+// The "get verified" prompt after the 2nd post is shown once, ever.
+const VERIFY_PROMPT_KEY = 'vendi-verify-prompt-shown';
+
+/* ------------------------- boost-milestone prompts ------------------------- */
+// "Your listing hit 20 views — boost it" is shown once per listing per tier
+// (20 / 50 / 100). The record lives on the device: { [listingId]: highest tier shown }.
+const BOOST_MILESTONES_KEY = 'vendi-boost-milestones';
+const BOOST_TIERS = [20, 50, 100];
+
+function loadShownMilestones(): Record<string, number> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(BOOST_MILESTONES_KEY) ?? '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveShownMilestone(listingId: string, tier: number) {
+  if (typeof window === 'undefined') return;
+  try {
+    const shown = loadShownMilestones();
+    shown[listingId] = Math.max(shown[listingId] ?? 0, tier);
+    window.localStorage.setItem(BOOST_MILESTONES_KEY, JSON.stringify(shown));
   } catch {
     // ignore
   }
@@ -464,6 +498,12 @@ export default function SellerDashboard() {
     type: null,
     message: ''
   });
+
+  // Smart prompts: "get verified" after the 2nd post, and the views milestone.
+  const [verifyPrompt, setVerifyPrompt] = useState<{ count: number } | null>(null);
+  const [boostMilestone, setBoostMilestone] = useState<{ id: string; title: string; views: number; tier: number } | null>(null);
+  // One milestone prompt per dashboard visit at most — the rest wait for later visits.
+  const milestonePresentedRef = useRef(false);
   const [isImagesUploading, setIsImagesUploading] = useState(false);
 
   // Rubber-band bounce for the whole page (header + content). Modals, spinners and toasts
@@ -552,6 +592,26 @@ export default function SellerDashboard() {
   );
   const refreshOverview = () =>
     globalMutate((key) => Array.isArray(key) && key[0] === 'seller-overview');
+
+  // Views milestone: when a live listing crosses 20 / 50 / 100 views, prompt
+  // the seller to boost it — once per listing per tier, one prompt per visit.
+  // The tier is recorded as shown the moment the prompt appears, so closing
+  // it never brings it back.
+  useEffect(() => {
+    if (!overview?.milestoneListings?.length || boostMilestone || milestonePresentedRef.current) return;
+    const shown = loadShownMilestones();
+    let best: { id: string; title: string; views: number; tier: number } | null = null;
+    for (const l of overview.milestoneListings) {
+      const crossed = BOOST_TIERS.filter((t) => l.views >= t && (shown[l.id] ?? 0) < t);
+      if (crossed.length === 0) continue;
+      const tier = crossed[crossed.length - 1];
+      if (!best || l.views > best.views) best = { id: l.id, title: l.title, views: l.views, tier };
+    }
+    if (!best) return;
+    milestonePresentedRef.current = true;
+    saveShownMilestone(best.id, best.tier);
+    setBoostMilestone(best);
+  }, [overview, boostMilestone]);
 
   const loadMore = async () => {
     if (isLoadingMore) return;
@@ -724,6 +784,26 @@ export default function SellerDashboard() {
     clearSellerDraft();
   };
 
+  // After a new post: if the seller now has 2+ posts and isn't verified yet,
+  // show the get-verified prompt once. Fire-and-forget — it must never block
+  // the toast or the tab switch.
+  const maybeShowVerifyPrompt = async (uid: string | null | undefined) => {
+    if (!uid) return;
+    try {
+      if (typeof window !== 'undefined' && window.localStorage.getItem(VERIFY_PROMPT_KEY) === '1') return;
+      const [{ count }, { data: userRow }] = await Promise.all([
+        supabase.from('products').select('id', { count: 'exact', head: true }).eq('seller_id', uid).in('status', ['ACTIVE', 'APPROVED', 'PENDING_REVIEW', 'SOLD']),
+        supabase.from('users').select('is_verified').eq('id', uid).maybeSingle(),
+      ]);
+      if ((count ?? 0) >= 2 && !userRow?.is_verified) {
+        try { window.localStorage.setItem(VERIFY_PROMPT_KEY, '1'); } catch { /* ignore */ }
+        setVerifyPrompt({ count: count ?? 0 });
+      }
+    } catch {
+      // A failed check just means no prompt this time.
+    }
+  };
+
   const handleSubmit = async () => {
     if (!isFormValid || isSubmitting) return;
 
@@ -760,6 +840,10 @@ export default function SellerDashboard() {
         showGlobalToast(wasEditing ? 'Listing updated successfully!' : 'Your listing is live!');
         setActiveTab('Approved');
       }
+
+      // Second post (or later, if the prompt never fired) + not verified yet:
+      // one-time nudge to get the verified badge.
+      if (!wasEditing && response.status !== 'REJECTED') void maybeShowVerifyPrompt(userId);
 
       // Make sure the tab we just jumped to isn't showing an old cached list
       refreshListings(); refreshOverview();
@@ -1134,6 +1218,80 @@ export default function SellerDashboard() {
           </div>
         </Modal>
       )}
+
+      {/* Get-verified prompt: once, after the seller's 2nd post. The shared
+          Modal renders its own close button, so this content has none. */}
+      <Modal isOpen={!!verifyPrompt} onClose={() => setVerifyPrompt(null)}>
+        <div className="p-6">
+          <div className="w-12 h-12 rounded-full bg-orange-500/10 text-orange-500 flex items-center justify-center mb-4">
+            <IonIcon icon={shieldCheckmarkOutline} className="text-2xl" />
+          </div>
+          <h2 className="text-xl font-black mb-2 text-gray-900 dark:text-white">
+            You&apos;re selling now — get verified
+          </h2>
+          <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed mb-4">
+            You&apos;ve posted {verifyPrompt?.count ?? 2} items on Vendi. Verified sellers earn more trust — buyers see the badge on your listings and your items sell faster.
+          </p>
+          <div className="flex flex-col gap-2.5 mb-6">
+            {['Verified badge on every listing', 'Buyers trust you more — faster sales', 'One-time ₦1,500 — badge lasts until revoked'].map((b) => (
+              <div key={b} className="flex items-center gap-2.5 text-sm text-gray-700 dark:text-gray-200">
+                <IonIcon icon={checkmarkCircleOutline} className="text-lg text-green-500 flex-shrink-0" />
+                {b}
+              </div>
+            ))}
+          </div>
+          <Button
+            onClick={() => { setVerifyPrompt(null); router.push('/verification'); }}
+            className="w-full !py-3.5 !rounded-full"
+          >
+            Get verified — ₦1,500
+          </Button>
+          <button
+            onClick={() => setVerifyPrompt(null)}
+            className="w-full text-center text-sm font-bold text-gray-500 dark:text-gray-400 mt-3 py-1 active:scale-95 transition-transform"
+          >
+            Maybe later
+          </button>
+        </div>
+      </Modal>
+
+      {/* Views milestone: "your listing hit 20 views — boost it". One listing,
+          one tier, once per visit at most (see the effect by the overview SWR). */}
+      <Modal isOpen={!!boostMilestone} onClose={() => setBoostMilestone(null)}>
+        {boostMilestone && (
+          <div className="p-6">
+            <div className="w-12 h-12 rounded-full bg-orange-500/10 text-orange-500 flex items-center justify-center mb-4">
+              <IonIcon icon={megaphoneOutline} className="text-2xl" />
+            </div>
+            <h2 className="text-xl font-black mb-2 text-gray-900 dark:text-white">
+              Your listing hit {boostMilestone.tier} views!
+            </h2>
+            <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed mb-4">
+              &ldquo;{boostMilestone.title}&rdquo; has {boostMilestone.views} views. Boost it to reach more buyers on campus.
+            </p>
+            <div className="flex flex-col gap-2.5 mb-6">
+              {['Sponsored badge on your listing', 'Fixed spots near the top of the feed', '₦1,000 for 7 days'].map((b) => (
+                <div key={b} className="flex items-center gap-2.5 text-sm text-gray-700 dark:text-gray-200">
+                  <IonIcon icon={checkmarkCircleOutline} className="text-lg text-green-500 flex-shrink-0" />
+                  {b}
+                </div>
+              ))}
+            </div>
+            <Button
+              onClick={() => { setBoostMilestone(null); router.push('/sponsorships'); }}
+              className="w-full !py-3.5 !rounded-full"
+            >
+              Boost this listing
+            </Button>
+            <button
+              onClick={() => setBoostMilestone(null)}
+              className="w-full text-center text-sm font-bold text-gray-500 dark:text-gray-400 mt-3 py-1 active:scale-95 transition-transform"
+            >
+              Maybe later
+            </button>
+          </div>
+        )}
+      </Modal>
 
       {/* "Are you sure?" confirmation for Edit, Duplicate, Mark Sold and Delete.
           See CONFIRM_FIRST at the top to turn any of them into an instant action. */}
