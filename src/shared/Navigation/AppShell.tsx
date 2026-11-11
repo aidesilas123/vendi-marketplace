@@ -339,12 +339,14 @@ export const AppShell = ({ children }: AppShellProps) => {
 
     // 3. Personal inbox: a live new_message for ANY chat → mark it delivered.
     //    Never downgrade a message an open room already marked 'read'.
+    //    The broadcast is only a hint: the update touches the row only if
+    //    it really exists, is still 'sent', and was addressed to me.
     ensureChannel(`user_inbox_${userId}`, (ch: any) => {
       ch.on('broadcast', { event: 'new_message' }, async (payload: any) => {
         const msg = payload?.payload;
         if (!msg?.id) return;
         try {
-          await supabase.from('messages').update({ status: 'delivered' }).eq('id', msg.id).eq('status', 'sent');
+          await supabase.from('messages').update({ status: 'delivered' }).eq('id', msg.id).eq('receiver_id', userId).eq('status', 'sent');
         } catch {}
         void globalMutate((key: any) => Array.isArray(key) && key[0] === 'inbox');
       });
@@ -375,34 +377,44 @@ export const AppShell = ({ children }: AppShellProps) => {
     let removed = false;
     let handle: { remove: () => Promise<void> } | undefined;
     CapacitorApp.addListener('appUrlOpen', ({ url }) => {
-      if (url.includes('auth/callback')) {
-        const query = url.split('?')[1] ?? '';
-        router.push(query ? `/auth/callback?${query}` : '/auth/callback');
-      } else if (url.includes('reset-password')) {
-        // Recovery links carry tokens in the query (?code=, PKCE) or the
-        // fragment (#access_token=..., implicit). Forward both as query
-        // params so /reset-password can consume them.
-        const query = url.split('?')[1]?.split('#')[0] ?? '';
-        const hash = url.split('#')[1] ?? '';
-        const params = new URLSearchParams(query);
-        if (hash) {
-          new URLSearchParams(hash).forEach((v, k) => params.set(k, v));
+      // Strict deep-link validation: only com.vendi.app:// URLs whose path
+      // is exactly auth/callback, reset-password or payment-return are
+      // accepted (no substring matching, no other paths). The fragment is
+      // dropped entirely — it is NEVER copied into query params, so a
+      // crafted link cannot smuggle recovery tokens into the app.
+      // Only the named query params each route needs are forwarded.
+      const prefix = 'com.vendi.app://';
+      if (!url.startsWith(prefix)) return;
+      const [pathAndQuery] = url.slice(prefix.length).split('#');
+      const [rawPath, rawQuery] = pathAndQuery.split('?');
+      const path = rawPath.replace(/\/+$/, '');
+      const params = new URLSearchParams(rawQuery ?? '');
+      if (path === 'auth/callback') {
+        // PKCE code, plus OAuth's own error params (never tokens).
+        const forward = new URLSearchParams();
+        for (const key of ['code', 'error', 'error_description']) {
+          const v = params.get(key);
+          if (v) forward.set(key, v);
         }
-        const qs = params.toString();
-        router.push(qs ? `/reset-password?${qs}` : '/reset-password');
-      } else if (url.includes('payment-return')) {
+        const qs = forward.toString();
+        router.push(qs ? `/auth/callback?${qs}` : '/auth/callback');
+      } else if (path === 'reset-password') {
+        // Recovery only via the PKCE ?code= exchange — raw tokens are
+        // never accepted (see /reset-password).
+        const code = params.get('code');
+        router.push(code ? `/reset-password?code=${encodeURIComponent(code)}` : '/reset-password');
+      } else if (path === 'payment-return') {
         // Monnify checkout return: the OS reopened the app after payment.
         // Forward to the buy page, which reconciles the payment (idempotent)
         // once the product has loaded. The modal's onClose reconcile is the
         // fallback if this event is missed.
-        const query = url.split('?')[1]?.split('#')[0] ?? '';
-        const params = new URLSearchParams(query);
         const productId = params.get('productId') ?? '';
         const paymentReference = params.get('paymentReference') ?? '';
         if (productId && paymentReference) {
           router.push(`/buy?id=${encodeURIComponent(productId)}&paymentReference=${encodeURIComponent(paymentReference)}`);
         }
       }
+      // Any other deep-link path is ignored.
     }).then((l) => {
       if (removed) void l.remove();
       else handle = l;

@@ -25,11 +25,13 @@ export default function ResetPasswordPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  // The recovery link reaches this page three ways, and all three must work:
-  // - Web PKCE: ?code=... -> exchange it for a session.
-  // - Web hash flow: the client reads the session straight from the URL hash.
-  // - Native deep link: AppShell forwards the link's query/fragment as query
-  //   params (?access_token=...&refresh_token=...) -> set the session from them.
+  // The recovery link reaches this page ONE way: PKCE ?code=, exchanged
+  // for a session. Raw tokens in the URL (?access_token=&refresh_token=,
+  // or a #access_token= fragment) are NEVER accepted — a crafted link
+  // carrying an attacker's tokens would otherwise sign the victim in as
+  // the attacker (session fixation). If Supabase emails still send token
+  // links instead of ?code= links, PKCE must be enabled in the Supabase
+  // dashboard Auth settings.
   const checkSession = useCallback(async () => {
     setChecking(true);
     const params = new URLSearchParams(window.location.search);
@@ -43,21 +45,9 @@ export default function ResetPasswordPage() {
         setChecking(false);
         return;
       }
-    } else {
-      const accessToken = params.get('access_token');
-      const refreshToken = params.get('refresh_token');
-      if (accessToken && refreshToken) {
-        const { error } = await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        });
-        if (!error) {
-          setHasSession(true);
-          setChecking(false);
-          return;
-        }
-        // If setSession failed, fall through to the plain session check below.
-      }
+      setHasSession(true);
+      setChecking(false);
+      return;
     }
     const { data: { session } } = await supabase.auth.getSession();
     setHasSession(!!session);

@@ -15,6 +15,7 @@ import { showGlobalToast } from '@/shared/Toast/Toast';
 import { payWithMonnify } from '@/lib/monnify';
 import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { Modal } from '@/shared/Modal/Modal';
+import { PinPadModal } from '@/shared/Checkout/PinPadModal';
 import { IonIcon } from '@/shared/Icon/Icon';
 import { megaphoneOutline, chevronBackOutline, flash } from 'ionicons/icons';
 
@@ -83,10 +84,37 @@ export default function SponsorshipsPage() {
   const [payMethod, setPayMethod] = useState<'wallet' | 'monnify'>('wallet');
   // Wallet confirmation: the listing awaiting a "you will be charged" modal.
   const [confirmListing, setConfirmListing] = useState<MyListing | null>(null);
-  // Monnify fee + total for display (price + 1.5% gateway fee). The server
-  // is authoritative; these are only the numbers shown before the modal opens.
-  const monnifyFee = Math.ceil(SPONSOR_PRICE * 0.015);
+  // Wallet PIN: the listing awaiting PIN entry, and the PIN modal state.
+  // The wallet charge only runs after the user enters (or creates) a PIN —
+  // the server verifies it before debiting, like the buy page.
+  const [pinListing, setPinListing] = useState<MyListing | null>(null);
+  const [pinOpen, setPinOpen] = useState(false);
+  const [pinMode, setPinMode] = useState<'create' | 'confirm' | 'verify'>('verify');
+  const [pin, setPin] = useState('');
+  const [tempPin, setTempPin] = useState('');
+  // Monnify fee + total for display (price + 1.5% gateway fee, capped at
+  // ₦2,000 like the server). The server is authoritative; these are only
+  // the numbers shown before the modal opens.
+  const monnifyFee = Math.min(Math.ceil(SPONSOR_PRICE * 0.015), 2000);
   const monnifyTotal = SPONSOR_PRICE + monnifyFee;
+
+  // Who is logged in (shared 'current-user-id' key, same as the buy page).
+  // The SWR keys below are scoped with it so one account never sees
+  // another's cached listings or boost history on a shared device.
+  const { data: userId } = useSWR('current-user-id', async (): Promise<string | null> => {
+    const { data } = await supabase.auth.getSession();
+    return data.session?.user?.id ?? null;
+  }, { revalidateOnFocus: false });
+
+  // Wallet row (only pin_set is needed here: does the user have a PIN yet?).
+  const { data: wallet, mutate: mutateWallet } = useSWR(
+    userId ? ['wallet', userId] : null,
+    async ([, uid]: [string, string]) => {
+      const { data } = await supabase.from('wallets').select('pin_set, balance').eq('user_id', uid).maybeSingle();
+      return data ?? null;
+    },
+    { revalidateOnFocus: false }
+  );
 
   const fetchListings = useCallback(async (): Promise<MyListing[]> => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -103,12 +131,14 @@ export default function SponsorshipsPage() {
   }, []);
 
   const { data, error, mutate, isLoading } = useSWR(
-    'my-sponsorable-listings',
+    userId ? ['my-sponsorable-listings', userId] : null,
     fetchListings,
     { revalidateOnFocus: false, revalidateOnReconnect: false, dedupingInterval: 10000 }
   );
 
   const listings = data ?? [];
+  // Still resolving who is logged in: the list is not "empty", it is unknown.
+  const listingsLoading = userId === undefined || isLoading;
 
   // Boost history: past sponsorship payments (wallet + Monnify both record
   // a 'Sponsored: <title>' debit). Joined to the listing for its thumbnail
@@ -158,7 +188,7 @@ export default function SponsorshipsPage() {
   }, []);
 
   const { data: boostHistory, mutate: mutateHistory } = useSWR(
-    'sponsor-boost-history',
+    userId ? ['sponsor-boost-history', userId] : null,
     fetchBoostHistory,
     { revalidateOnFocus: false, revalidateOnReconnect: false, dedupingInterval: 10000 }
   );
@@ -247,11 +277,73 @@ export default function SponsorshipsPage() {
     }
   };
 
-  // Wallet charge, run only after the user taps Continue on the modal.
-  const chargeWalletSponsor = async () => {
+  // Wallet charge, run only after the user taps Continue on the modal —
+  // Continue opens the PIN pad first; the charge itself only runs once a
+  // PIN has been entered (or created), and the PIN goes to the server
+  // with the charge so a stolen session alone cannot spend the wallet.
+  const chargeWalletSponsor = () => {
     const listing = confirmListing;
     if (!listing) return;
     setConfirmListing(null);
+    setPinListing(listing);
+    setPinMode(wallet?.pin_set === true ? 'verify' : 'create');
+    setPin('');
+    setTempPin('');
+    setPinOpen(true);
+  };
+
+  const handlePinBackspace = () => setPin((prev) => prev.slice(0, -1));
+  const handlePinPress = (digit: string) => {
+    if (pin.length < 4) {
+      const newPin = pin + digit;
+      setPin(newPin);
+      if (newPin.length === 4) setTimeout(() => void processPin(newPin), 300);
+    }
+  };
+
+  const processPin = async (completedPin: string) => {
+    if (pinMode === 'create') {
+      setTempPin(completedPin);
+      setPin('');
+      setPinMode('confirm');
+      return;
+    }
+    if (pinMode === 'confirm') {
+      if (completedPin !== tempPin) {
+        showGlobalToast('PINs do not match.', 'error');
+        setPin('');
+        setTempPin('');
+        setPinMode('create');
+        return;
+      }
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/manage-pin`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'set', pin: completedPin }),
+        });
+        if (!res.ok) throw new Error('Failed to set PIN');
+        mutateWallet((prev: any) => (prev ? { ...prev, pin_set: true } : prev), { revalidate: false });
+      } catch (err: any) {
+        showGlobalToast(err?.message || 'Failed to set PIN.', 'error');
+        setPin('');
+        setTempPin('');
+        setPinMode('create');
+        return;
+      }
+    }
+    // 'verify' and a confirmed new PIN both land here: charge with the PIN.
+    setPinOpen(false);
+    setPin('');
+    setTempPin('');
+    await chargeWalletSponsorWithPin(completedPin);
+  };
+
+  const chargeWalletSponsorWithPin = async (completedPin: string) => {
+    const listing = pinListing;
+    if (!listing) return;
+    setPinListing(null);
     setSponsoringId(listing.id);
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -263,7 +355,7 @@ export default function SponsorshipsPage() {
       const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/sponsor-listing`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ product_id: listing.id }),
+        body: JSON.stringify({ product_id: listing.id, pin: completedPin }),
       });
       const body = await res.json().catch(() => null);
       if (!res.ok || !body?.success) {
@@ -344,7 +436,7 @@ export default function SponsorshipsPage() {
           The Monnify fee is charged on top — paying from your wallet has no gateway fee. Tap Sponsor on a listing below to pay with the method chosen here.
         </p>
 
-        {isLoading ? (
+        {listingsLoading ? (
           <div className="flex flex-col items-center justify-center gap-4 py-16">
             <PullSpinner spinning size={36} />
             <p className="text-sm font-medium text-muted-foreground">Loading your listings…</p>
@@ -498,6 +590,17 @@ export default function SponsorshipsPage() {
           </>
         )}
       </Modal>
+
+      {/* PIN pad: the wallet charge needs the user's PIN (server-verified). */}
+      <PinPadModal
+        isOpen={pinOpen}
+        onClose={() => { setPinOpen(false); setPin(''); setTempPin(''); setPinListing(null); }}
+        pinMode={pinMode}
+        pin={pin}
+        totalCharge={SPONSOR_PRICE}
+        onPinPress={handlePinPress}
+        onBackspace={handlePinBackspace}
+      />
     </div>
   );
 }

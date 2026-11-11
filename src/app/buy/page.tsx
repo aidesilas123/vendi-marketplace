@@ -80,7 +80,9 @@ async function fetchProduct(id: string) {
 }
 
 async function fetchSeller(sellerId: string) {
-  const { data, error } = await supabase.from('users').select('*').eq('id', sellerId).maybeSingle();
+  // Public profile only: the users table is locked to the owner's own row,
+  // so another seller's row must come from the public_profiles view.
+  const { data, error } = await supabase.from('public_profiles').select('id, username, full_name, avatar_url, is_verified, is_admin, average_rating, total_reviews').eq('id', sellerId).maybeSingle();
   if (error) throw error;
   return data ?? null;
 }
@@ -91,9 +93,13 @@ async function fetchWallet(userId: string) {
   if (error) throw error;
   if (data) return data;
 
+  // create-wallet authenticates the caller by JWT — a raw user id is
+  // rejected, so pass the session access token, not the user id.
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) return null;
   const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/create-wallet`, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${userId}`, 'Content-Type': 'application/json' }
+    headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' }
   });
   if (!res.ok) return null;
   return await res.json();
@@ -220,13 +226,14 @@ export default function BuyPage() {
   const hasEnoughFunds = wallet ? Number(wallet.balance) >= totalCharge : false;
 
   // Monnify gateway fee for the online path: 1.5% of the total, rounded UP so the
-  // collected amount always covers it. The buyer pays total + fee, so the escrow
+  // collected amount always covers it — capped at ₦2,000, matching Monnify's
+  // local-card cap and the server's math. The buyer pays total + fee, so the escrow
   // amounts (item price, seller net) stay exact. The fee is shown in the sheet
   // before the buyer taps pay. VAT on the fee (~7.5%) and the fee-on-gross
   // rounding (a few naira) are absorbed by Vendi for now — flip the rate below
   // to pass them to the buyer later. The server re-computes this fee when the
   // payment starts; the client number is display-only, never trusted.
-  const gatewayFee = Math.ceil(totalCharge * 0.015);
+  const gatewayFee = Math.min(Math.ceil(totalCharge * 0.015), 2000);
   const gatewayTotal = totalCharge + gatewayFee;
 
   // A failed first load (nothing cached) gets a retry screen instead of an endless skeleton
@@ -431,6 +438,7 @@ export default function BuyPage() {
                   itemTitle: product.title,
                   counterparty: buyerName,
                   reference: data.reference,
+                  transaction_ref: data.reference,
                   detail: `Your payout is ₦${sellerNet.toLocaleString()}`,
                 },
                 imageUrl: productImage || undefined,
@@ -532,7 +540,7 @@ export default function BuyPage() {
           if (!res.ok) throw new Error('Failed to set PIN');
           // Mark the cached wallet as having a PIN without refetching it
           mutateWallet((prev: any) => (prev ? { ...prev, pin_set: true } : prev), { revalidate: false });
-          await executeEscrowPayment();
+          await executeEscrowPayment(completedPin);
         } catch (error: any) {
           showToast(error.message, 'error');
           setPin(''); setTempPin(''); setPinMode('create');
@@ -552,7 +560,7 @@ export default function BuyPage() {
           body: JSON.stringify({ action: 'verify', pin: completedPin })
         });
         if (!res.ok) throw new Error('Incorrect PIN');
-        await executeEscrowPayment();
+        await executeEscrowPayment(completedPin);
       } catch (error: any) {
         showToast(error.message, 'error');
         setPin('');
@@ -560,14 +568,17 @@ export default function BuyPage() {
     }
   };
 
-  const executeEscrowPayment = async () => {
+  // Wallet escrow: the PIN the user just entered is sent with the charge —
+  // the server verifies it before debiting (a stolen session alone must not
+  // be able to spend the wallet).
+  const executeEscrowPayment = async (pin: string) => {
     if (!product) return;
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/process-escrow`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ productId: product.id, offerPrice: negotiatedOffer })
+        body: JSON.stringify({ productId: product.id, offerPrice: negotiatedOffer, pin })
       });
       const data = await res.json();
 
@@ -602,6 +613,7 @@ export default function BuyPage() {
               itemTitle: product.title,
               counterparty: buyerName,
               reference: data.reference,
+              transaction_ref: data.reference,
               detail: `Your payout is ₦${sellerNet.toLocaleString()}`,
             },
             imageUrl: productImage || undefined,

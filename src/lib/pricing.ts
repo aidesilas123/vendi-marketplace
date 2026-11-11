@@ -11,12 +11,15 @@ export type PlatformSettings =
   | null
   | undefined;
 
-const round2 = (n: number) => Math.round(n * 100) / 100;
+// Fees are whole naira, floored — the server (process-escrow /
+// monnify-checkout-initialize) floors too, so the display must match
+// the charge exactly. Never show fractional-naira fees.
+const floorNaira = (n: number) => Math.floor(n);
 
 export function calcFees(price: number, settings: PlatformSettings) {
   const pct = Number(settings?.platform_fee_percentage) || 0;
   const isPromo = settings ? !!settings.is_launch_promo_active : false;
-  const standardFee = round2((price * pct) / 100);
+  const standardFee = floorNaira((price * pct) / 100);
   const fee = isPromo ? 0 : standardFee;
 
   return {
@@ -25,8 +28,8 @@ export function calcFees(price: number, settings: PlatformSettings) {
     standardFee, // what the fee would be without the promo (used for the struck-through display)
     buyerFee: fee,
     sellerFee: fee,
-    total: round2(price + fee), // "Total due" for the buyer
-    sellerPayout: round2(price - fee), // what the seller can withdraw
+    total: floorNaira(price + fee), // "Total due" for the buyer
+    sellerPayout: floorNaira(price - fee), // what the seller can withdraw
   };
 }
 

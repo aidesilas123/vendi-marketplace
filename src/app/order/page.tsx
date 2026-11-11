@@ -39,13 +39,17 @@ import {
  * Fetchers THROW on error so SWR keeps showing the last good data.
  * ------------------------------------------------------------------------- */
 
-type OrderBundle = { transaction: any; product: any | null; seller: any | null; buyer: any | null };
+type OrderBundle = { transaction: any; product: any | null; seller: any | null; buyer: any | null; contactWhatsapp: string | null };
 
 // Only the columns this page renders. The transaction keeps '*' because
 // effectiveTxStatus() decides the displayed status from fields not visible here.
+// whatsapp is NOT in these lists: no client role can SELECT it from the
+// users table (column grants). The other party's number comes from the
+// get_counterparty_contact() RPC in fetchOrder below — the viewer is one
+// party and only ever needs the OTHER party's number.
 const PRODUCT_COLUMNS = 'id,title,images,university_id,campus,specific_location,specifications,description';
-const SELLER_COLUMNS = 'id,full_name,avatar_url,is_verified,average_rating,total_reviews,whatsapp';
-const BUYER_COLUMNS = 'id,full_name,avatar_url,is_verified,average_rating,total_reviews,whatsapp';
+const SELLER_COLUMNS = 'id,full_name,avatar_url,is_verified,average_rating,total_reviews';
+const BUYER_COLUMNS = 'id,full_name,avatar_url,is_verified,average_rating,total_reviews';
 
 const parseImages = (raw: unknown): string[] => {
   if (Array.isArray(raw)) return raw;
@@ -70,9 +74,14 @@ const fetchOrder = async (ref: string): Promise<OrderBundle | null> => {
   if (txError) throw txError;
   if (!transaction) return null;
 
-  // Product, seller and buyer only depend on the transaction, so fetch them in parallel
+  // Product, seller and buyer only depend on the transaction, so fetch them in parallel.
+  // The counterparty's WhatsApp number comes from get_counterparty_contact(),
+  // which returns the OTHER party's number for this reference (or null when
+  // the caller is not a party) — the users table itself never exposes it.
+  // Its failure is NOT fatal: the order still loads, the number just shows
+  // as unavailable (e.g. before the SQL has been run in the dashboard).
   const buyerId = (transaction as any).buyer_id || (transaction as any).user_id;
-  const [productRes, sellerRes, buyerRes] = await Promise.all([
+  const [productRes, sellerRes, buyerRes, contactRes] = await Promise.all([
     transaction.product_id
       ? supabase.from('products').select(PRODUCT_COLUMNS).eq('id', transaction.product_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
@@ -82,6 +91,7 @@ const fetchOrder = async (ref: string): Promise<OrderBundle | null> => {
     buyerId
       ? supabase.from('users').select(BUYER_COLUMNS).eq('id', buyerId).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
+    supabase.rpc('get_counterparty_contact', { p_ref: ref }),
   ]);
   if (productRes.error) throw productRes.error;
   if (sellerRes.error) throw sellerRes.error;
@@ -92,6 +102,7 @@ const fetchOrder = async (ref: string): Promise<OrderBundle | null> => {
     product: productRes.data ? { ...productRes.data, images: parseImages(productRes.data.images) } : null,
     seller: sellerRes.data ?? null,
     buyer: buyerRes.data ?? null,
+    contactWhatsapp: contactRes.error ? null : ((contactRes.data as string | null) ?? null),
   };
 };
 
@@ -120,6 +131,9 @@ export default function OrderDetails() {
   const product = order?.product ?? null;
   const seller = order?.seller ?? null;
   const buyer = order?.buyer ?? null;
+  // The OTHER party's WhatsApp number (from the RPC, never from the users
+  // table). contactPerson is that same other party, so this is their number.
+  const contactWhatsapp = order?.contactWhatsapp ?? null;
 
   // Role: the seller sees the Sold view (buyer card, no buyer actions);
   // the buyer sees the existing view (confirm receipt, raise dispute).
@@ -155,6 +169,20 @@ export default function OrderDetails() {
     (userLoading || currentUser === null || !!orderKey);
 
   const { toast, showToast, hideToast } = useToast();
+
+  // Party check: only the buyer or the seller of this order may see it —
+  // the page shows price, payout and the other party's WhatsApp number.
+  // Anyone else is bounced before the details render.
+  const partyBouncedRef = useRef(false);
+  useEffect(() => {
+    if (!currentUser || !transaction || partyBouncedRef.current) return;
+    const buyerId = (transaction as any).buyer_id || (transaction as any).user_id;
+    if (currentUser.id !== buyerId && currentUser.id !== transaction.seller_id) {
+      partyBouncedRef.current = true;
+      showToast('You do not have access to this order.', 'error');
+      router.replace('/messages');
+    }
+  }, [currentUser, transaction, router]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -207,8 +235,8 @@ export default function OrderDetails() {
   };
 
   const copyPhoneNumber = async () => {
-    if (contactLocked || !contactPerson?.whatsapp) return;
-    const ok = await writeToClipboard(contactPerson.whatsapp);
+    if (contactLocked || !contactWhatsapp) return;
+    const ok = await writeToClipboard(contactWhatsapp);
     if (ok) {
       // Light tap confirms the copy; harmlessly ignored where haptics aren't supported (web)
       Haptics.impact({ style: ImpactStyle.Light }).catch(() => {});
@@ -218,11 +246,11 @@ export default function OrderDetails() {
   };
 
   const openWhatsApp = () => {
-    if (contactLocked || !contactPerson?.whatsapp) return;
+    if (contactLocked || !contactWhatsapp) return;
     const text = isSeller
       ? encodeURIComponent(`Hi ${contactPerson.full_name}, thanks for buying my ${product?.title} on Vendi! When would you like to meet up to inspect it?`)
       : encodeURIComponent(`Hi ${contactPerson.full_name}, I just purchased your ${product?.title} on Vendi. I'd like to arrange a meetup to inspect and pick it up!`);
-    const formattedPhone = contactPerson.whatsapp.startsWith('0') ? '234' + contactPerson.whatsapp.slice(1) : contactPerson.whatsapp;
+    const formattedPhone = contactWhatsapp.startsWith('0') ? '234' + contactWhatsapp.slice(1) : contactWhatsapp;
     window.open(`https://wa.me/${formattedPhone}?text=${text}`, '_blank');
   };
 
@@ -281,6 +309,13 @@ export default function OrderDetails() {
         <Button onClick={() => router.back()} className={`${failed ? 'mt-3' : 'mt-6'} px-8 !py-3 !rounded-full`}>Go Back</Button>
       </div>
     );
+  }
+
+  // Non-parties render nothing while the redirect above lands — the
+  // order details (price, payout, phone numbers) must never paint for them.
+  const gateBuyerId = (transaction as any)?.buyer_id || (transaction as any)?.user_id;
+  if (currentUser && transaction && currentUser.id !== gateBuyerId && currentUser.id !== transaction.seller_id) {
+    return null;
   }
 
   const chatPartnerId = currentUser?.id === transaction.seller_id
@@ -556,7 +591,7 @@ export default function OrderDetails() {
                     className="!w-full !flex items-center justify-center gap-2 mt-3 text-gray-600 dark:text-gray-300 font-bold !py-3 !rounded-2xl text-sm transition-all active:scale-[0.98]"
                   >
                     <IonIcon icon={callOutline} className="text-xl" />
-                    {contactPerson.whatsapp || 'Number unavailable'}
+                    {contactWhatsapp || 'Number unavailable'}
                   </button>
                 )}
 

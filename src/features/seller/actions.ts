@@ -6,7 +6,9 @@ const MAX_IMAGES = 5;
 
 type ListingStatus = 'ACTIVE' | 'APPROVED' | 'REJECTED' | 'PENDING_REVIEW' | 'DRAFT';
 
-const round2 = (n: number) => Math.round(n * 100) / 100;
+// Buyer-facing prices are whole naira, floored — the server floors too,
+// so the stored buyer_price must match the charge exactly.
+const floorNaira = (n: number) => Math.floor(n);
 
 export async function submitProductAction(
   formData: any,
@@ -94,21 +96,31 @@ export async function submitProductAction(
       }
       appliedPct = settings.is_launch_promo_active ? 0 : feePct;
     }
-    const buyerPrice = round2(basePrice * (1 + appliedPct / 100));
-    const slashedPrice = round2(basePrice * 1.1);
+    const buyerPrice = floorNaira(basePrice * (1 + appliedPct / 100));
+    const slashedPrice = floorNaira(basePrice * 1.1);
 
     /* ------------------------- ownership check when editing ---------------------- */
 
     if (productId) {
       const { data: existing, error: existingError } = await supabase
         .from('products')
-        .select('id')
+        .select('id, status')
         .eq('id', productId)
         .eq('seller_id', userId)
         .maybeSingle();
 
       if (existingError || !existing) {
         throw new Error("Listing not found, or you don't have permission to edit it.");
+      }
+
+      // SOLD is terminal and REJECTED must go through a fresh submission /
+      // appeal flow — an edit must never resurrect either back to ACTIVE.
+      if (existing.status === 'SOLD' || existing.status === 'REJECTED') {
+        throw new Error(
+          existing.status === 'SOLD'
+            ? 'This listing is already sold and can no longer be edited.'
+            : 'This listing was rejected and can no longer be edited. Post it again as a new listing.'
+        );
       }
     }
 
@@ -299,7 +311,7 @@ export async function submitReviewAction(
             title: 'New reply to your question',
             body: `${sellerName} replied on "${itemTitle}": "${content.slice(0, 90)}"`,
             route: `/product?id=${productId}`,
-            data: { itemTitle, counterparty: sellerName },
+            data: { itemTitle, counterparty: sellerName, product_id: productId },
             imageUrl: productImage || undefined,
           });
         }

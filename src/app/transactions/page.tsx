@@ -110,7 +110,7 @@ async function fetchActivity(): Promise<{ transactions: any[]; savedItems: any[]
     .from('saved_items')
     .select(`
       product_id,
-      products (*, seller:users(id, username, full_name, avatar_url, is_verified, is_admin, average_rating, whatsapp))
+      products (*, seller:users(id, username, full_name, avatar_url, is_verified, is_admin, average_rating))
     `)
     .eq('user_id', user.id)
     .order('created_at', { ascending: false });
@@ -126,8 +126,7 @@ async function fetchActivity(): Promise<{ transactions: any[]; savedItems: any[]
         avatar_url: p.seller?.avatar_url,
         is_verified: p.seller?.is_verified,
         is_admin: p.seller?.is_admin,
-        average_rating: p.seller?.average_rating,
-        whatsapp: p.seller?.whatsapp
+        average_rating: p.seller?.average_rating
       }
     }));
 
@@ -138,10 +137,17 @@ export default function TransactionsPage() {
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('all');
-  
+
+  // Who is logged in: the activity key is scoped with the user id so one
+  // account never sees another's cached transactions on a shared device.
+  const { data: userId } = useSWR('current-user-id', async (): Promise<string | null> => {
+    const { data } = await supabase.auth.getSession();
+    return data.session?.user?.id ?? null;
+  }, { revalidateOnFocus: false });
+
   // Stale-while-revalidate: cached activity shows instantly, then refreshes quietly.
   // `isLoading` is only true when there is no cached data yet (first ever load).
-  const { data, mutate } = useSWR(ACTIVITY_KEY, fetchActivity, {
+  const { data, mutate } = useSWR(userId ? [ACTIVITY_KEY, userId] : null, fetchActivity, {
     keepPreviousData: true,
     revalidateOnFocus: false,
     revalidateOnReconnect: true,
@@ -186,10 +192,10 @@ export default function TransactionsPage() {
 
   useEffect(() => { setMounted(true); }, []);
 
-  // Signed out (fetcher returned null) -> go to login
+  // Signed out (fetcher returned null, or no session at all) -> go to login
   useEffect(() => {
-    if (data === null) router.push('/login');
-  }, [data, router]);
+    if (userId === null || data === null) router.push('/login');
+  }, [userId, data, router]);
 
   // Handle spinner strip visibility
   useEffect(() => {

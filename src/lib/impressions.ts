@@ -5,8 +5,11 @@
 // A view is recorded when a card stays at least half visible for a short
 // dwell — long enough to filter out fast flings, short enough to catch a
 // genuine pause. Impressions are batched into a single insert per flush
-// (never one request per card), guarded per product per browser session,
-// and logged-out viewers count with viewer_id null, exactly like opens.
+// (never one request per card), guarded per product per browser session.
+// Anonymous views count too (the user's call, 2026-11-11): a logged-out
+// viewer is recorded with a NULL viewer_id, exactly as before the H6
+// change — anonymous views encourage sellers and make a new
+// marketplace look alive.
 //
 // Impressions live in the same product_views table as opens, distinguished
 // by the `kind` column ('impression' vs 'open' — see product-views-kind.sql).
@@ -62,6 +65,11 @@ async function flush() {
   queued.clear();
   try {
     const { data: { user } } = await supabase.auth.getUser();
+    // Anonymous impressions count too (the user's call, 2026-11-11): a
+    // logged-out viewer is recorded with a NULL viewer_id, exactly as
+    // before the H6 change. Logged-in views dedupe per (product,
+    // viewer, day) in the database; anonymous NULL rows are distinct,
+    // so they are never blocked by that dedupe.
     const { error } = await supabase.from('product_views').insert(
       ids.map((product_id) => ({ product_id, viewer_id: user?.id ?? null, kind: 'impression' })),
     );

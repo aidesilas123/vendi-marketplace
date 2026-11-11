@@ -148,9 +148,11 @@ async function fetchIsSaved(userId: string, productId: string) {
 }
 
 async function fetchSeller(sellerId: string) {
-  const { data, error } = await supabase.from('users').select('*').eq('id', sellerId).maybeSingle();
+  // Public profile only: the users table is locked to the owner's own row,
+  // so another seller's row must come from the public_profiles view.
+  const { data, error } = await supabase.from('public_profiles').select('id, username, full_name, avatar_url, is_verified, is_admin, average_rating, total_reviews').eq('id', sellerId).maybeSingle();
   if (error) throw error;
-  return data ?? null;
+  return (data ?? null) as any;
 }
 
 async function fetchSellerStats(sellerId: string) {
@@ -683,20 +685,29 @@ export default function ProductDetails() {
 
   // Count one view per listing per session. Runs once per listing, NOT inside the fetcher,
   // because fetchers re-run on every background refresh and would count repeat views.
+  // Anonymous views count too (the user's call, 2026-11-11): a view from a
+  // logged-out visitor is recorded with a NULL viewer_id, exactly as
+  // before the H6 change. Logged-in views dedupe per (product, viewer,
+  // day) in the database; anonymous NULL rows are distinct, so they are
+  // never blocked by that dedupe.
   const viewedId = product?.id as string | undefined;
   useEffect(() => {
     if (!viewedId) return;
     const storageKey = `viewed_${viewedId}`;
     try {
       if (sessionStorage.getItem(storageKey)) return;
-      sessionStorage.setItem(storageKey, 'true');
     } catch {
       // storage unavailable: still count the view
     }
     (async () => {
       try {
         const uid = await getUserId();
-        await supabase.from('product_views').insert({ product_id: viewedId, viewer_id: uid });
+        try {
+          sessionStorage.setItem(storageKey, 'true');
+        } catch {
+          // storage unavailable: still count the view
+        }
+        await supabase.from('product_views').insert({ product_id: viewedId, viewer_id: uid ?? null });
         mutateViews(); // refresh the counter so it includes this view
       } catch {
         // a missed view count isn't worth bothering the buyer
@@ -833,7 +844,7 @@ export default function ProductDetails() {
             ? `${buyerName} rated you ${rating} stars: "${text.slice(0, 90)}"`
             : `${buyerName} rated you ${rating} stars.`,
           route: '/reviews',
-          data: { rating: String(rating), counterparty: buyerName, itemTitle: product.title },
+          data: { rating: String(rating), counterparty: buyerName, itemTitle: product.title, product_id: product.id },
           imageUrl: buyerAvatar || undefined,
         });
       })();
@@ -869,7 +880,7 @@ export default function ProductDetails() {
               title: `New question on "${product.title}"`,
               body: `${myName} asked: "${text.slice(0, 90)}"`,
               route: '/questions',
-              data: { itemTitle: product.title, counterparty: myName },
+              data: { itemTitle: product.title, counterparty: myName, product_id: product.id },
               imageUrl: productImage || undefined,
             });
           }
@@ -882,7 +893,7 @@ export default function ProductDetails() {
               title: 'New reply to your question',
               body: `${myName} replied on "${product.title}": "${text.slice(0, 90)}"`,
               route: `/product?id=${product.id}`,
-              data: { itemTitle: product.title, counterparty: myName },
+              data: { itemTitle: product.title, counterparty: myName, product_id: product.id },
               imageUrl: productImage || undefined,
             });
           }

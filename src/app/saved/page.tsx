@@ -84,8 +84,14 @@ async function fetchSavedItems(): Promise<SavedProduct[] | null> {
 
 export default function SavedItemsPage() {
   const router = useRouter();
+  // Who is logged in: the SWR key is scoped with the user id so one
+  // account never sees another's cached saved items on a shared device.
+  const { data: userId } = useSWR('current-user-id', async (): Promise<string | null> => {
+    const { data } = await supabase.auth.getSession();
+    return data.session?.user?.id ?? null;
+  }, { revalidateOnFocus: false });
   const { data, isLoading, mutate } = useSWR<SavedProduct[] | null>(
-    'saved-items',
+    userId ? ['saved-items', userId] : null,
     fetchSavedItems,
     { revalidateOnFocus: false }
   );
@@ -93,8 +99,8 @@ export default function SavedItemsPage() {
   const { toggle } = useSavedIds();
 
   useEffect(() => {
-    if (!isLoading && data === null) router.push('/login');
-  }, [isLoading, data, router]);
+    if (userId === null || (!isLoading && data === null)) router.push('/login');
+  }, [userId, isLoading, data, router]);
 
   const bounceRef = useRef<HTMLDivElement>(null);
 

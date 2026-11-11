@@ -16,6 +16,7 @@ import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { registerBackHandler } from '@/shared/HardwareBackButton';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 import { payWithMonnify } from '@/lib/monnify';
+import { PinPadModal } from '@/shared/Checkout/PinPadModal';
 import {
   chevronBackOutline,
   shieldCheckmarkOutline,
@@ -153,12 +154,37 @@ export default function VerificationPage() {
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => { setIsMounted(true); }, []);
 
+  /* The signed-in user id, from the auth listener (the authority on
+     account switches — it fires on sign-in, sign-out and token refresh).
+     The SWR keys below are scoped with it, so a second user on a shared
+     device never sees the first user's cached verification state. */
+  const [authUserId, setAuthUserId] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    let active = true;
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (active) setAuthUserId(session?.user.id ?? null);
+    });
+    supabase.auth.getSession().then(({ data }) => {
+      if (active) setAuthUserId(data.session?.user.id ?? null);
+    });
+    return () => {
+      active = false;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
+  useEffect(() => {
+    if (authUserId === null) router.push('/login');
+  }, [authUserId, router]);
+
   /* ---------------- SWR: auth, profile, verification ---------------- */
-  const { data: sessionUser } = useSWR('verification-auth-user', async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) router.push('/login');
-    return user ?? null;
-  });
+  const { data: sessionUser } = useSWR(
+    authUserId ? ['verification-auth-user', authUserId] : null,
+    async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) router.push('/login');
+      return user ?? null;
+    }
+  );
 
   const { data: profile, isLoading: profileLoading } = useSWR(
     sessionUser ? ['verification-profile', sessionUser.id] : null,
@@ -212,7 +238,7 @@ export default function VerificationPage() {
     }
   );
 
-  const isLoading = profileLoading || verificationLoading;
+  const isLoading = authUserId === undefined || profileLoading || verificationLoading;
   const status: VerificationStatus = profile?.is_verified
     ? 'approved'
     : (latestVerification?.status as VerificationStatus) || 'none';
@@ -310,6 +336,13 @@ export default function VerificationPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [monnifyProcessing, setMonnifyProcessing] = useState(false);
   const [monnifyPending, setMonnifyPending] = useState(false);
+  // Wallet PIN (same PinPadModal pattern as the /buy checkout sheet): the
+  // wallet charge is a money spend, so the server requires the PIN — it is
+  // collected here first and sent with the charge request.
+  const [pinOpen, setPinOpen] = useState(false);
+  const [pinMode, setPinMode] = useState<'create' | 'confirm' | 'verify'>('verify');
+  const [pin, setPin] = useState('');
+  const [tempPin, setTempPin] = useState('');
   // Monnify fee + total for display (fee + 1.5% gateway fee). The server is
   // authoritative; these are only the numbers shown before the modal opens.
   const monnifyFee = Math.ceil(VERIFICATION_FEE * 0.015);
@@ -475,16 +508,9 @@ export default function VerificationPage() {
       const init = await initRes.json().catch(() => null);
       if (!initRes.ok || !init?.success) throw new Error(init?.error || 'Could not start the online payment.');
       if (init.alreadyPaid) {
-        // Fee was already paid (a previous attempt) — file the application.
-        const { error } = await supabase.from('verifications').insert({
-          user_id: profile.id,
-          document_type: docType,
-          document_url: docUrl,
-          selfie_url: selfieUrl,
-          status: 'pending',
-          fee_paid: true,
-        });
-        if (error) throw error;
+        // Fee was already paid (a previous attempt) — the application was
+        // filed server-side when it was paid. Fetch the existing row and
+        // show the pending screen; never insert a verifications row here.
         await refetchVerification();
         setRetrying(false);
         setStep(1);
@@ -528,20 +554,28 @@ export default function VerificationPage() {
     }
   };
 
-  const submitWithWallet = async () => {
+  const submitWithWallet = async (completedPin: string) => {
     if (!profile || !docUrl || !selfieUrl) return;
     setIsSubmitting(true);
     try {
       // Wallet: one-time fee, charged before the application is filed.
-      // A rejected applicant retries free (the edge function skips the charge
-      // when a verifications row already exists for this user).
+      // The edge function verifies the PIN, charges the wallet, and files
+      // the verifications row server-side — the client never inserts it.
+      // A rejected applicant retries free (the edge function skips the
+      // charge when a paid verifications row already exists and re-files
+      // it with the new documents).
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
       if (!token) throw new Error('Please sign in again to submit.');
       const chargeRes = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/charge-verification-fee`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          document_type: docType,
+          document_url: docUrl,
+          selfie_url: selfieUrl,
+          pin: completedPin,
+        }),
       });
       const charge = await chargeRes.json().catch(() => null);
       if (!chargeRes.ok || !charge?.success) {
@@ -560,16 +594,8 @@ export default function VerificationPage() {
         }
         throw new Error(charge?.error || 'Could not charge the verification fee.');
       }
-      const { error } = await supabase.from('verifications').insert({
-        user_id: profile.id,
-        document_type: docType,
-        document_url: docUrl,
-        selfie_url: selfieUrl,
-        status: 'pending',
-        fee_paid: true,
-        fee_reference: charge.reference ?? null,
-      });
-      if (error) throw error;
+      // The server filed the application (or re-filed the paid one on a
+      // retry). Refresh and show the pending screen.
       await refetchVerification();
       setRetrying(false);
       setStep(1);
@@ -578,6 +604,73 @@ export default function VerificationPage() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  /* Wallet pay starts with the PIN: no PIN set yet -> create one first,
+     otherwise verify the existing one, then charge. */
+  const handleWalletPayClick = async () => {
+    if (!profile || !docUrl || !selfieUrl) return;
+    const { data: wallet } = await supabase
+      .from('wallets')
+      .select('pin_set')
+      .eq('user_id', profile.id)
+      .maybeSingle();
+    setPinMode(wallet?.pin_set === true ? 'verify' : 'create');
+    setPin('');
+    setTempPin('');
+    setPinOpen(true);
+  };
+
+  const handlePinBackspace = () => setPin((prev) => prev.slice(0, -1));
+  const handlePinPress = (digit: string) => {
+    if (pin.length < 4) {
+      const newPin = pin + digit;
+      setPin(newPin);
+      if (newPin.length === 4) setTimeout(() => void processPin(newPin), 300);
+    }
+  };
+
+  const processPin = async (completedPin: string) => {
+    if (pinMode === 'create') {
+      setTempPin(completedPin);
+      setPin('');
+      setPinMode('confirm');
+      return;
+    }
+    if (pinMode === 'confirm') {
+      if (completedPin === tempPin) {
+        setPinOpen(false);
+        setPin('');
+        setTempPin('');
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/manage-pin`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'set', pin: completedPin }),
+          });
+          if (!res.ok) throw new Error('Failed to set PIN');
+          await submitWithWallet(completedPin);
+        } catch (error: any) {
+          showGlobalToast(error.message || 'Failed to set PIN', 'error');
+          setPin('');
+          setTempPin('');
+          setPinMode('create');
+          setPinOpen(true);
+        }
+        return;
+      }
+      showGlobalToast('PINs do not match.', 'error');
+      setPin('');
+      setTempPin('');
+      setPinMode('create');
+      return;
+    }
+    // verify: the server checks the PIN again inside the charge — a wrong
+    // PIN comes back as a charge error, shown by submitWithWallet.
+    setPinOpen(false);
+    setPin('');
+    await submitWithWallet(completedPin);
   };
 
   /* ---------------- Loading: shared spinner, no white flash ---------------- */
@@ -618,6 +711,17 @@ export default function VerificationPage() {
           </Button>
         </div>
       </Modal>
+
+      {/* Wallet PIN pad (same pattern as the /buy checkout sheet) */}
+      <PinPadModal
+        isOpen={pinOpen}
+        onClose={() => { setPinOpen(false); setPin(''); setTempPin(''); }}
+        pinMode={pinMode}
+        pin={pin}
+        totalCharge={VERIFICATION_FEE}
+        onPinPress={handlePinPress}
+        onBackspace={handlePinBackspace}
+      />
 
       {/* Seamless header: solid bg, no border, no shadow, no blur */}
       <div className="flex-shrink-0 w-full bg-background sticky top-0 z-50">
@@ -1039,7 +1143,7 @@ export default function VerificationPage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => void submitWithWallet()}
+                    onClick={() => void handleWalletPayClick()}
                     disabled={isSubmitting || monnifyProcessing}
                     style={{ minHeight: '60px', height: '60px', borderRadius: '9999px' }}
                     className="w-full border-none outline-none flex items-center justify-center gap-2 bg-orange-500 hover:bg-orange-600 text-white font-black text-lg transition-colors cursor-pointer active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait"

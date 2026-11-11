@@ -117,6 +117,10 @@ async function fetchRankedFeed(opts: {
 // the async lookup — the feed SWR key is set at once and the cached feed
 // renders with no skeleton flash.
 let cachedCampus: { campus: string | null; university: string | null } | null = null;
+// The user the module caches above belong to. When the account changes,
+// both caches reset — the next account must never inherit the last one's
+// campus or photo-search results.
+let cachedCampusUserId: string | null = null;
 
 // Last photo-search results, cached at module level so coming back from a
 // product page restores them instead of clearing the search.
@@ -335,6 +339,18 @@ export default function HomeFeed() {
         const userId = session?.user?.id;
         const createdAt = session?.user?.created_at;
         if (!userId) return;
+        // Account changed since these module caches were filled: drop the
+        // previous account's campus + photo-search results before loading
+        // the new account's, so nothing leaks across a shared-device login.
+        if (cachedCampusUserId && cachedCampusUserId !== userId) {
+          cachedCampus = null;
+          cachedVisualResults = null;
+          setUserCampus(null);
+          setUserUniversity(null);
+          setVisualResults(null);
+          setCampusReady(false);
+        }
+        cachedCampusUserId = userId;
         const { data } = await supabase
           .from('users')
           .select('campus, university_id')
@@ -355,6 +371,25 @@ export default function HomeFeed() {
       }
     })();
     return () => { cancelled = true; };
+  }, []);
+
+  // Account switch while the feed stays mounted (no remount, no reload):
+  // drop the previous account's module caches at once. The session effect
+  // above only runs on mount, so without this the stale campus + visual
+  // results would survive until the next feed remount.
+  useEffect(() => {
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      const uid = session?.user?.id ?? null;
+      if (uid && cachedCampusUserId && cachedCampusUserId !== uid) {
+        cachedCampus = null;
+        cachedVisualResults = null;
+        setUserCampus(null);
+        setUserUniversity(null);
+        setVisualResults(null);
+      }
+      if (uid) cachedCampusUserId = uid;
+    });
+    return () => sub.subscription.unsubscribe();
   }, []);
 
   // Recent searches live on this device only (localStorage), most recent first.

@@ -20,13 +20,20 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5, onUplo
   const [loadedImages, setLoadedImages] = useState<{ [key: string]: boolean }>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 1. Client-Side Compression
+  // Maximum file size per photo: anything bigger is rejected before upload.
+  const MAX_FILE_BYTES = 5 * 1024 * 1024;
+
+  // 1. Client-Side Compression. Fail-closed: a compression failure rejects
+  // instead of resolving the original file (an uncompressed multi-MB
+  // original must never go up in place of the compressed one).
   const compressImage = (file: File): Promise<File> => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.readAsDataURL(file);
+      reader.onerror = () => reject(new Error('Could not read the image file.'));
       reader.onload = (event) => {
         const img = new Image();
+        img.onerror = () => reject(new Error('Could not load the image for compression.'));
         img.src = event.target?.result as string;
         img.onload = () => {
           const canvas = document.createElement('canvas');
@@ -34,13 +41,13 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5, onUplo
           const scaleSize = MAX_WIDTH / img.width;
           canvas.width = img.width > MAX_WIDTH ? MAX_WIDTH : img.width;
           canvas.height = img.width > MAX_WIDTH ? img.height * scaleSize : img.height;
-          
+
           const ctx = canvas.getContext('2d');
           ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
-          
+
           canvas.toBlob((blob) => {
             if (blob) resolve(new File([blob], file.name, { type: 'image/jpeg' }));
-            else resolve(file);
+            else reject(new Error('Could not compress the image.'));
           }, 'image/jpeg', 0.8);
         };
       };
@@ -49,7 +56,22 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5, onUplo
 
   // 2. Batch Upload Logic
   const handleUpload = async (files: FileList | File[]) => {
-    if (images.length + files.length > maxImages) {
+    // Validate BEFORE anything uploads: images only, 5MB max each.
+    // Rejected files are reported and skipped; valid ones still upload.
+    const filesArray = Array.from(files);
+    const validFiles: File[] = [];
+    for (const file of filesArray) {
+      if (!file.type.startsWith('image/')) {
+        onError(`"${file.name}" is not an image. Only photos can be uploaded.`);
+      } else if (file.size > MAX_FILE_BYTES) {
+        onError(`"${file.name}" is larger than 5MB. Pick a smaller photo.`);
+      } else {
+        validFiles.push(file);
+      }
+    }
+    if (validFiles.length === 0) return;
+
+    if (images.length + validFiles.length > maxImages) {
       onError(`You can only upload a maximum of ${maxImages} images.`);
       return;
     }
@@ -64,8 +86,7 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5, onUplo
 
     onUploadingStateChange?.(true);
 
-    const filesArray = Array.from(files);
-    const trackingData = filesArray.map(rawFile => ({
+    const trackingData = validFiles.map(rawFile => ({
       id: Math.random().toString(36).substring(7),
       rawFile,
       preview: URL.createObjectURL(rawFile)
@@ -76,7 +97,6 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5, onUplo
     const uploadPromises = trackingData.map(async (fileData) => {
       try {
         const compressedFile = await compressImage(fileData.rawFile);
-        
         return new Promise<string>((resolve) => {
           const xhr = new XMLHttpRequest();
           xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`);
@@ -110,6 +130,7 @@ export const ImageUploader = ({ images, onChange, onError, maxImages = 5, onUplo
         });
       } catch (error) {
         setUploadingFiles(prev => prev.filter(f => f.id !== fileData.id));
+        onError('Could not process one of the photos. Please try a different image.');
         return '';
       }
     });

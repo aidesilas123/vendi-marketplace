@@ -78,6 +78,7 @@ import useSWR, { mutate as globalMutate } from 'swr';
 import { supabase } from '@/lib/supabase';
 import { getCachedMessages, putCachedMessages, getCachedPartner, putCachedPartner, getOutbox, putOutbox, deleteOutbox, getCachedInbox, putCachedInbox } from '@/lib/localCache';
 import { notify } from '@/lib/notify';
+import { showGlobalToast } from '@/shared/Toast/Toast';
 import { Avatar } from '@/shared/Avatar';
 import { Badge } from '@/shared/Badge';
 import IonIcon from '@/shared/Icon/Icon';
@@ -137,6 +138,16 @@ const LONG_PRESS_MS = 450;
 const TYPING_BROADCAST_IDLE_MS = 1200;
 const CANCEL_DRAG_PX = 100;
 const LOCK_DRAG_PX = 80;
+
+// Admin-thread rooms are addressed by the thread's uuid, not by a
+// transaction reference. Transaction refs are never bare uuids
+// (ESC-/MON-/VENDI-/VERFEE-/SPON-/REF-/MONFEE-...), so a uuid ref is
+// always an admin thread — and the old synthetic `admin-<id>-<id>` refs
+// are gone (they had no transactions row, so the messages RLS rejected
+// them; see get_or_create_admin_thread in supabase_notes/rls-policies.sql).
+const THREAD_REF_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isThreadRef = (ref: string | null | undefined): boolean =>
+  !!ref && THREAD_REF_REGEX.test(ref);
 
 function formatLastSeen(dateString: string) {
   try {
@@ -477,6 +488,21 @@ function DealRoomChat() {
   const txRef = searchParams.get('ref') || searchParams.get('id');
   const partnerId = searchParams.get('seller');
 
+  // Thread mode: the ref is an admin_threads uuid, not a transaction
+  // reference. Thread rooms load/send by admin_thread_id; deal rooms by
+  // transaction_ref. The transaction-ref flow below is untouched.
+  const isAdminThread = isThreadRef(txRef);
+
+  // Every message insert in this room goes through here: thread rooms
+  // address messages by admin_thread_id (transaction_ref NULL), deal
+  // rooms by transaction_ref (admin_thread_id NULL). One helper so the
+  // two modes can never drift apart — a thread insert with a
+  // transaction_ref (or vice versa) would fail the messages RLS policy,
+  // which requires exactly one of the two to be set.
+  const messageRoomColumns = () => (isAdminThread
+    ? { transaction_ref: null, admin_thread_id: txRef }
+    : { transaction_ref: txRef, admin_thread_id: null });
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
   const pressTimeRef = useRef<number>(0);
@@ -548,6 +574,14 @@ function DealRoomChat() {
   // Init failure surfacing: never leave the user staring at a spinner forever.
   const [initError, setInitError] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
+  // Party check gate: history (SWR + cache) only loads once the room has
+  // proven the viewer is a party to the deal (or an admin on an admin ref).
+  // Until then the room shows nothing — no cached messages, no history.
+  const [partyOk, setPartyOk] = useState(false);
+  // A new room resets the gate: its own party check must pass before any
+  // history for the new ref loads (this runs before the init effect below,
+  // which sets it true only after the check passes).
+  useEffect(() => { setPartyOk(false); }, [txRef]);
 
   const txStatus = txData ? effectiveTxStatus(txData) : 'pending';
   const isDealClosed = txStatus !== 'pending';
@@ -566,16 +600,18 @@ function DealRoomChat() {
   // returning it; when false it returns the list for SWR to set as the
   // data (first load, cache empty).
   const syncHistoryFresh = useCallback(async (ref: string, background: boolean): Promise<any[]> => {
-    const { data, error } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('transaction_ref', ref)
+    // Thread rooms filter by admin_thread_id, deal rooms by
+    // transaction_ref. The ref itself says which: a uuid ref is a thread.
+    const historyQuery = supabase.from('messages').select('*');
+    const { data, error } = await (isThreadRef(ref)
+      ? historyQuery.eq('admin_thread_id', ref)
+      : historyQuery.eq('transaction_ref', ref))
       .order('created_at', { ascending: false })
       .limit(50);
     if (error) throw error;
     const list = (data ?? []).reverse();
     setHasEarlierMessages((data ?? []).length >= 50);
-    void putCachedMessages(ref, list);
+    void putCachedMessages(ref, list, currentUserRef.current?.id);
     if (background) {
       void globalMutate(
         (key: any) => Array.isArray(key) && key[0] === 'chat-history' && key[1] === ref,
@@ -598,7 +634,7 @@ function DealRoomChat() {
     // updates when the network catches up). Cache empty (first visit) →
     // fetch fresh now, as before.
     try {
-      const cached = await getCachedMessages(ref);
+      const cached = await getCachedMessages(ref, currentUserRef.current?.id);
       if (cached && cached.length > 0) {
         setHasEarlierMessages(cached.length >= 50);
         void syncHistoryFresh(ref, true).catch(() => {});
@@ -624,10 +660,12 @@ function DealRoomChat() {
 
     setLoadingEarlier(true);
     try {
-      const { data, error } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('transaction_ref', txRef)
+      // Same mode split as syncHistoryFresh above: threads by
+      // admin_thread_id, deals by transaction_ref.
+      const earlierQuery = supabase.from('messages').select('*');
+      const { data, error } = await (isAdminThread
+        ? earlierQuery.eq('admin_thread_id', txRef)
+        : earlierQuery.eq('transaction_ref', txRef))
         .lt('created_at', oldest.created_at)
         .order('created_at', { ascending: false })
         .limit(50);
@@ -641,7 +679,7 @@ function DealRoomChat() {
         await mutate((prev) => [...olderList, ...(prev ?? [])], { revalidate: false });
         // Phase 2: keep the older messages in the local cache too, so the
         // next open shows them instantly instead of re-fetching.
-        void putCachedMessages(txRef, [...olderList, ...(serverMessages ?? [])]).catch(() => {});
+        void putCachedMessages(txRef, [...olderList, ...(serverMessages ?? [])], currentUserRef.current?.id).catch(() => {});
         requestAnimationFrame(() => {
           if (scrollEl) {
             const heightDiff = scrollEl.scrollHeight - prevScrollHeight;
@@ -661,7 +699,7 @@ function DealRoomChat() {
     isValidating: historyValidating,
     error: historyError,
     mutate,
-  } = useSWR(txRef ? ['chat-history', txRef] : null, fetchHistory, {
+  } = useSWR(txRef && partyOk ? ['chat-history', txRef] : null, fetchHistory, {
     revalidateOnFocus: false,
     revalidateOnMount: false,
     dedupingInterval: 60000,
@@ -685,8 +723,10 @@ function DealRoomChat() {
         if (cached) {
           void (async () => {
             try {
+              // The partner is another user: their row comes from the
+              // public_profiles view, not the locked-down users table.
               const { data, error } = await supabase
-                .from('users')
+                .from('public_profiles')
                 .select('id, full_name, avatar_url, is_verified')
                 .eq('id', id)
                 .single();
@@ -700,7 +740,7 @@ function DealRoomChat() {
         }
       } catch {}
       const { data, error } = await supabase
-        .from('users')
+        .from('public_profiles')
         .select('id, full_name, avatar_url, is_verified')
         .eq('id', id)
         .single();
@@ -981,6 +1021,47 @@ function DealRoomChat() {
         setInitError(null);
 
         if (cancelled) return;
+
+        // Party check (defence in depth — the messages RLS policy is the
+        // real lock): only a buyer/seller of this transaction may open the
+        // room. Admin-thread rooms (ref is the thread uuid) are allowed
+        // only when the session user is one of the thread's two parties
+        // (the admin or the user) — the thread row itself is the proof,
+        // and only an admin could have created it (see
+        // get_or_create_admin_thread in supabase_notes/rls-policies.sql).
+        // Anyone else is bounced to /messages before any channel,
+        // history or cache loads.
+        const isParty = await (async (): Promise<boolean> => {
+          if (!txRef) return false;
+          if (isAdminThread) {
+            const { data: thread } = await supabase
+              .from('admin_threads')
+              .select('admin_id, user_id')
+              .eq('id', txRef)
+              .maybeSingle();
+            if (!thread) return false;
+            return thread.admin_id === user.id || thread.user_id === user.id;
+          }
+          // NOTE: transactions has NO buyer_id column — the buyer is
+          // user_id. Selecting buyer_id here used to make PostgREST
+          // error, tx came back null, and EVERY room bounced to
+          // /messages. Only user_id (buyer) and seller_id exist.
+          const { data: tx } = await supabase
+            .from('transactions')
+            .select('user_id, seller_id')
+            .eq('reference', txRef)
+            .maybeSingle();
+          if (!tx) return false;
+          return tx.user_id === user.id || tx.seller_id === user.id;
+        })();
+        if (cancelled) return;
+        if (!isParty) {
+          showGlobalToast('You do not have access to this chat.', 'error');
+          router.replace('/messages');
+          return;
+        }
+        setPartyOk(true);
+
         // Reuse a live channel for this room instead of dropping + recreating it.
         // Dropping a still-joined channel then immediately re-joining the same
         // topic races the server-side leave: the new subscribe is rejected
@@ -1040,7 +1121,8 @@ function DealRoomChat() {
         })();
 
         // Transaction status also loads in the background (read-only check).
-        if (txRef) {
+        // Thread rooms have no transaction — skip the lookup entirely.
+        if (txRef && !isAdminThread) {
           void (async () => {
             try {
               const { data: txRecord } = await supabase
@@ -1106,10 +1188,14 @@ function DealRoomChat() {
         // throws, and .subscribe() twice throws "tried to join multiple
         // times". The if body is the entire multi-line chain (through
         // ).subscribe();), so no re-indent is needed.
+        // Live-message filter must match the room mode, or live messages
+        // never arrive: threads filter on admin_thread_id, deals on
+        // transaction_ref.
+        const roomFilter = isAdminThread ? `admin_thread_id=eq.${txRef}` : `transaction_ref=eq.${txRef}`;
         if (!reuseChannel) {
         chatChannel.on(
           'postgres_changes',
-          { event: 'INSERT', schema: 'public', table: 'messages', filter: `transaction_ref=eq.${txRef}` },
+          { event: 'INSERT', schema: 'public', table: 'messages', filter: roomFilter },
           (payload: any) => {
             const newMsg = payload?.new;
             if (!newMsg) return;
@@ -1128,40 +1214,57 @@ function DealRoomChat() {
             if (meNow && newMsg.receiver_id === meNow.id) {
               playChatSound('received');
               chatChannel.send({ type: 'broadcast', event: 'messages_read', payload: { ids: [newMsg.id] } });
-              supabase.from('messages').update({ status: 'read' }).eq('id', newMsg.id);
+              supabase.from('messages').update({ status: 'read' }).eq('id', newMsg.id).eq('receiver_id', meNow.id);
             }
           }
         ).on(
           // Keep edits/deletes made from other devices/tabs in sync.
           'postgres_changes',
-          { event: 'UPDATE', schema: 'public', table: 'messages', filter: `transaction_ref=eq.${txRef}` },
+          { event: 'UPDATE', schema: 'public', table: 'messages', filter: roomFilter },
           (payload: any) => {
             updateMessages((prev) => prev.map((m) => m.id === payload.new.id ? { ...m, ...payload.new } : m));
           }
         ).on(
-          // Instant Peer-to-Peer Realtime Broadcast for zero-latency incoming messages
+          // Instant Peer-to-Peer Realtime Broadcast for zero-latency incoming messages.
+          // Broadcasts are hints only, never truth: a spoofed payload must
+          // never render as a real message or trigger a sound/push. The row
+          // is re-fetched by id first; if it is not in the database (or not
+          // in this room), the broadcast is ignored — the postgres_changes
+          // INSERT handler above renders the real row when it lands.
           'broadcast',
           { event: 'new_message' },
           (payload: any) => {
             const newMsg = payload?.payload;
-            if (!newMsg) return;
-            if (newMsg.sender_id === currentUserRef.current?.id) {
-              setOptimisticMsgs((prev) => prev.filter((m) => {
-                if (newMsg.media_url && m.media_url === newMsg.media_url) return false;
-                                                if (newMsg.message_type === 'text' && m.content === newMsg.content) return false;
-                return true;
-              }));
-            }
-            updateMessages((prev) => {
-              if (prev.find(m => m.id === newMsg.id)) return prev;
-              return [...prev, newMsg];
-            });
-            const meNow = currentUserRef.current;
-            if (meNow && newMsg.receiver_id === meNow.id) {
-              playChatSound('received');
-              chatChannel.send({ type: 'broadcast', event: 'messages_read', payload: { ids: [newMsg.id] } });
-              supabase.from('messages').update({ status: 'read' }).eq('id', newMsg.id);
-            }
+            if (!newMsg?.id) return;
+            void (async () => {
+              const { data: row } = await supabase
+                .from('messages')
+                .select('id, transaction_ref, admin_thread_id, sender_id, receiver_id')
+                .eq('id', newMsg.id)
+                .maybeSingle();
+              if (!row) return;
+              // The broadcast is only trusted when the row belongs to
+              // THIS room: threads match on admin_thread_id, deals on
+              // transaction_ref.
+              if (isAdminThread ? row.admin_thread_id !== txRef : row.transaction_ref !== txRef) return;
+              if (row.sender_id === currentUserRef.current?.id) {
+                setOptimisticMsgs((prev) => prev.filter((m) => {
+                  if (newMsg.media_url && m.media_url === newMsg.media_url) return false;
+                                                  if (newMsg.message_type === 'text' && m.content === newMsg.content) return false;
+                  return true;
+                }));
+              }
+              updateMessages((prev) => {
+                if (prev.find(m => m.id === newMsg.id)) return prev;
+                return [...prev, newMsg];
+              });
+              const meNow = currentUserRef.current;
+              if (meNow && row.receiver_id === meNow.id) {
+                playChatSound('received');
+                chatChannel.send({ type: 'broadcast', event: 'messages_read', payload: { ids: [newMsg.id] } });
+                supabase.from('messages').update({ status: 'read' }).eq('id', newMsg.id).eq('receiver_id', meNow.id);
+              }
+            })();
           }
         ).on(
           // Live read receipts broadcast
@@ -1489,7 +1592,7 @@ function DealRoomChat() {
     if (partnerId) {
       void broadcastTo(`user_inbox_${partnerId}`, 'messages_read', { ids });
     }
-    supabase.from('messages').update({ status: 'read' }).in('id', ids).then(({ error }: any) => {
+    supabase.from('messages').update({ status: 'read' }).in('id', ids).eq('receiver_id', currentUser.id).then(({ error }: any) => {
       if (error) {
         console.error('[Chat] Failed to mark messages as read on the server:', error.message);
       }
@@ -1552,7 +1655,7 @@ function DealRoomChat() {
     updateMessages((prev) => prev.map((m) => m.id === msg.id ? { ...m, is_deleted: true, content: '', media_url: null } : m));
     const { error } = await supabase.from('messages').update({
       is_deleted: true, content: '', media_url: null
-    }).eq('id', msg.id);
+    }).eq('id', msg.id).eq('sender_id', currentUser?.id);
     if (error) {
       console.error('[Chat] Failed to delete message on the server (does your `messages` table have an `is_deleted` boolean column?):', error.message);
     }
@@ -1761,7 +1864,7 @@ function DealRoomChat() {
       route: `/chats?ref=${txRef}&seller=${msg.sender_id}`,
       imageUrl: currentUser.avatar_url || undefined,
       // Structured for the native rich notification (inline Reply / Mark as read).
-      data: { txRef: txRef ?? '', partnerId: msg.sender_id ?? '' },
+      data: { txRef: txRef ?? '', transaction_ref: txRef ?? '', partnerId: msg.sender_id ?? '' },
     });
   };
 
@@ -1788,7 +1891,7 @@ function DealRoomChat() {
       const idBeingEdited = editingMessageId;
       updateMessages((prev) => prev.map((m) => m.id === idBeingEdited ? { ...m, content: text, is_edited: true } : m));
       setEditingMessageId(null);
-      const { error } = await supabase.from('messages').update({ content: text, is_edited: true }).eq('id', idBeingEdited);
+      const { error } = await supabase.from('messages').update({ content: text, is_edited: true }).eq('id', idBeingEdited).eq('sender_id', currentUser.id);
       if (error) {
         console.error('[Chat] Failed to save edit on the server (does your `messages` table have an `is_edited` boolean column?):', error.message);
       }
@@ -1815,7 +1918,7 @@ function DealRoomChat() {
     setReplyTarget(null);
 
     const { data: savedMsg, error } = await supabase.from('messages').insert({
-      transaction_ref: txRef, sender_id: currentUser.id, receiver_id: partnerId,
+      ...messageRoomColumns(), sender_id: currentUser.id, receiver_id: partnerId,
       content: text, message_type: 'text', status: 'sent',
       ...replyMeta
     }).select().single();
@@ -1875,7 +1978,7 @@ function DealRoomChat() {
     try {
       if (msg.message_type === 'text') {
         const { data: savedMsg, error } = await supabase.from('messages').insert({
-          transaction_ref: txRef, sender_id: currentUser.id, receiver_id: partnerId,
+          ...messageRoomColumns(), sender_id: currentUser.id, receiver_id: partnerId,
           content: msg.content, message_type: 'text', status: 'sent', ...replyMeta
         }).select().single();
         if (error || !savedMsg) failAgain();
@@ -1887,11 +1990,12 @@ function DealRoomChat() {
       if (typeof msg.media_url === 'string' && msg.media_url.startsWith('https://')) {
         mediaUrl = msg.media_url; // upload already finished — just re-save
       } else if (msg._localDataUri) {
+        const { cloudName: retryCloud, uploadPreset: retryPreset } = getCloudinaryConfig();
         const formData = new FormData();
         formData.append('file', msg._localDataUri);
-        formData.append('upload_preset', process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || 'Campus Vendi');
+        formData.append('upload_preset', retryPreset);
         formData.append('resource_type', 'auto');
-        const uploaded = await uploadToCloudinaryWithProgress(formData, process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME, (pct) => {
+        const uploaded = await uploadToCloudinaryWithProgress(formData, retryCloud, (pct) => {
           setUploadProgress((prev) => ({ ...prev, [tempId]: pct }));
         });
         mediaUrl = uploaded?.secure_url;
@@ -1911,7 +2015,7 @@ function DealRoomChat() {
       }
       if (!mediaUrl) { failAgain(); return; }
       const { data: savedMsg, error } = await supabase.from('messages').insert({
-        transaction_ref: txRef, sender_id: currentUser.id, receiver_id: partnerId,
+        ...messageRoomColumns(), sender_id: currentUser.id, receiver_id: partnerId,
         content: msg.content || (msg.message_type === 'video' ? 'Video message' : msg.message_type === 'audio' ? 'Voice note' : 'Photo'),
         media_url: mediaUrl, message_type: msg.message_type, status: 'sent', ...replyMeta
       }).select().single();
@@ -1923,6 +2027,19 @@ function DealRoomChat() {
     }
   };
 
+  // Cloudinary config: the cloud name + unsigned preset must come from env.
+  // There is deliberately NO hardcoded fallback — a missing value fails
+  // closed with a clear error instead of silently uploading to a shared
+  // preset anyone can use.
+  const getCloudinaryConfig = (): { cloudName: string; uploadPreset: string } => {
+    const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+    const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+    if (!cloudName || !uploadPreset) {
+      throw new Error('Photo uploads are not set up yet. Please try again later.');
+    }
+    return { cloudName, uploadPreset };
+  };
+
   // --- Upload helper with REAL progress (fetch() cannot report upload
   // progress for FormData bodies — XMLHttpRequest can, via xhr.upload). ---
   const uploadToCloudinaryWithProgress = (
@@ -1932,7 +2049,11 @@ function DealRoomChat() {
     resourceType: 'auto' | 'video' | 'image' = 'auto'
   ): Promise<any> => {
     return new Promise((resolve, reject) => {
-      const finalCloud = cloudName || process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || 'gjgbyrjf';
+      const finalCloud = cloudName || process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+      if (!finalCloud) {
+        reject(new Error('Photo uploads are not set up yet. Please try again later.'));
+        return;
+      }
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `https://api.cloudinary.com/v1_1/${finalCloud}/${resourceType}/upload`);
       xhr.upload.onprogress = (e) => {
@@ -1972,6 +2093,28 @@ function DealRoomChat() {
       showError('Transaction Closed', 'Messages can only be sent when the deal is pending.');
       return;
     }
+    // Validate BEFORE any optimistic bubble or upload: the MIME must match
+    // the message type, and the file must fit the size cap (base64 is ~4/3
+    // the byte size). A failed check shows an error and sends nothing.
+    const cleanMimeType = mimeType.split(';')[0];
+    const mimeOk = msgType === 'image' ? cleanMimeType.startsWith('image/') : cleanMimeType.startsWith('video/');
+    if (!mimeOk) {
+      showError('Unsupported File', `That file is not a ${msgType === 'image' ? 'photo' : 'video'}.`);
+      return;
+    }
+    const approxBytes = Math.floor((base64Data.length * 3) / 4);
+    const maxBytes = msgType === 'image' ? 5 * 1024 * 1024 : 10 * 1024 * 1024;
+    if (approxBytes > maxBytes) {
+      showError('File Too Large', `That ${msgType === 'image' ? 'photo' : 'video'} is larger than ${maxBytes / (1024 * 1024)}MB.`);
+      return;
+    }
+    let cloudConfig: { cloudName: string; uploadPreset: string };
+    try {
+      cloudConfig = getCloudinaryConfig();
+    } catch (err: any) {
+      showError('Upload Unavailable', err?.message || 'Photo uploads are not set up yet.');
+      return;
+    }
     const tempId = `temp_${msgType}_${Date.now()}`;
     const replyMeta = buildReplyMeta();
     const finalContent = caption ? caption : (msgType === 'video' ? "Video message" : "Photo");
@@ -1984,7 +2127,6 @@ function DealRoomChat() {
     requestAnimationFrame(() => scrollToBottom(true));
 
     try {
-      const cleanMimeType = mimeType.split(';')[0];
       let dataUri = `data:${cleanMimeType};base64,${base64Data}`;
       if (msgType === 'image') {
         try {
@@ -1999,16 +2141,14 @@ function DealRoomChat() {
       // instead of asking the user to pick the file again.
       setOptimisticMsgs((prev) => prev.map((m) => m.id === tempId ? { ...m, _localDataUri: dataUri } : m));
       const formData = new FormData();
-      const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || 'Campus Vendi';
       formData.append('file', dataUri);
-      formData.append('upload_preset', uploadPreset);
+      formData.append('upload_preset', cloudConfig.uploadPreset);
       formData.append('resource_type', 'auto');
-      const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
-      const uploadData = await uploadToCloudinaryWithProgress(formData, cloudName, (pct) => {
+      const uploadData = await uploadToCloudinaryWithProgress(formData, cloudConfig.cloudName, (pct) => {
         setUploadProgress((prev) => ({ ...prev, [tempId]: pct }));
       });
       const { data: savedMsg, error } = await supabase.from('messages').insert({
-        transaction_ref: txRef, sender_id: currentUser.id, receiver_id: partnerId,
+        ...messageRoomColumns(), sender_id: currentUser.id, receiver_id: partnerId,
         content: finalContent, media_url: uploadData.secure_url, message_type: msgType, status: 'sent',
         ...replyMeta
       }).select().single();
@@ -2468,9 +2608,13 @@ function DealRoomChat() {
 
   const uploadVoiceNote = async (dataUri: string, tempId: string, duration: number, replyMeta: any) => {
     try {
+      // Validate before uploading: audio only, 10MB cap.
+      const voiceMime = dataUri.split(',')[0].match(/:(.*?);/)?.[1] || '';
+      if (!voiceMime.startsWith('audio/')) throw new Error('That recording is not an audio file.');
+      const voiceBytes = Math.floor(((dataUri.split(',')[1]?.length ?? 0) * 3) / 4);
+      if (voiceBytes > 10 * 1024 * 1024) throw new Error('That voice note is larger than 10MB.');
+      const { cloudName, uploadPreset } = getCloudinaryConfig();
       const formData = new FormData();
-      const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || 'Campus Vendi';
-      const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || 'gjgbyrjf';
 
       // Convert base64 dataUri to Blob for robust Android APK uploads
       try {
@@ -2503,10 +2647,12 @@ function DealRoomChat() {
 
   const uploadVoiceNoteBlob = async (blob: Blob, mimeType: string, tempId: string, duration: number, localUrl: string, replyMeta: any) => {
     try {
+      // Validate before uploading: audio only, 10MB cap.
+      if (!mimeType.startsWith('audio/')) throw new Error('That recording is not an audio file.');
+      if (blob.size > 10 * 1024 * 1024) throw new Error('That voice note is larger than 10MB.');
+      const { cloudName, uploadPreset } = getCloudinaryConfig();
       const ext = mimeType.includes('mp4') ? 'm4a' : mimeType.includes('ogg') ? 'ogg' : 'webm';
       const formData = new FormData();
-      const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || 'Campus Vendi';
-      const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || 'gjgbyrjf';
       formData.append('file', blob, `voicenote.${ext}`);
       formData.append('upload_preset', uploadPreset);
       formData.append('resource_type', 'video');
@@ -2524,7 +2670,7 @@ function DealRoomChat() {
 
   const finalizeVoiceNote = async (url: string, tempId: string, duration: number, replyMeta: any) => {
     const { data: savedMsg, error } = await supabase.from('messages').insert({
-      transaction_ref: txRef, sender_id: currentUser.id, receiver_id: partnerId,
+      ...messageRoomColumns(), sender_id: currentUser.id, receiver_id: partnerId,
       content: "Voice note", media_url: url, message_type: 'audio', status: 'sent',
       ...replyMeta
     }).select().single();
@@ -3348,8 +3494,9 @@ function DealRoomChat() {
           </div>
         )}
         {/* Security notice + escrow warning: brand-new chats only.
-            Hidden the moment any message exists in the conversation. */}
-        {messages.length === 0 && !historyLoading && !isOpening && (
+            Hidden the moment any message exists in the conversation.
+            Admin threads have no escrow, so the warning never shows there. */}
+        {messages.length === 0 && !historyLoading && !isOpening && !isAdminThread && (
           <>
             <div className="flex justify-center mb-6">
               <span className="px-3 py-1 bg-white dark:bg-[#1a1a1a] border border-gray-200/80 dark:border-gray-800 !rounded-lg text-[10px] font-black uppercase tracking-widest text-gray-500 dark:text-gray-400 shadow-sm">

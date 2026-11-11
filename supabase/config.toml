@@ -413,6 +413,10 @@ enabled = true
 # JSON string passed through to pg-delta SQL formatting.
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":80,\"commaStyle\":\"trailing\"}"
 
+# verify_jwt = false here is INTENTIONAL and must stay false (audit 2026-11-10):
+# Monnify's servers call this webhook with no JWT at all. Authentication is
+# the HMAC-SHA512 signature verified in code (monnify-webhook/index.ts).
+# Flipping this to true would break all Monnify webhooks.
 [functions.monnify-webhook]
 enabled = true
 verify_jwt = false
@@ -424,9 +428,14 @@ entrypoint = "./functions/monnify-webhook/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/monnify-webhook/*.html" ]
 
+# verify_jwt = true (flipped 2026-11-10, audit L13 fix verified):
+# src/app/buy/page.tsx now calls create-wallet with
+# `Authorization: Bearer <session.access_token>` (fetchWallet), not the
+# raw user id, so the gateway accepts the JWT. The function still verifies
+# the caller via supabase.auth.getUser() inside.
 [functions.create-wallet]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/create-wallet/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -437,7 +446,7 @@ entrypoint = "./functions/create-wallet/index.ts"
 
 [functions.resolve-account]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/resolve-account/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -448,7 +457,7 @@ entrypoint = "./functions/resolve-account/index.ts"
 
 [functions.manage-pin]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/manage-pin/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -459,7 +468,7 @@ entrypoint = "./functions/manage-pin/index.ts"
 
 [functions.process-withdrawal]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/process-withdrawal/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -470,7 +479,7 @@ entrypoint = "./functions/process-withdrawal/index.ts"
 
 [functions.process-escrow]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/process-escrow/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -481,7 +490,7 @@ entrypoint = "./functions/process-escrow/index.ts"
 
 [functions.release-escrow]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/release-escrow/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -492,7 +501,7 @@ entrypoint = "./functions/release-escrow/index.ts"
 
 [functions.cancel-escrow]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/cancel-escrow/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -503,7 +512,7 @@ entrypoint = "./functions/cancel-escrow/index.ts"
 
 [functions.upload-media]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/upload-media/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -514,7 +523,7 @@ entrypoint = "./functions/upload-media/index.ts"
 
 [functions.nexus-gatekeeper]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/nexus-gatekeeper/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -525,7 +534,7 @@ entrypoint = "./functions/nexus-gatekeeper/index.ts"
 
 [functions.raise-dispute]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/raise-dispute/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -536,7 +545,7 @@ entrypoint = "./functions/raise-dispute/index.ts"
 
 [functions.list-banks]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/list-banks/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -547,7 +556,7 @@ entrypoint = "./functions/list-banks/index.ts"
 
 [functions.cancel-dispute]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/cancel-dispute/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -558,7 +567,7 @@ entrypoint = "./functions/cancel-dispute/index.ts"
 
 [functions.send-push]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/send-push/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -567,6 +576,12 @@ entrypoint = "./functions/send-push/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/send-push/*.html" ]
 
+# verify_jwt = false here is INTENTIONAL (audit 2026-11-10):
+# broadcast has NO app caller — it is invoked by hand from the Supabase
+# dashboard with the shared secret in the request BODY
+# ({ title, body, route, secret }), and no Authorization header at all.
+# The function enforces BROADCAST_SECRET in code (broadcast/index.ts).
+# verify_jwt = true would break the only way it is ever called.
 [functions.broadcast]
 enabled = true
 verify_jwt = false
@@ -580,7 +595,7 @@ entrypoint = "./functions/broadcast/index.ts"
 
 [functions.monnify-checkout-initialize]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/monnify-checkout-initialize/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -591,7 +606,7 @@ entrypoint = "./functions/monnify-checkout-initialize/index.ts"
 
 [functions.monnify-checkout-reconcile]
 enabled = true
-verify_jwt = false
+verify_jwt = true
 import_map = "./functions/monnify-checkout-reconcile/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
 # Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
@@ -600,68 +615,43 @@ entrypoint = "./functions/monnify-checkout-reconcile/index.ts"
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/monnify-checkout-reconcile/*.html" ]
 
-[functions.embed-listing]
-enabled = true
-verify_jwt = false
-import_map = "./functions/embed-listing/deno.json"
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
-entrypoint = "./functions/embed-listing/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/embed-listing/*.html" ]
-
-[functions.visual-search]
-enabled = true
-verify_jwt = false
-import_map = "./functions/visual-search/deno.json"
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
-entrypoint = "./functions/visual-search/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/visual-search/*.html" ]
-
+# Functions added by the 2026-11-10 pre-launch security audit: these six
+# were deployed but had NO entry here, so their verify_jwt setting was
+# unknown from the repo. All six are called with a user JWT (or, for the
+# webhook-called reconcile, the service-role JWT) — verified against their
+# callers before flipping. None of them has a deno.json, so no import_map.
 [functions.charge-verification-fee]
 enabled = true
-verify_jwt = false
-import_map = "./functions/charge-verification-fee/deno.json"
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+verify_jwt = true
 entrypoint = "./functions/charge-verification-fee/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/charge-verification-fee/*.html" ]
 
-[functions.sponsor-listing]
+[functions.embed-listing]
 enabled = true
-verify_jwt = false
-import_map = "./functions/sponsor-listing/deno.json"
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
-entrypoint = "./functions/sponsor-listing/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/sponsor-listing/*.html" ]
+verify_jwt = true
+entrypoint = "./functions/embed-listing/index.ts"
 
 [functions.monnify-fee-initialize]
 enabled = true
-verify_jwt = false
-import_map = "./functions/monnify-fee-initialize/deno.json"
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+verify_jwt = true
 entrypoint = "./functions/monnify-fee-initialize/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/monnify-fee-initialize/*.html" ]
 
 [functions.monnify-fee-reconcile]
 enabled = true
-verify_jwt = false
-import_map = "./functions/monnify-fee-reconcile/deno.json"
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+verify_jwt = true
 entrypoint = "./functions/monnify-fee-reconcile/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/monnify-fee-reconcile/*.html" ]
+
+[functions.sponsor-listing]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/sponsor-listing/index.ts"
+
+# NOTE: verify_jwt = true only proves the caller holds SOME valid JWT —
+# the anon/publishable key is itself a valid JWT, and the feed calls this
+# with the publishable key as a fallback when logged out
+# (src/app/page.tsx). Real auth + per-user rate limiting for visual-search
+# must be enforced inside the function (money-functions agent); this flag
+# alone does not make it authenticated-only.
+[functions.visual-search]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/visual-search/index.ts"

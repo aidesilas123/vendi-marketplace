@@ -133,12 +133,20 @@ function idbGetAll(store: string): Promise<any[]> {
   );
 }
 
-/* ── Messages (per conversation) ─────────────────────────────────────── */
+/* ── Messages (per conversation, per user) ─────────────────────────────
+ * Keyed by {userId, ref}: a bare `ref` key would hand one account's
+ * cached history to the next account on a shared device (M4). Rows
+ * written before this change live under the bare ref and are never
+ * read again once a userId is passed. */
 
-export async function getCachedMessages(ref: string): Promise<any[] | null> {
+function messageKey(userId: string | null | undefined, ref: string): string {
+  return userId ? `${userId}:${ref}` : ref;
+}
+
+export async function getCachedMessages(ref: string, userId?: string | null): Promise<any[] | null> {
   try {
     if (!ref) return null;
-    const row = await idbGet('messages', ref);
+    const row = await idbGet('messages', messageKey(userId, ref));
     const list = row?.list;
     return Array.isArray(list) && list.length > 0 ? list : null;
   } catch {
@@ -146,14 +154,30 @@ export async function getCachedMessages(ref: string): Promise<any[] | null> {
   }
 }
 
-export async function putCachedMessages(ref: string, list: any[]): Promise<void> {
+export async function putCachedMessages(ref: string, list: any[], userId?: string | null): Promise<void> {
   try {
     if (!ref || !Array.isArray(list) || list.length === 0) return;
     // Keep only the latest messages (oldest first, as stored by the room).
     const capped = list.slice(-CACHE_CAP_MESSAGES);
-    await idbPut('messages', { ref, list: capped, updatedAt: Date.now() });
+    await idbPut('messages', { ref: messageKey(userId, ref), list: capped, updatedAt: Date.now() });
   } catch {
     // Cache write failure is silent — the network is the fallback.
+  }
+}
+
+/** Delete the whole local cache database (sign-out). Never throws. */
+export async function clearAllCache(): Promise<void> {
+  try {
+    dbPromise = null;
+    if (typeof indexedDB === 'undefined') return;
+    await new Promise<void>((resolve) => {
+      const req = indexedDB.deleteDatabase(DB_NAME);
+      req.onsuccess = () => resolve();
+      req.onerror = () => resolve();
+      req.onblocked = () => resolve();
+    });
+  } catch {
+    // ignore — sign-out must never fail on a cache clear
   }
 }
 

@@ -104,6 +104,7 @@ export default function ConfirmReceiptPage() {
             body: `${buyerName} confirmed receipt of "${itemTitle}". The money is now yours.`,
             route: `/order?ref=${txRef}`,
             data: {
+              transaction_ref: txRef ?? '',
               amount: String(net),
               direction: 'credit',
               itemTitle,

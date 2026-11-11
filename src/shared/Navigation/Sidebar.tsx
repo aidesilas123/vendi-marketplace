@@ -31,6 +31,7 @@ import { Button } from '@/shared/Button';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 import { registerBackHandler } from '@/shared/HardwareBackButton';
 import { unregisterPushToken } from '@/lib/push';
+import { clearAllCache } from '@/lib/localCache';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -88,7 +89,9 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
     async () => {
       const { data, error } = await supabase
         .from('users')
-        .select('full_name, avatar_url, email')
+        // No email here on purpose: the column grants deliberately exclude it
+        // (it is not a public profile column). The auth-metadata fallback below covers it.
+        .select('full_name, avatar_url')
         .eq('id', targetId)
         .single();
 
@@ -114,7 +117,7 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
 
   const realAvatar = profile?.avatar_url || user?.avatarUrl;
   const realName = profile?.full_name || user?.name;
-  const realEmail = profile?.email || user?.email;
+  const realEmail = user?.email; // email comes from auth metadata only (see the select above)
 
   // 3. Badge counts: unanswered questions + new reviews (last 7 days)
   const { data: badgeCounts } = useSWR(
@@ -159,6 +162,23 @@ export const Sidebar = ({ isOpen, onClose, user }: SidebarProps) => {
 
   const handleSignOut = async () => {
     await unregisterPushToken();
+    // Wipe every per-account cache before the session ends, so the next
+    // account on this device never sees the last one's data: the IndexedDB
+    // message/inbox cache, all SWR caches, and any saved seller draft.
+    try {
+      await clearAllCache();
+    } catch { /* sign-out must never fail on a cache clear */ }
+    try {
+      void mutateProfile(() => true, undefined, { revalidate: false });
+    } catch { /* ignore */ }
+    try {
+      const keys: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (k && k.startsWith('vendi-seller-draft')) keys.push(k);
+      }
+      keys.forEach((k) => window.localStorage.removeItem(k));
+    } catch { /* ignore */ }
     await supabase.auth.signOut();
     setShowSignOutModal(false);
     onClose();

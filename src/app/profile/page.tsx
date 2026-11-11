@@ -72,12 +72,21 @@ export default function ProfilePage() {
     }
   );
 
-  /* Profile + listings (ACTIVE, APPROVED and SOLD) */
+  /* Profile + listings (ACTIVE, APPROVED and SOLD).
+     Your own row comes from `users` (explicit columns); anyone else's
+     comes from the `public_profiles` view, which carries the same public
+     columns (bio / university_id / campus / created_at included — they
+     are public, non-sensitive). Neither path reads whatsapp. */
   const { data: profileData, error: profileError } = useSWR(
     profileId ? ['profile', profileId] : null,
     async ([, id]: [string, string]) => {
+      const { data: { session } } = await supabase.auth.getSession();
+      const ownRow = session?.user?.id === id;
+      const userQuery = ownRow
+        ? supabase.from('users').select('id, username, full_name, avatar_url, is_verified, is_admin, average_rating, total_reviews, bio, university_id, campus, created_at').eq('id', id).single()
+        : supabase.from('public_profiles').select('id, username, full_name, avatar_url, is_verified, is_admin, average_rating, total_reviews, bio, university_id, campus, created_at').eq('id', id).single();
       const [{ data: userData, error: userError }, { data: productsData }] = await Promise.all([
-        supabase.from('users').select('*').eq('id', id).single(),
+        userQuery,
         supabase
           .from('products')
           .select('*')
@@ -93,7 +102,9 @@ export default function ProfilePage() {
         average_rating: userData.average_rating,
       };
       return {
-        user: userData,
+        // `as any`: the page reads bio / university / campus / joined date
+        // with fallbacks, so the shapes stay compatible either way.
+        user: userData as any,
         products: (productsData ?? []).map(p => ({ ...p, seller })),
       };
     }
@@ -153,9 +164,9 @@ export default function ProfilePage() {
   };
 
   const executeDelete = async () => {
-    if (!itemToDelete) return;
+    if (!itemToDelete || !isOwner || !sessionUser) return;
     setIsDeleting(true);
-    const { error } = await supabase.from('products').delete().eq('id', itemToDelete);
+    const { error } = await supabase.from('products').delete().eq('id', itemToDelete).eq('seller_id', sessionUser.id);
     setIsDeleting(false);
     if (!error) {
       setProducts(prev => prev.filter(p => p.id !== itemToDelete));
@@ -167,7 +178,8 @@ export default function ProfilePage() {
   };
 
   const handleMarkSold = async (id: string) => {
-    const { error } = await supabase.from('products').update({ status: 'SOLD' }).eq('id', id);
+    if (!isOwner || !sessionUser) return;
+    const { error } = await supabase.from('products').update({ status: 'SOLD' }).eq('id', id).eq('seller_id', sessionUser.id);
     if (!error) {
       setProducts(prev => prev.map(p => (p.id === id ? { ...p, status: 'SOLD' } : p)));
       showToast('Marked as sold!');
@@ -178,16 +190,20 @@ export default function ProfilePage() {
 
   const handleDuplicate = async (id: string) => {
     const productToCopy = products.find(p => p.id === id);
-    if (!productToCopy || !profileUser) return;
-    const { id: _, created_at, updated_at, ai_flag_reason, seller, search_vector: _searchVector, ...rest } = productToCopy;
+    if (!productToCopy || !profileUser || !isOwner || !sessionUser) return;
+    const { id: _, created_at, updated_at, ai_flag_reason, seller, search_vector: _searchVector, sponsored_until: _sponsoredUntil, ...rest } = productToCopy;
+    // A duplicate never inherits the paid boost, and it goes back through
+    // moderation (PENDING_REVIEW) instead of publishing straight away.
+    // Behaviour change: duplicates now need re-approval before they show.
     const { data, error } = await supabase
       .from('products')
-      .insert({ ...rest, seller_id: profileUser.id, status: 'ACTIVE' })
+      .insert({ ...rest, seller_id: sessionUser.id, status: 'PENDING_REVIEW', sponsored_until: null })
       .select()
       .single();
     if (data && !error) {
-      setProducts(prev => [{ ...data, seller: productToCopy.seller }, ...prev]);
-      showToast('Listing duplicated!');
+      // Not added to the local list: a PENDING_REVIEW duplicate is not
+      // live yet, so it must not appear under the Active tab.
+      showToast('Listing duplicated! It will show once approved.');
     } else if (error) {
       showToast(error.message, 'error');
     }
@@ -437,7 +453,21 @@ export default function ProfilePage() {
                 <>
                   {viewerIsAdmin && sessionUser && profileId && (
                     <Button
-                      onClick={() => router.push(`/chats?ref=admin-${sessionUser.id}-${profileId}&seller=${profileId}`)}
+                      onClick={async () => {
+                        // Real admin thread (not the old synthetic
+                        // admin-<id>-<id> ref, which the messages RLS
+                        // rejects): get_or_create_admin_thread checks
+                        // is_admin server-side and returns the thread id.
+                        const { data: threadId, error } = await supabase.rpc(
+                          'get_or_create_admin_thread',
+                          { p_user_id: profileId },
+                        );
+                        if (error || !threadId) {
+                          showToast('Could not open chat. Please try again.', 'error');
+                          return;
+                        }
+                        router.push(`/chats?ref=${threadId}&seller=${profileId}`);
+                      }}
                       className="!py-2.5 !px-5 !w-auto !bg-orange-500 !text-white rounded-full flex items-center justify-center gap-2 transition-transform active:scale-[0.98]"
                     >
                       <IonIcon icon={chatbubbleOutline} className="text-base" /> Message user

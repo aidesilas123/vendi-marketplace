@@ -237,41 +237,62 @@ const getEmptyForm = (): FormState => ({
 // wipe everything the seller filled in. So the in-progress form is saved
 // to the device (localStorage) on every change and restored on mount.
 // It is cleared on a successful submit and when the form is reset.
-const SELLER_DRAFT_KEY = 'vendi-seller-draft';
+// User-scoped: the key carries the seller's id, and the uid is stored
+// inside the draft too — one account's half-finished listing (and the
+// listing it was editing) must never restore into another account's form
+// on a shared device.
+const SELLER_DRAFT_KEY_PREFIX = 'vendi-seller-draft:';
+const LEGACY_SELLER_DRAFT_KEY = 'vendi-seller-draft';
 
 type SellerDraft = {
+  uid?: string | null;
   formData: FormState;
   step: number;
   acceptedTerms: boolean;
   editingProductId: string | null;
 };
 
-function loadSellerDraft(): SellerDraft | null {
+function draftKey(uid: string | null | undefined): string | null {
+  return uid ? `${SELLER_DRAFT_KEY_PREFIX}${uid}` : null;
+}
+
+function loadSellerDraft(uid: string | null | undefined): SellerDraft | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = window.localStorage.getItem(SELLER_DRAFT_KEY);
+    // Drop the old unscoped key the first time we see it — it may belong
+    // to another account and must never restore.
+    window.localStorage.removeItem(LEGACY_SELLER_DRAFT_KEY);
+    const key = draftKey(uid);
+    if (!key) return null;
+    const raw = window.localStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || !parsed.formData || typeof parsed.formData !== 'object') return null;
+    // Never restore a draft (or its editingProductId) belonging to another user.
+    if (parsed.uid && parsed.uid !== uid) return null;
     return parsed as SellerDraft;
   } catch {
     return null;
   }
 }
 
-function saveSellerDraft(draft: SellerDraft) {
+function saveSellerDraft(uid: string | null | undefined, draft: SellerDraft) {
   if (typeof window === 'undefined') return;
+  const key = draftKey(uid);
+  if (!key) return; // unknown user yet — never save under a shared key
   try {
-    window.localStorage.setItem(SELLER_DRAFT_KEY, JSON.stringify(draft));
+    window.localStorage.setItem(key, JSON.stringify({ ...draft, uid: uid ?? null }));
   } catch {
     // Storage full or unavailable — the form still works, it just won't be restored.
   }
 }
 
-function clearSellerDraft() {
+function clearSellerDraft(uid?: string | null) {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.removeItem(SELLER_DRAFT_KEY);
+    window.localStorage.removeItem(LEGACY_SELLER_DRAFT_KEY);
+    const key = draftKey(uid);
+    if (key) window.localStorage.removeItem(key);
   } catch {
     // ignore
   }
@@ -467,29 +488,8 @@ export default function SellerDashboard() {
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [formData, setFormData] = useState<FormState>(getEmptyForm());
 
-  // Restore an in-progress listing draft (e.g. after visiting /terms and
-  // coming back). Runs once on mount; the save effect below skips its first
-  // run so it never overwrites the draft with the empty initial state.
-  useEffect(() => {
-    const draft = loadSellerDraft();
-    if (draft) {
-      setFormData({ ...getEmptyForm(), ...draft.formData });
-      setStep(draft.step >= 1 && draft.step <= TOTAL_STEPS ? draft.step : 1);
-      setAcceptedTerms(draft.acceptedTerms === true);
-      setEditingProductId(draft.editingProductId ?? null);
-    }
-  }, []);
-
-  const skipFirstDraftSaveRef = useRef(true);
-  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
-  useEffect(() => {
-    if (skipFirstDraftSaveRef.current) {
-      skipFirstDraftSaveRef.current = false;
-      return;
-    }
-    saveSellerDraft({ formData, step, acceptedTerms, editingProductId });
-    setDraftSavedAt(Date.now());
-  }, [formData, step, acceptedTerms, editingProductId]);
+  // (Draft restore + save live below, after `userId` resolves — the draft
+  // key is user-scoped, so they need the id first.)
 
   // The notification modal is now only for errors: listing SUBMIT errors,
   // settings errors and image-upload errors. Successful submits and
@@ -546,6 +546,35 @@ export default function SellerDashboard() {
       router.replace('/login?redirect=/seller');
     }
   }, [userId, router]);
+
+  // Restore an in-progress listing draft (e.g. after visiting /terms and
+  // coming back). Runs once the user id is known, so the user-scoped key
+  // is read — never before, or another account's draft could restore.
+  // The save effect below skips its first run so it never overwrites the
+  // draft with the empty initial state.
+  const draftRestoredForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!userId || draftRestoredForRef.current === userId) return;
+    draftRestoredForRef.current = userId;
+    const draft = loadSellerDraft(userId);
+    if (draft) {
+      setFormData({ ...getEmptyForm(), ...draft.formData });
+      setStep(draft.step >= 1 && draft.step <= TOTAL_STEPS ? draft.step : 1);
+      setAcceptedTerms(draft.acceptedTerms === true);
+      setEditingProductId(draft.editingProductId ?? null);
+    }
+  }, [userId]);
+
+  const skipFirstDraftSaveRef = useRef(true);
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (skipFirstDraftSaveRef.current) {
+      skipFirstDraftSaveRef.current = false;
+      return;
+    }
+    saveSellerDraft(userId, { formData, step, acceptedTerms, editingProductId });
+    setDraftSavedAt(Date.now());
+  }, [formData, step, acceptedTerms, editingProductId, userId]);
 
   // How many listings each tab loads. The ref is what the fetcher reads (always current);
   // the state is what re-renders the "Load more" button.
@@ -781,7 +810,7 @@ export default function SellerDashboard() {
     setStep(1);
     setFormData(getEmptyForm());
     setAcceptedTerms(false);
-    clearSellerDraft();
+    clearSellerDraft(userId);
   };
 
   // After a new post: if the seller now has 2+ posts and isn't verified yet,
@@ -898,7 +927,9 @@ export default function SellerDashboard() {
   // Results are reported with toasts (bottom of the screen), not the notification modal.
 
   const executeDelete = async (id: string) => {
-    const { error } = await supabase.from('products').delete().eq('id', id);
+    const uid = userId ?? (await fetchCurrentUserId());
+    if (!uid) return;
+    const { error } = await supabase.from('products').delete().eq('id', id).eq('seller_id', uid);
 
     if (!error) {
       mutateListings(prev => prev?.filter(p => p.id !== id), { revalidate: false });
@@ -910,7 +941,9 @@ export default function SellerDashboard() {
   };
 
   const handleMarkSold = async (id: string) => {
-    const { error } = await supabase.from('products').update({ status: 'SOLD' }).eq('id', id);
+    const uid = userId ?? (await fetchCurrentUserId());
+    if (!uid) return;
+    const { error } = await supabase.from('products').update({ status: 'SOLD' }).eq('id', id).eq('seller_id', uid);
 
     if (!error) {
       // The Approved tab also lists sold items; any other tab drops it
@@ -929,11 +962,14 @@ export default function SellerDashboard() {
   };
 
   const handleDuplicate = async (id: string) => {
+    const uid = userId ?? (await fetchCurrentUserId());
+    if (!uid) return;
     // The grid only holds a few columns, so fetch the whole row to copy
     const { data: full, error: fetchError } = await supabase
       .from('products')
       .select('*')
       .eq('id', id)
+      .eq('seller_id', uid)
       .single();
 
     if (fetchError || !full) {
@@ -947,35 +983,50 @@ export default function SellerDashboard() {
       return;
     }
 
-    const uid = userId ?? (await fetchCurrentUserId());
-
-    const { id: _id, created_at, updated_at, ai_flag_reason, search_vector: _searchVector, ...rest } = full;
+    // A duplicate never inherits the paid boost, and it goes back through
+    // moderation (PENDING_REVIEW) instead of publishing straight away.
+    // Behaviour change: duplicates now need re-approval before they show.
+    const { id: _id, created_at, updated_at, ai_flag_reason, search_vector: _searchVector, sponsored_until: _sponsoredUntil, ...rest } = full;
     const copyData = {
       ...rest,
-      seller_id: uid || full.seller_id,
+      seller_id: uid,
       title: stripCopySuffix(full.title), // no "(Copy)" on duplicates
-      status: 'ACTIVE'
+      status: 'PENDING_REVIEW',
+      sponsored_until: null
     };
 
     const { data, error } = await supabase.from('products').insert(copyData).select().single();
 
     if (data && !error) {
-      if (activeTab === 'Active' || activeTab === 'Approved') {
-        mutateListings(prev => [data, ...(prev ?? [])], { revalidate: false });
-      }
+      // Not prepended to this tab's list: a PENDING_REVIEW duplicate lives
+      // in the Pending Review tab, not here.
       refreshListings(); refreshOverview();
-      showGlobalToast('Listing duplicated successfully!');
+      showGlobalToast('Listing duplicated! It will show once approved.');
     } else {
       showGlobalToast('Error duplicating listing.', 'error');
     }
   };
 
   const handleEdit = async (id: string) => {
+    const uid = userId ?? (await fetchCurrentUserId());
+    if (!uid) return;
     // The grid only holds a few columns, so fetch the whole row for the form
-    const { data, error } = await supabase.from('products').select('*').eq('id', id).single();
+    const { data, error } = await supabase.from('products').select('*').eq('id', id).eq('seller_id', uid).single();
 
     if (error || !data) {
       showGlobalToast('Could not load this listing for editing. Please try again.', 'error');
+      return;
+    }
+
+    // SOLD is terminal and REJECTED must go through a fresh submission —
+    // the form never opens for either (submitProductAction rejects them too).
+    if (data.status === 'SOLD' || data.status === 'REJECTED') {
+      showGlobalToast(
+        data.status === 'SOLD'
+          ? 'This listing is already sold and can no longer be edited.'
+          : 'This listing was rejected and can no longer be edited. Post it again as a new listing.',
+        'error'
+      );
       return;
     }
 
@@ -994,8 +1045,21 @@ export default function SellerDashboard() {
 
     if (editId) {
       const fetchAndEdit = async () => {
-        const { data, error } = await supabase.from('products').select('*').eq('id', editId).single();
+        const uid = await fetchCurrentUserId();
+        if (!uid) return;
+        const { data, error } = await supabase.from('products').select('*').eq('id', editId).eq('seller_id', uid).single();
         if (data && !error) {
+          // SOLD / REJECTED rows never open in the form (see handleEdit).
+          if (data.status === 'SOLD' || data.status === 'REJECTED') {
+            showGlobalToast(
+              data.status === 'SOLD'
+                ? 'This listing is already sold and can no longer be edited.'
+                : 'This listing was rejected and can no longer be edited. Post it again as a new listing.',
+              'error'
+            );
+            window.history.replaceState({}, '', '/seller');
+            return;
+          }
           setEditingProductId(data.id);
           setFormData(productToForm(data));
           setAcceptedTerms(false);

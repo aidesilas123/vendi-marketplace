@@ -85,12 +85,19 @@ export default function EditProfilePage() {
     if (authChecked && !sessionUser) router.push('/');
   }, [authChecked, sessionUser, router]);
 
-  /* --- Profile via SWR --- */
+  /* --- Profile via SWR ---
+     Own row only, via get_own_profile(): it returns the full row including
+     whatsapp, which no client role can SELECT from the users table (the
+     column grants exclude it). The old select('*') fallback was deleted:
+     it requests ungranted columns and throws once the column grants run,
+     so the RPC is the only path. If the RPC fails, the page stays on its
+     loading state rather than reading a row it is not allowed to see. */
   const { data: profileData } = useSWR(
     sessionUser ? ['edit-profile', sessionUser.id] : null,
-    async ([, id]: [string, string]) => {
-      const { data: profile } = await supabase.from('users').select('*').eq('id', id).single();
-      return profile;
+    async (): Promise<any> => {
+      const { data: rpcProfile, error: rpcError } = await supabase.rpc('get_own_profile').maybeSingle();
+      if (!rpcError && rpcProfile) return rpcProfile;
+      return null;
     }
   );
 
@@ -191,6 +198,15 @@ export default function EditProfilePage() {
   };
 
   const uploadAvatarFile = async (file: File) => {
+    // Validate before uploading: images only, 5MB max.
+    if (!file.type.startsWith('image/')) {
+      showToast('That file is not a photo.', 'error');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      showToast('That photo is larger than 5MB. Pick a smaller one.', 'error');
+      return;
+    }
     setUploadProgress(0);
     setShowAvatarSheet(false);
     try {

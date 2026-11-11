@@ -42,7 +42,12 @@ const parseImages = (raw: unknown): string[] => {
 };
 
 type ChatPreview = {
+  // The room ref: a transaction reference for deal chats, the
+  // admin_threads id for admin threads. The room opens with this ref
+  // and decides the mode from it (a uuid ref is a thread).
   transaction_ref: string;
+  // The thread id for admin-thread chats, null for deal chats.
+  admin_thread_id: string | null;
   partner: any;
   latestMessage: any;
   unreadCount: number;
@@ -70,14 +75,19 @@ async function fetchInboxFresh(userId: string): Promise<ChatPreview[]> {
 
   if (error) throw error;
 
-  // Mark incoming messages as delivered when loaded by receiver
+  // Mark incoming messages as delivered when loaded by receiver.
+  // The update is scoped to receiver_id == me: a broadcast alone never
+  // marks anything delivered, only rows the database says are mine.
   const undelivered = (msgs ?? []).filter(
     (m) => m.receiver_id === userId && m.status === 'sent'
   );
   if (undelivered.length > 0) {
     const ids = undelivered.map((m) => m.id);
-    supabase.from('messages').update({ status: 'delivered' }).in('id', ids).then(() => {
-      const refs = Array.from(new Set(undelivered.map((m) => m.transaction_ref)));
+    supabase.from('messages').update({ status: 'delivered' }).in('id', ids).eq('receiver_id', userId).then(() => {
+      // Room ref: the thread id for admin-thread messages, the
+      // transaction reference for deal messages — the room listens on
+      // `chat_<ref>` in both modes.
+      const refs = Array.from(new Set(undelivered.map((m) => m.admin_thread_id ?? m.transaction_ref)));
       refs.forEach((ref) => {
         supabase.channel(`chat_${ref}`).send({
           type: 'broadcast',
@@ -130,16 +140,20 @@ async function fetchInboxFresh(userId: string): Promise<ChatPreview[]> {
   const unreadByRef = new Map<string, number>();
 
   for (const msg of msgs ?? []) {
+    // Room ref: the thread id for admin-thread messages, the transaction
+    // reference for deal messages. Threads have no product.
+    const roomRef = msg.admin_thread_id ?? msg.transaction_ref;
     if (msg.receiver_id === userId && msg.status !== 'read') {
-      unreadByRef.set(msg.transaction_ref, (unreadByRef.get(msg.transaction_ref) ?? 0) + 1);
+      unreadByRef.set(roomRef, (unreadByRef.get(roomRef) ?? 0) + 1);
     }
-    if (!chatMap.has(msg.transaction_ref)) {
-      chatMap.set(msg.transaction_ref, {
-        transaction_ref: msg.transaction_ref,
+    if (!chatMap.has(roomRef)) {
+      chatMap.set(roomRef, {
+        transaction_ref: roomRef,
+        admin_thread_id: msg.admin_thread_id ?? null,
         partner: msg.sender_id === userId ? msg.receiver : msg.sender,
         latestMessage: msg,
         unreadCount: 0,
-        product: productByRef.get(msg.transaction_ref),
+        product: productByRef.get(roomRef),
       });
     }
   }
@@ -169,13 +183,58 @@ async function fetchInboxFresh(userId: string): Promise<ChatPreview[]> {
         .order('created_at', { ascending: false });
 
       for (const msg of olderMsgs ?? []) {
-        if (!chatMap.has(msg.transaction_ref)) {
-          chatMap.set(msg.transaction_ref, {
-            transaction_ref: msg.transaction_ref,
+        const roomRef = msg.admin_thread_id ?? msg.transaction_ref;
+        if (!chatMap.has(roomRef)) {
+          chatMap.set(roomRef, {
+            transaction_ref: roomRef,
+            admin_thread_id: msg.admin_thread_id ?? null,
             partner: msg.sender_id === userId ? msg.receiver : msg.sender,
             latestMessage: msg,
             unreadCount: 0,
-            product: productByRef.get(msg.transaction_ref),
+            product: productByRef.get(roomRef),
+          });
+        }
+      }
+    }
+  } catch {}
+
+  // Preserve admin-thread conversations the same way: a thread whose
+  // messages are all older than the latest 200 would otherwise vanish
+  // from the list. Threads are not transactions, so they need their own
+  // lookup (threads the viewer is a party to, then their messages).
+  try {
+    const { data: myThreads } = await supabase
+      .from('admin_threads')
+      .select('id')
+      .or(`admin_id.eq.${userId},user_id.eq.${userId}`)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    const threadIds = (myThreads ?? [])
+      .map((t: any) => t.id)
+      .filter((id: string) => id && !chatMap.has(id));
+
+    if (threadIds.length > 0) {
+      const { data: threadMsgs } = await supabase
+        .from('messages')
+        .select(
+          `*,
+           sender:sender_id(id, full_name, avatar_url, is_verified),
+           receiver:receiver_id(id, full_name, avatar_url, is_verified)`
+        )
+        .in('admin_thread_id', threadIds)
+        .order('created_at', { ascending: false });
+
+      for (const msg of threadMsgs ?? []) {
+        const roomRef = msg.admin_thread_id ?? msg.transaction_ref;
+        if (!chatMap.has(roomRef)) {
+          chatMap.set(roomRef, {
+            transaction_ref: roomRef,
+            admin_thread_id: msg.admin_thread_id ?? null,
+            partner: msg.sender_id === userId ? msg.receiver : msg.sender,
+            latestMessage: msg,
+            unreadCount: 0,
+            product: undefined,
           });
         }
       }
@@ -186,14 +245,17 @@ async function fetchInboxFresh(userId: string): Promise<ChatPreview[]> {
   try {
     const { data: unreadRows } = await supabase
       .from('messages')
-      .select('transaction_ref')
+      .select('transaction_ref, admin_thread_id')
       .eq('receiver_id', userId)
       .neq('status', 'read');
 
     if (unreadRows) {
       unreadByRef.clear();
       unreadRows.forEach((r: any) => {
-        unreadByRef.set(r.transaction_ref, (unreadByRef.get(r.transaction_ref) ?? 0) + 1);
+        // Thread messages have no transaction_ref — count them under
+        // the thread id, like the grouping above.
+        const roomRef = r.admin_thread_id ?? r.transaction_ref;
+        unreadByRef.set(roomRef, (unreadByRef.get(roomRef) ?? 0) + 1);
       });
     }
   } catch {}
@@ -498,11 +560,15 @@ export default function MessagesList() {
         // fresh on a slow network — that's why the inbox kept previewing
         // old messages even when new ones had arrived.
         const m = payload?.new;
-        if (m && (m.sender_id === userId || m.receiver_id === userId) && m.transaction_ref) {
+        // Room ref: thread messages carry admin_thread_id, deal messages
+        // transaction_ref. A message with neither is ignored here (the
+        // refetch below still picks it up).
+        const previewRef = m?.admin_thread_id ?? m?.transaction_ref;
+        if (m && (m.sender_id === userId || m.receiver_id === userId) && previewRef) {
           const isIncoming = m.receiver_id === userId && m.sender_id !== userId;
           const preview = m.content || (m.message_type === 'audio' ? 'Voice note' : m.message_type === 'image' ? 'Photo' : m.message_type === 'video' ? 'Video' : 'Attachment');
           const apply = (list: any[]) => list.map((c: any) => {
-            if (c?.transaction_ref !== m.transaction_ref) return c;
+            if (c?.transaction_ref !== previewRef) return c;
             return {
               ...c,
               latestMessage: { ...(c.latestMessage || {}), content: preview, created_at: m.created_at, sender_id: m.sender_id },
