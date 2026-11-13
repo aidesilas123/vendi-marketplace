@@ -268,21 +268,24 @@ create unique index if not exists users_username_lower_unique
 
 -- One transaction row per reference (audit: exactly-once logic for
 -- escrow / checkout / fee rows rests on reference uniqueness).
--- Duplicates: select reference, count(*) from transactions group by 1 having count(*) > 1;
-create unique index if not exists transactions_reference_unique
-  on public.transactions (reference);
+-- Already enforced by the table's own transactions_reference_key
+-- (UNIQUE constraint on reference) — no second index is created here
+-- (2026-11-12 cleanup: the duplicate transactions_reference_unique
+-- index was dropped).
 
 -- One wallet per user (the app assumes a single wallet per user
 -- everywhere: useWallet, the transactions page, funding match).
--- Duplicates: select user_id, count(*) from wallets group by 1 having count(*) > 1;
-create unique index if not exists wallets_user_id_unique
-  on public.wallets (user_id);
+-- Already enforced by the table's own wallets_user_id_key
+-- (UNIQUE constraint on user_id) — no second index is created here
+-- (2026-11-12 cleanup: the duplicate wallets_user_id_unique index
+-- was dropped).
 
 -- One stored push token per (user, token) (the upsert in src/lib/push.ts
 -- uses onConflict 'user_id,token', which needs this constraint to work).
--- Duplicates: select user_id, token, count(*) from user_push_tokens group by 1, 2 having count(*) > 1;
-create unique index if not exists user_push_tokens_user_token_unique
-  on public.user_push_tokens (user_id, token);
+-- Already enforced by the table's own user_push_tokens_user_id_token_key
+-- (UNIQUE constraint on user_id, token) — no second index is created
+-- here (2026-11-12 cleanup: the duplicate
+-- user_push_tokens_user_token_unique index was dropped).
 
 -- One seller review per (buyer, seller) pair.
 -- Duplicates: select buyer_id, seller_id, count(*) from seller_reviews group by 1, 2 having count(*) > 1;
@@ -312,35 +315,36 @@ create unique index if not exists product_views_daily_unique
 -- toggle in src/app/product/page.tsx upserts onConflict
 -- 'user_id,product_id', which needs this constraint to work — without
 -- it the upsert errors and saving fails.
--- Duplicates: select user_id, product_id, count(*) from saved_items group by 1, 2 having count(*) > 1;
-create unique index if not exists saved_items_user_product_unique
-  on public.saved_items (user_id, product_id);
+-- Already enforced by the table's own saved_items_user_id_product_id_key
+-- (UNIQUE constraint on user_id, product_id) — no second index is
+-- created here (2026-11-12 cleanup: the duplicate
+-- saved_items_user_product_unique index was dropped).
 
 -- One notification-preference row per user (error sweep 2026-11-11):
 -- the settings page upserts onConflict 'user_id', which needs this
 -- constraint — without it, toggling a notification preference errors.
--- Duplicates: select user_id, count(*) from notification_preferences group by 1 having count(*) > 1;
-create unique index if not exists notification_preferences_user_id_unique
-  on public.notification_preferences (user_id);
+-- Already enforced by the table's primary key on user_id — no second
+-- index is created here (2026-11-12 cleanup: the duplicate
+-- notification_preferences_user_id_unique index was dropped).
 
 -- message_reactions — the table DDL itself lives nowhere else in the
 -- repo (it was created from a note that is no longer in the tree), so
 -- it is defined here to make the repo self-contained. id uuid PK,
 -- message_id FK to messages (cascade delete), user_id with deliberately
 -- no FK (a reaction must survive its author's row being gone), emoji,
--- created_at. One row per (message_id, user_id) — the unique index
--- below, which the room's upsert (onConflict 'message_id,user_id')
+-- created_at. One row per (message_id, user_id) — the unique constraint
+-- in the DDL below, which the room's upsert (onConflict 'message_id,user_id')
 -- needs. RLS policies live in rls-policies.sql, not here.
 create table if not exists public.message_reactions (
   id uuid primary key default gen_random_uuid(),
   message_id uuid not null references public.messages (id) on delete cascade,
   user_id uuid not null,
   emoji text not null,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  unique (message_id, user_id)
 );
 
 alter table public.message_reactions enable row level security;
 
--- Duplicates: select message_id, user_id, count(*) from message_reactions group by 1, 2 having count(*) > 1;
-create unique index if not exists message_reactions_message_user_unique
-  on public.message_reactions (message_id, user_id);
+-- (2026-11-12 cleanup: the separate message_reactions_message_user_unique
+-- index was dropped — it duplicated the unique constraint above.)

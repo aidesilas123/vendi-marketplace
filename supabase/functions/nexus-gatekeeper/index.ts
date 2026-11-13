@@ -1,3 +1,4 @@
+// supabase/functions/nexus-gatekeeper/index.ts
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const corsHeaders = {
@@ -7,11 +8,50 @@ const corsHeaders = {
 
 // Your current model stays first. Set the GEMINI_MODEL secret to change it without redeploying.
 // If it fails (wrong name, quota, outage) the function tries the fallback before giving up.
+// 2026-11-11: gemini-2.5-flash is retired (404), so it is no longer the fallback.
+// Primary stays gemini-3.1-flash-lite (the higher free-tier limit is why it was
+// picked); fallback is now gemini-3.8-flash (the model Google's 404 message
+// points to). The lite model was overloaded (503) in the 2026-11-10 logs, so
+// when it is busy the call falls back to 3.8-flash instead of manual review.
 const PRIMARY_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.1-flash-lite';
-const FALLBACK_MODEL = 'gemini-2.5-flash';
+const FALLBACK_MODEL = 'gemini-3.8-flash';
 const GEMINI_TIMEOUT_MS = 15000;
 
+// Service-role client at module scope (the catch block also needs it, to
+// stamp the moderation reason when the AI is down).
+const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+const supabase = createClient(supabaseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+
 class AuthError extends Error {}
+
+/** Per-user rate limit backed by edge_rate_limits (see resolve-account for
+ *  the fail-open rule: a table error allows the call and logs loudly). */
+async function enforceRateLimit(supabase: any, userId: string, fn: string, cap: number, windowMs: number) {
+  const since = new Date(Date.now() - windowMs).toISOString();
+  let rows: any[] | null = null;
+  try {
+    const res = await supabase
+      .from('edge_rate_limits')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('fn', fn)
+      .gte('created_at', since);
+    if (res.error) throw res.error;
+    rows = res.data;
+  } catch (e) {
+    console.error(`[rate-limit] ${fn} check failed — allowing call (fail open):`, e);
+    return;
+  }
+  if (rows && rows.length >= cap) {
+    throw new Error('Rate limit exceeded. Please try again later.');
+  }
+  try {
+    const { error } = await supabase.from('edge_rate_limits').insert({ user_id: userId, fn });
+    if (error) throw error;
+  } catch (e) {
+    console.error(`[rate-limit] ${fn} log failed — allowing call (fail open):`, e);
+  }
+}
 
 type Decision = { status: 'APPROVED' | 'REJECTED'; reason: string };
 
@@ -111,9 +151,20 @@ async function callGemini(model: string, apiKey: string, prompt: string): Promis
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         generationConfig: { responseMimeType: 'application/json', temperature: 0 },
+        // M20 (audit): these two categories used to be BLOCK_NONE, which
+        // switched Google's own safety filters off entirely — a listing or
+        // message Google would have blocked on safety grounds got a free
+        // pass, and the model's own prompt only rejects its 4 listing
+        // rules / 3 message rules, so genuinely dangerous or harassing
+        // content that matched none of those rules could be APPROVED.
+        // BLOCK_MEDIUM is the standard middle ground: it blocks content
+        // Google rates as clearly harmful, while ordinary campus content
+        // (kitchen knives, gas cylinders, hostel gear — explicitly allowed
+        // by the prompt) passes. A safety block is already handled below
+        // as a REJECTED decision, never as PENDING_REVIEW.
         safetySettings: [
-          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_MEDIUM' },
+          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_MEDIUM' },
         ],
       }),
       signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
@@ -182,24 +233,93 @@ Deno.serve(async (req) => {
 
   const started = Date.now();
 
+  // The listing being published, if the caller named one. Hoisted so the
+  // catch block can stamp the moderation reason when the AI is down.
+  let publishId: string | null = null;
+
   try {
     // 1. Verify user authentication
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
-
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) throw new AuthError('Missing Authorization header');
 
     const { data: { user }, error: authError } = await supabase.auth.getUser(authHeader.replace('Bearer ', ''));
     if (authError || !user) throw new AuthError('Unauthorized access');
 
-    // 2. Parse request ('listing' or 'message')
-    const { type, payload } = await req.json();
+    // 2. Parse request ('listing' or 'message'). Bodies over 32KB are
+    //    rejected outright — Gemini is billed per token, and an unbounded
+    //    payload is a quota-burn vector.
+    const rawBody = await req.text();
+    if (rawBody.length > 32 * 1024) {
+      return json({ error: 'Request is too large' }, 413);
+    }
+    let parsed: any = {};
+    try {
+      parsed = rawBody ? JSON.parse(rawBody) : {};
+    } catch {
+      throw new Error('Invalid JSON body');
+    }
+    const { type, payload } = parsed;
     console.log(`[nexus] start type=${type} user=${user.id} model=${PRIMARY_MODEL}`);
+
+    // M20: when the caller names what is being moderated, they must own
+    // it (a listing) or be a party to it (a message). A brand-new listing
+    // or a free-form message carries no id — nothing to own yet — so those
+    // pass with only the rate limit below.
+    const listingId = payload?.product_id ?? payload?.listing_id ?? null;
+    if (type === 'listing' && listingId) {
+      const { data: product } = await supabase
+        .from('products')
+        .select('seller_id')
+        .eq('id', String(listingId))
+        .maybeSingle();
+      if (!product || product.seller_id !== user.id) {
+        return json({ error: 'Not your listing' }, 403);
+      }
+      publishId = String(listingId);
+    }
+    const txRef = payload?.transaction_ref ?? payload?.reference ?? null;
+    if (type === 'message' && txRef) {
+      const { data: tx } = await supabase
+        .from('transactions')
+        .select('user_id, seller_id')
+        .eq('reference', String(txRef))
+        .maybeSingle();
+      if (!tx || (tx.user_id !== user.id && tx.seller_id !== user.id)) {
+        return json({ error: 'Not part of this conversation' }, 403);
+      }
+    }
+
+    // 100 moderation calls per user per hour.
+    try {
+      await enforceRateLimit(supabase, user.id, 'nexus-gatekeeper', 100, 60 * 60 * 1000);
+    } catch (e: any) {
+      if (e?.message === 'Rate limit exceeded. Please try again later.') {
+        return json({ error: e.message }, 429);
+      }
+      throw e;
+    }
 
     // 3. Ask Gemini
     const decision = await askGemini(buildPrompt(type, payload));
+
+    // SEC-10: publish (or reject) the listing HERE, with the service role.
+    // The client saves PENDING_REVIEW and can never write ACTIVE or
+    // REJECTED itself — this transition is the only path to a public
+    // listing, so a raw insert/update can no longer skip moderation.
+    if (type === 'listing' && publishId) {
+      const newStatus = decision.status === 'APPROVED' ? 'ACTIVE' : 'REJECTED';
+      const { error: pubError } = await supabase
+        .from('products')
+        .update({ status: newStatus, ai_flag_reason: decision.reason ?? null, updated_at: new Date().toISOString() })
+        .eq('id', publishId)
+        .eq('seller_id', user.id);
+      if (pubError) {
+        console.error('[nexus] could not publish listing:', pubError.message);
+        // Fail closed: the listing stays PENDING_REVIEW (unpublished) and
+        // the client is told so honestly — manual review can publish it.
+        return json({ status: 'PENDING_REVIEW', reason: decision.reason ?? 'Sent to manual review.' });
+      }
+    }
 
     console.log(`[nexus] done status=${decision.status} ms=${Date.now() - started}`);
     return json(decision);
@@ -213,6 +333,15 @@ Deno.serve(async (req) => {
 
     // Anything else: log the real reason, then fall back to manual review so the app keeps working
     console.error(`[nexus] FALLBACK to manual review after ${Date.now() - started}ms:`, error?.message ?? error);
+    // The listing is already saved as PENDING_REVIEW — stamp the reason so
+    // the admin sees why it is waiting, instead of a blank flag.
+    if (publishId) {
+      const { error: stampError } = await supabase
+        .from('products')
+        .update({ ai_flag_reason: 'AI validation timeout. Sent to admin for manual review.' })
+        .eq('id', publishId);
+      if (stampError) console.error('[nexus] could not stamp moderation reason:', stampError.message);
+    }
     return json({
       status: 'PENDING_REVIEW',
       reason: 'AI validation timeout. Sent to admin for manual review.',

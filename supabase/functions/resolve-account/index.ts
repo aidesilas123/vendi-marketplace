@@ -42,6 +42,27 @@ Deno.serve(async (req) => {
     } = await supabase.auth.getUser(authHeader.replace('Bearer ', ''));
     if (authError || !user) throw new HttpError('Unauthorized access', 401);
 
+    // Rate limit check: 10 lookups per day per user (security-hardening.sql / rate-limit.sql)
+    // Fail-open if the RPC errors (e.g. migration not yet run) so bank verification is not broken.
+    try {
+      const { data: allowed, error: rlError } = await supabase.rpc('check_rate_limit', {
+        p_user_id: user.id,
+        p_fn: 'resolve-account',
+        p_limit: 10,
+        p_window_minutes: 1440,
+      });
+      if (rlError) {
+        console.warn('[resolve-account] Rate-limit check RPC error — failing open:', rlError.message);
+      } else if (allowed === false) {
+        throw new HttpError('Daily account verification limit reached (10/day). Please try again tomorrow.', 429);
+      }
+    } catch (err: any) {
+      if (err instanceof HttpError && err.status === 429) {
+        throw err;
+      }
+      console.warn('[resolve-account] Rate-limit check failed — failing open:', err?.message || err);
+    }
+
     const body = await req.json().catch(() => ({}));
     const accountNumber = String(body?.accountNumber ?? '').trim();
     const bankCode = String(body?.bankCode ?? '').trim();

@@ -4,8 +4,13 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 //
 // Photo search: fingerprints the uploaded photo with Jina
 // (jina-embeddings-v5-omni-small, 1024 dims) and returns the closest
-// public listings, ranked by visual similarity. Search is public, so no
-// user auth is required (same as browsing the feed).
+// public listings, ranked by visual similarity.
+//
+// SEC-12: a valid user JWT is required (a bare anon key no longer works).
+// Jina is billed per call, so an unauthenticated endpoint was a free
+// quota-burn for anyone with the public publishable key. Logged-out users
+// get a 401 — the feed camera must be gated on login client-side.
+// Per-user rate limit (30/hour) via the check_rate_limit RPC, fail-closed.
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -16,6 +21,7 @@ const JINA_URL = 'https://api.jina.ai/v1/embeddings';
 const JINA_MODEL = 'jina-embeddings-v5-omni-small';
 const DIMS = 1024;
 const DEFAULT_MATCHES = 12;
+const RATE_LIMIT_PER_HOUR = 30;
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabase = createClient(supabaseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
@@ -56,6 +62,35 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
+    // SEC-12: a real user JWT is required — the public anon key is not
+    // authentication, and Jina is billed per call.
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) return json({ error: 'Missing Authorization header' }, 401);
+    const { data: { user }, error: authError } = await supabase.auth.getUser(authHeader.replace('Bearer ', ''));
+    if (authError || !user) return json({ error: 'Unauthorized access' }, 401);
+
+    // Atomic rate-limit check (check_rate_limit RPC): counts AND records
+    // the call in one transaction, serialized per (user, fn). Fail-CLOSED
+    // on a DB error — a broken rate-limit table must not silently allow
+    // unlimited paid Jina calls.
+    let allowed: boolean;
+    try {
+      const { data, error: rlError } = await supabase.rpc('check_rate_limit', {
+        p_user_id: user.id,
+        p_fn: 'visual-search',
+        p_limit: RATE_LIMIT_PER_HOUR,
+        p_window_minutes: 60,
+      });
+      if (rlError) throw rlError;
+      allowed = data === true;
+    } catch (e) {
+      console.error('[visual-search] rate-limit check failed:', e);
+      return json({ error: 'Photo search is unavailable right now. Please try again.' }, 503);
+    }
+    if (!allowed) {
+      return json({ error: 'Too many photo searches. Please try again later.' }, 429);
+    }
+
     const body = await req.json();
     // Raw base64 (no data: prefix) from the app, or a public image URL.
     const image = String(body.image_base64 ?? body.image_url ?? '').trim();

@@ -205,26 +205,28 @@ grant select on public.public_profiles to anon, authenticated;
 --   SELECT: public for ACTIVE / APPROVED (+ SOLD < 24h, so a just-sold
 --   listing still renders while the buyer checks out); the seller sees
 --   their own rows of any status.
---   INSERT: seller_id = auth.uid(), status whitelisted. SOLD and APPROVED
---   are NOT insertable by a client: SOLD is set only by the escrow
---   functions (service role) and APPROVED only by the 30-day aging SQL.
---   DRAFT / REJECTED / ACTIVE are in the whitelist because
---   submitProductAction (src/features/seller/actions.ts) writes them
---   through the SAME browser client: DRAFT on draft save (:122), REJECTED
---   when the AI rejects (:148-149), ACTIVE when the AI approves (:152-154).
---   RLS cannot tell that call apart from a raw insert, so the AI gate
---   lives in the action; this policy is the backstop against SOLD /
---   APPROVED fabrication.
+--   INSERT: seller_id = auth.uid(), status whitelisted to DRAFT /
+--   PENDING_REVIEW ONLY. A client can never insert an ACTIVE, APPROVED
+--   or REJECTED listing: publishing is the nexus-gatekeeper's job (it
+--   runs with the service role and transitions a PENDING_REVIEW row to
+--   ACTIVE on approval or REJECTED on rejection). This closes the
+--   moderation bypass (SEC-10): a raw PostgREST insert with
+--   status='ACTIVE' used to publish without any AI check.
 --   UPDATE: own rows only. USING restricts the OLD status to the editable
 --   set (ACTIVE / APPROVED / PENDING_REVIEW / DRAFT) — a SOLD or REJECTED
 --   listing can never be edited back to life (audit H3). WITH CHECK
---   restricts the NEW status to that set plus SOLD and REJECTED.
---   REJECTED is allowed as a new status because the AI-reject-on-edit path
---   writes it; it is one-way, since USING blocks any edit FROM rejected.
---   Residual gap (RLS cannot compare old vs new in one policy): a
---   PENDING_REVIEW / DRAFT row could be flipped straight to SOLD. The
---   client only offers mark-sold on ACTIVE listings, and the money
---   functions re-check ownership and status server-side.
+--   restricts the NEW status to DRAFT / PENDING_REVIEW / SOLD: the client
+--   can save a draft, submit for review, or mark an item sold — it can
+--   never flip a row to ACTIVE, APPROVED or REJECTED itself (those
+--   transitions are the gatekeeper's, the 30-day aging SQL's, and the
+--   escrow/dispute functions', all service-role). Before this, the
+--   WITH CHECK list also allowed ACTIVE / APPROVED / REJECTED, so a
+--   PENDING_REVIEW row could be flipped straight to ACTIVE by a raw
+--   update — the same bypass as the insert.
+--   Residual gap (RLS cannot compare old vs new in one policy): none
+--   for publishing now — every publish status is unreachable from the
+--   client. A DRAFT row could still be flipped to SOLD by its owner
+--   (mark-sold on an unsold draft is harmless: no money has moved).
 --   DELETE: own rows only.
 -- ======================================================================
 alter table public.products enable row level security;
@@ -242,7 +244,7 @@ drop policy if exists "products_insert_seller" on public.products;
 create policy "products_insert_seller" on public.products
   for insert with check (
     seller_id = auth.uid()
-    and status in ('DRAFT', 'PENDING_REVIEW', 'ACTIVE', 'REJECTED')
+    and status in ('DRAFT', 'PENDING_REVIEW')
   );
 
 drop policy if exists "products_update_seller" on public.products;
@@ -254,7 +256,7 @@ create policy "products_update_seller" on public.products
   )
   with check (
     seller_id = auth.uid()
-    and status in ('ACTIVE', 'APPROVED', 'PENDING_REVIEW', 'DRAFT', 'SOLD', 'REJECTED')
+    and status in ('PENDING_REVIEW', 'DRAFT', 'SOLD')
   );
 
 drop policy if exists "products_delete_seller" on public.products;
@@ -577,7 +579,10 @@ create policy "notifications_update_own" on public.notifications
   for update using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 -- ======================================================================
--- notification_preferences — all operations: user_id = auth.uid() only.
+-- notification_preferences — insert / update: user_id = auth.uid() only
+-- (the settings page upserts). No DELETE policy: no client code deletes
+-- a preferences row (removed 2026-11-13 — a compromised session must not
+-- be able to wipe a user's notification settings).
 -- ======================================================================
 alter table public.notification_preferences enable row level security;
 
@@ -593,9 +598,9 @@ drop policy if exists "notification_preferences_update_own" on public.notificati
 create policy "notification_preferences_update_own" on public.notification_preferences
   for update using (user_id = auth.uid()) with check (user_id = auth.uid());
 
+-- No DELETE policy (removed 2026-11-13): the settings page only upserts;
+-- nothing in src/ deletes a notification_preferences row.
 drop policy if exists "notification_preferences_delete_own" on public.notification_preferences;
-create policy "notification_preferences_delete_own" on public.notification_preferences
-  for delete using (user_id = auth.uid());
 
 -- ======================================================================
 -- user_push_tokens — all operations: user_id = auth.uid() only.
@@ -657,7 +662,10 @@ create policy "disputes_select_party" on public.disputes
 --   the product page and the seller Q&A page.
 --   INSERT: user_id = auth.uid(), and the product must be ACTIVE or
 --   APPROVED (no questions on drafts / rejected / sold listings).
---   UPDATE / DELETE: own rows only.
+--   UPDATE / DELETE: none — the client only posts questions / answers;
+--   no edit or delete UI exists, so no policy (removed 2026-11-13).
+--   A session that could rewrite Q&A history would be able to fake
+--   seller answers; re-add only if an edit/delete UI is ever built.
 -- ======================================================================
 alter table public.product_reviews enable row level security;
 
@@ -675,13 +683,11 @@ create policy "product_reviews_insert_own_live_product" on public.product_review
     )
   );
 
+-- No UPDATE / DELETE policies (removed 2026-11-13): no client code in
+-- src/ updates or deletes a product_reviews row. The drops below remove
+-- the policies live when this file is re-run.
 drop policy if exists "product_reviews_update_own" on public.product_reviews;
-create policy "product_reviews_update_own" on public.product_reviews
-  for update using (user_id = auth.uid()) with check (user_id = auth.uid());
-
 drop policy if exists "product_reviews_delete_own" on public.product_reviews;
-create policy "product_reviews_delete_own" on public.product_reviews
-  for delete using (user_id = auth.uid());
 
 -- ======================================================================
 -- seller_reviews
@@ -689,7 +695,9 @@ create policy "product_reviews_delete_own" on public.product_reviews
 --   INSERT: buyer_id = auth.uid(), the seller must exist, and a buyer
 --   cannot review themselves. One review per (buyer, seller) pair is a
 --   unique index in security-hardening.sql.
---   UPDATE / DELETE: own rows only (the buyer who wrote it).
+--   UPDATE / DELETE: none — no edit-review UI exists; the client only
+--   inserts (removed 2026-11-13). Re-add only if an edit/delete UI is
+--   ever built.
 -- ======================================================================
 alter table public.seller_reviews enable row level security;
 
@@ -705,13 +713,11 @@ create policy "seller_reviews_insert_own" on public.seller_reviews
     and exists (select 1 from public.users u where u.id = seller_id)
   );
 
+-- No UPDATE / DELETE policies (removed 2026-11-13): no client code in
+-- src/ updates or deletes a seller_reviews row. The drops below remove
+-- the policies live when this file is re-run.
 drop policy if exists "seller_reviews_update_own" on public.seller_reviews;
-create policy "seller_reviews_update_own" on public.seller_reviews
-  for update using (buyer_id = auth.uid()) with check (buyer_id = auth.uid());
-
 drop policy if exists "seller_reviews_delete_own" on public.seller_reviews;
-create policy "seller_reviews_delete_own" on public.seller_reviews
-  for delete using (buyer_id = auth.uid());
 
 -- ======================================================================
 -- search_queries (audit M18 — the policy change lives here AND in
@@ -732,7 +738,9 @@ create policy "Authenticated users can log a search" on public.search_queries
   for insert with check (auth.uid() is not null);
 
 -- ======================================================================
--- saved_items — all operations: user_id = auth.uid() only.
+-- saved_items — insert / delete: user_id = auth.uid() only. No UPDATE
+-- policy: the save toggle upserts with ignoreDuplicates (ON CONFLICT DO
+-- NOTHING) and never issues an UPDATE (removed 2026-11-13).
 -- ======================================================================
 alter table public.saved_items enable row level security;
 
@@ -744,9 +752,11 @@ drop policy if exists "saved_items_insert_own" on public.saved_items;
 create policy "saved_items_insert_own" on public.saved_items
   for insert with check (user_id = auth.uid());
 
+-- No UPDATE policy (removed 2026-11-13): the save toggle upserts with
+-- ignoreDuplicates: true (ON CONFLICT DO NOTHING), which needs no UPDATE
+-- policy, and nothing else in src/ updates a saved_items row. The drop
+-- below removes the policy live when this file is re-run.
 drop policy if exists "saved_items_update_own" on public.saved_items;
-create policy "saved_items_update_own" on public.saved_items
-  for update using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 drop policy if exists "saved_items_delete_own" on public.saved_items;
 create policy "saved_items_delete_own" on public.saved_items

@@ -10,7 +10,7 @@
 //
 // Alerts use the shared toast (showGlobalToast), so <GlobalToastHost /> must be in app/layout.tsx.
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import useSWR from 'swr';
 import { IonIcon } from '@ionic/react';
@@ -30,6 +30,7 @@ import { formatNaira, type WalletTx } from './txUtils';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 
 const MIN_WITHDRAWAL = 100;
+const MAX_WITHDRAWAL = 500000; // Aide's number (2026-11-12); keep in sync with process-withdrawal and initiate-withdrawal.sql
 const QUICK_AMOUNTS = [1000, 5000, 10000];
 
 type Step = 'form' | 'pin' | 'success';
@@ -211,6 +212,20 @@ export default function WithdrawPage({
   const [processing, setProcessing] = useState(false);
   const [receipt, setReceipt] = useState<WalletTx | null>(null);
 
+  // Idempotency key for the current withdrawal attempt. One key per attempt
+  // (amount + account + bank): a retried submit sends the same key, so the
+  // server returns the original row instead of taking the money twice.
+  // It resets when the details change or the withdrawal succeeds, so a new
+  // withdrawal always gets a fresh key.
+  const idempotencyKeyRef = useRef('');
+  const getIdempotencyKey = () => {
+    if (!idempotencyKeyRef.current) idempotencyKeyRef.current = crypto.randomUUID();
+    return idempotencyKeyRef.current;
+  };
+  useEffect(() => {
+    idempotencyKeyRef.current = '';
+  }, [amount, accountNumber, bank]);
+
   const { data: banks, error: banksError, isLoading: banksLoading, mutate: reloadBanks } = useBanks();
 
   // Verify the account name against the live banking network as soon as bank + 10 digits are set
@@ -242,10 +257,12 @@ export default function WithdrawPage({
   const amountHint =
     amount && amountNum < MIN_WITHDRAWAL
       ? `Minimum withdrawal is ${formatNaira(MIN_WITHDRAWAL)}`
-      : amountNum > balance
-        ? 'This is more than your available balance'
-        : '';
-  const canSubmit = !!resolvedName && !resolving && amountNum >= MIN_WITHDRAWAL && amountNum <= balance;
+      : amountNum > MAX_WITHDRAWAL
+        ? `Maximum withdrawal is ${formatNaira(MAX_WITHDRAWAL)}`
+        : amountNum > balance
+          ? 'This is more than your available balance'
+          : '';
+  const canSubmit = !!resolvedName && !resolving && amountNum >= MIN_WITHDRAWAL && amountNum <= MAX_WITHDRAWAL && amountNum <= balance;
 
   /* ----------------------------- form handlers ---------------------------- */
 
@@ -261,6 +278,7 @@ export default function WithdrawPage({
     if (!navigator.onLine) return showGlobalToast('No internet connection. Check your network and try again.', 'error');
     if (!bank || !resolvedName) return showGlobalToast('Select a bank and verify the account first', 'error');
     if (amountNum < MIN_WITHDRAWAL) return showGlobalToast(`Minimum withdrawal is ${formatNaira(MIN_WITHDRAWAL)}`, 'error');
+    if (amountNum > MAX_WITHDRAWAL) return showGlobalToast(`Maximum withdrawal is ${formatNaira(MAX_WITHDRAWAL)}`, 'error');
     if (amountNum > balance) return showGlobalToast('Insufficient withdrawable funds', 'error');
 
     setPin('');
@@ -281,14 +299,30 @@ export default function WithdrawPage({
         setTempPin('');
       }
       // The PIN is verified on the server inside process-withdrawal
-      const res = await callEdge<{ transaction: WalletTx }>('process-withdrawal', {
+      const res = await callEdge<{ transaction: WalletTx; status?: string }>('process-withdrawal', {
         amount: amountNum,
         accountNumber,
         bankCode: bank.code,
         bankName: bank.name,
         accountName: resolvedName,
         pin: code,
+        idempotencyKey: getIdempotencyKey(),
       });
+      // A failed (or cancelled) attempt is OVER — the money was refunded, and
+      // the server returns the old transaction as-is for this key. Do not
+      // show a success screen for it: reset the key so the next deliberate
+      // attempt is a brand-new withdrawal, and tell the user it failed.
+      // (A thrown error, e.g. a network drop, keeps the key instead — the
+      // server may have created the withdrawal, so a retry must reuse the
+      // same key to stay idempotent.)
+      const returnedStatus = res.status ?? res.transaction?.status;
+      if (returnedStatus === 'failed' || returnedStatus === 'cancelled') {
+        idempotencyKeyRef.current = '';
+        showGlobalToast('Withdrawal failed. The money was returned to your wallet. Please try again.', 'error');
+        setPin('');
+        return;
+      }
+      idempotencyKeyRef.current = ''; // success: the next withdrawal gets a fresh key
       setReceipt(res.transaction);
       setStep('success');
       onCompleted();

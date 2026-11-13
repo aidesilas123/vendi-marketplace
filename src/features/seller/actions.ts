@@ -126,48 +126,14 @@ export async function submitProductAction(
 
     /* ------------------------------- moderation -------------------------------- */
 
-    // Drafts skip AI validation entirely: they are not public, and the
-    // normal submit from the Draft tab runs the full check later.
+    // SEC-10: the client can only save DRAFT or PENDING_REVIEW — it can
+    // never publish a listing itself. The row is saved as PENDING_REVIEW
+    // first (below), then the gatekeeper publishes it to ACTIVE or rejects
+    // it to REJECTED server-side. Drafts skip AI validation entirely: they
+    // are not public, and the normal submit from the Draft tab runs the
+    // full check later.
     let aiDecision: any = null;
-    let status: ListingStatus;
-    if (asDraft) {
-      status = 'DRAFT';
-    } else {
-      // Call the secure Edge Function instead of running Gemini in the browser
-      const aiResponse = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/nexus-gatekeeper`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          type: 'listing',
-          payload: {
-            title,
-            description,
-            category: formData.category,
-            price: basePrice,
-          }
-        })
-      });
-
-      if (!aiResponse.ok) {
-        throw new Error("Failed to validate listing with Nexus AI.");
-      }
-
-      aiDecision = await aiResponse.json();
-
-      if (aiDecision.status === 'REJECTED') {
-        status = 'REJECTED';
-      } else if (aiDecision.status === 'APPROVED') {
-        // Editing or duplicating is active seller intent: an APPROVED (aged-out)
-        // listing being worked on comes back ACTIVE. Passive aging to APPROVED
-        // is handled by the scheduled 30-day SQL, not here.
-        status = 'ACTIVE';
-      } else {
-        status = 'PENDING_REVIEW';
-      }
-    }
+    const status: ListingStatus = asDraft ? 'DRAFT' : 'PENDING_REVIEW';
 
     /* --------------------------------- save ------------------------------------ */
 
@@ -188,7 +154,7 @@ export async function submitProductAction(
       slashed_price: slashedPrice,
       last_price: lastPrice, 
       status,
-      ai_flag_reason: aiDecision?.reason || null,
+      ai_flag_reason: null, // the gatekeeper stamps the reason when it decides (below)
       delivery_available: formData.deliveryAvailable === true,
       delivery_area: formData.deliveryAvailable ? formData.deliveryArea : null,
     };
@@ -218,12 +184,56 @@ export async function submitProductAction(
       savedId = inserted?.id ?? null;
     }
 
+    // Publish step (non-draft only): the gatekeeper moderates the saved row
+    // and publishes it to ACTIVE or rejects it to REJECTED server-side.
+    // The row already exists, so the gatekeeper can verify ownership and
+    // transition it. A gatekeeper outage must not lose the listing: it
+    // stays PENDING_REVIEW for manual review.
+    if (!asDraft && savedId) {
+      try {
+        const aiResponse = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/nexus-gatekeeper`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            type: 'listing',
+            payload: {
+              title,
+              description,
+              category: formData.category,
+              price: basePrice,
+              product_id: savedId,
+            }
+          })
+        });
+        aiDecision = aiResponse.ok ? await aiResponse.json().catch(() => null) : null;
+      } catch {
+        aiDecision = null;
+      }
+      if (!aiDecision || typeof aiDecision.status !== 'string') {
+        aiDecision = { status: 'PENDING_REVIEW', reason: 'AI validation is unavailable right now. Sent to manual review.' };
+      }
+    }
+
+    // The status the form shows: the gatekeeper's decision, not the saved
+    // row (the row is PENDING_REVIEW until the gatekeeper publishes it).
+    // Editing an APPROVED (aged-out) listing that gets approved comes back
+    // ACTIVE — passive aging to APPROVED is the scheduled 30-day SQL's job.
+    const resultStatus: ListingStatus = asDraft
+      ? 'DRAFT'
+      : aiDecision?.status === 'REJECTED' ? 'REJECTED'
+      : aiDecision?.status === 'APPROVED' ? 'ACTIVE'
+      : 'PENDING_REVIEW';
+
     // Visual search: fingerprint the first photo so the listing can be found
     // by photo. Fire-and-forget — a Jina failure must never block the save.
-    // Only public listings (ACTIVE here; an edit always reactivates to
-    // ACTIVE, APPROVED is only set by the 30-day aging SQL). Drafts, pending
-    // and rejected ones are not searchable, and the match RPC hides them anyway.
-    if (savedId && status === 'ACTIVE' && images.length > 0) {
+    // Only listings the gatekeeper just published (ACTIVE here; an edit
+    // always reactivates to ACTIVE, APPROVED is only set by the 30-day
+    // aging SQL). Drafts, pending and rejected ones are not searchable, and
+    // the match RPC hides them anyway.
+    if (savedId && resultStatus === 'ACTIVE' && images.length > 0) {
       const firstImage = images[0];
       fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/embed-listing`, {
         method: 'POST',
@@ -235,7 +245,7 @@ export async function submitProductAction(
       }).catch(() => { /* embed failure must not fail the save */ });
     }
 
-    return { success: true, decision: aiDecision, status };
+    return { success: true, decision: aiDecision, status: resultStatus };
 
   } catch (error: any) {
     console.error("Action Error:", error);

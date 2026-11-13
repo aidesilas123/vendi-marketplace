@@ -57,24 +57,40 @@ Deno.serve(async (req) => {
       throw new Error(`Cannot cancel a dispute that is already ${dispute.status}`);
     }
 
-    // 4. Mark the dispute withdrawn
-    const { error: withdrawError } = await supabase
+    // 4. Mark the dispute withdrawn (atomic: only if still 'open')
+    const { data: updatedDispute, error: withdrawError } = await supabase
       .from('disputes')
       .update({ status: 'withdrawn', updated_at: new Date().toISOString() })
-      .eq('transaction_ref', transactionRef);
+      .eq('transaction_ref', transactionRef)
+      .eq('status', 'open')
+      .select('id')
+      .maybeSingle();
 
     if (withdrawError) throw new Error('Failed to cancel dispute');
+    if (!updatedDispute) {
+      return new Response(
+        JSON.stringify({ error: 'Dispute is no longer open or was already resolved.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 409 }
+      );
+    }
 
-    // 5. Resume the escrow: transaction back to pending
-    const { error: resumeError } = await supabase
+    // 5. Resume the escrow: transaction back to pending (atomic: only if still 'disputed')
+    const { data: updatedTx, error: resumeError } = await supabase
       .from('transactions')
       .update({ status: 'pending', updated_at: new Date().toISOString() })
-      .eq('reference', transactionRef);
+      .eq('reference', transactionRef)
+      .eq('status', 'disputed')
+      .select('id')
+      .maybeSingle();
 
-    if (resumeError) {
-      // Rollback the dispute status if the resume fails
-      await supabase.from('disputes').update({ status: 'open' }).eq('transaction_ref', transactionRef);
-      throw new Error('Failed to resume transaction');
+    if (resumeError || !updatedTx) {
+      // Rollback the dispute status if the resume fails or no transaction was matched
+      await supabase.from('disputes').update({ status: 'open', updated_at: new Date().toISOString() }).eq('transaction_ref', transactionRef);
+      if (resumeError) throw new Error('Failed to resume transaction');
+      return new Response(
+        JSON.stringify({ error: 'Transaction is no longer disputed or was already resolved.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 409 }
+      );
     }
 
     return new Response(

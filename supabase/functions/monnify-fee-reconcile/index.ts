@@ -15,9 +15,12 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const MONNIFY_MODE = Deno.env.get('MONNIFY_MODE') ?? 'test';
+// SEC-09: MONNIFY_BASE_URL wins when set (same as the webhook and
+// process-withdrawal); MONNIFY_MODE is only the fallback, so a go-live
+// that sets the base URL cannot leave this function on sandbox.
 const MONNIFY_BASE =
-  MONNIFY_MODE === 'live' ? 'https://api.monnify.com' : 'https://sandbox.monnify.com';
+  Deno.env.get('MONNIFY_BASE_URL') ??
+  (Deno.env.get('MONNIFY_MODE') === 'live' ? 'https://api.monnify.com' : 'https://sandbox.monnify.com');
 const SPONSOR_DAYS = 7;
 const DEAD_STATUSES = ['FAILED', 'EXPIRED', 'ABANDONED', 'CANCELLED', 'REVERSED'];
 

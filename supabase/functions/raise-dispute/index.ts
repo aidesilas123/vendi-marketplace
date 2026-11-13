@@ -50,13 +50,22 @@ Deno.serve(async (req) => {
       throw new Error(`Cannot dispute a transaction that is already ${transaction.status}`);
     }
 
-    // 4. Update the transaction status to 'disputed' to freeze the auto-cancel timer
-    const { error: updateError } = await supabase
+    // 4. Update the transaction status to 'disputed' to freeze the auto-cancel timer (atomic: only if still 'pending')
+    const { data: updatedTx, error: updateError } = await supabase
       .from('transactions')
       .update({ status: 'disputed', updated_at: new Date().toISOString() })
-      .eq('reference', transactionRef);
+      .eq('reference', transactionRef)
+      .eq('status', 'pending')
+      .select('id')
+      .maybeSingle();
 
     if (updateError) throw new Error('Failed to freeze transaction');
+    if (!updatedTx) {
+      return new Response(
+        JSON.stringify({ error: 'Transaction is no longer pending or was already released/cancelled.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 409 }
+      );
+    }
 
     // 5. Insert the dispute record
     const { error: insertError } = await supabase
@@ -73,8 +82,12 @@ Deno.serve(async (req) => {
       });
 
     if (insertError) {
-      // Rollback the transaction status if the dispute insert fails
-      await supabase.from('transactions').update({ status: 'pending' }).eq('reference', transactionRef);
+      // Rollback the transaction status if the dispute insert fails (atomic: only if still 'disputed')
+      await supabase
+        .from('transactions')
+        .update({ status: 'pending', updated_at: new Date().toISOString() })
+        .eq('reference', transactionRef)
+        .eq('status', 'disputed');
       throw new Error('Failed to log dispute record');
     }
 
