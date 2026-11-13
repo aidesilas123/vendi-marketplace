@@ -119,7 +119,7 @@ export default function SupportPage() {
           </a>
 
           <a
-            href="mailto:abuscholarsprep@gmail.com?subject=Vendi%20Support%20Inquiry"
+            href="mailto:abuvendi@gmail.com?subject=Vendi%20Support%20Inquiry"
             className="w-full flex items-center gap-4 py-4 active:bg-black/5 dark:active:bg-white/5 transition-colors"
           >
             <div className={`${iconCircle} bg-orange-500/10`}>
@@ -127,7 +127,7 @@ export default function SupportPage() {
             </div>
             <div className="flex flex-col min-w-0">
               <span className="text-[12px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Email Us</span>
-              <span className="text-[14px] font-black text-gray-900 dark:text-white truncate">abuscholarsprep@gmail.com</span>
+              <span className="text-[14px] font-black text-gray-900 dark:text-white truncate">abuvendi@gmail.com</span>
             </div>
           </a>
         </div>

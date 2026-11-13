@@ -1,5 +1,6 @@
 // src/features/seller/actions.ts
 import { supabase } from '@/lib/supabase';
+import { resolveInstitutionSettings } from '@/lib/institutionSettings';
 import { notify } from '@/lib/notify';
 
 const MAX_IMAGES = 5;
@@ -81,20 +82,17 @@ export async function submitProductAction(
     /* ------------------- prices the buyer pays: server decides ------------------ */
     // Drafts skip the settings fetch: their prices are provisional (0 when
     // unset) and re-priced on real submit, so a settings hiccup must not
-    // block saving a draft.
+    // block saving a draft. The fee % comes from the SELLER's institution
+    // (global platform_settings row as fallback).
     let appliedPct = 0;
     if (!asDraft) {
-      const { data: settings, error: settingsError } = await supabase
-        .from('platform_settings')
-        .select('is_launch_promo_active, platform_fee_percentage')
-        .eq('id', 1)
-        .single();
+      const settings = await resolveInstitutionSettings(supabase, accountUniversity);
 
       const feePct = parseFloat(String(settings?.platform_fee_percentage));
-      if (settingsError || !settings || Number.isNaN(feePct)) {
+      if (Number.isNaN(feePct)) {
         throw new Error("Could not load the platform fee settings. Please try again.");
       }
-      appliedPct = settings.is_launch_promo_active ? 0 : feePct;
+      appliedPct = settings?.is_launch_promo_active ? 0 : feePct;
     }
     const buyerPrice = floorNaira(basePrice * (1 + appliedPct / 100));
     const slashedPrice = floorNaira(basePrice * 1.1);

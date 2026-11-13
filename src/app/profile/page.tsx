@@ -4,6 +4,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import useSWR from 'swr';
 import { supabase } from '@/lib/supabase';
+import { getUniversityName, normalizeUniversityId } from '@/constants/universities';
+import { useInstitutions } from '@/shared/hooks/useInstitutions';
 import { BuyerProductCard } from '@/shared/Card/BuyerProductCard';
 import { ProductCard } from '@/shared/Card/ProductCard';
 import { Badge } from '@/shared/Badge';
@@ -137,6 +139,12 @@ export default function ProfilePage() {
   );
 
   const profileUser = profileData?.user ?? null;
+
+  // Institution full name: from the DB list (all institutions, so a stored
+  // id still resolves after deactivation); hardcoded list as fallback.
+  const { institutions } = useInstitutions();
+  const uniName = institutions.find((u) => u.id === normalizeUniversityId(profileUser?.university_id))?.name
+    ?? getUniversityName(profileUser?.university_id);
   const isLoading = !!profileId && !profileData && !profileError;
   const notFound = !!profileError;
 
@@ -379,7 +387,7 @@ export default function ProfilePage() {
               <div className="flex flex-wrap items-center justify-center gap-y-2 gap-x-4 text-xs font-bold text-muted-foreground">
                 <div className="flex items-center gap-1">
                   <IonIcon icon={schoolOutline} className="text-sm" />
-                  <span className="uppercase">{profileUser.university_id || 'Campus'}</span>
+                  <span>{uniName || 'Campus'}</span>
                 </div>
                 {profileUser.campus && (
                   <>

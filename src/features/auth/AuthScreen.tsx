@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { IonContent, IonSpinner, IonIcon } from '@ionic/react';
 import { moonOutline, sunnyOutline } from 'ionicons/icons';
 import { supabase } from '../../lib/supabase';
-import { NIGERIAN_UNIVERSITIES } from '../../constants/universities';
+import { useInstitutions } from '../../shared/hooks/useInstitutions';
 
 export default function AuthScreen() {
   const [isLogin, setIsLogin] = useState(true);
@@ -21,9 +21,13 @@ export default function AuthScreen() {
   const [username, setUsername] = useState('');
   const [phone, setPhone] = useState('');
   
-  // Cascading Dropdown State
-  const [selectedUniId, setSelectedUniId] = useState(NIGERIAN_UNIVERSITIES[0].id);
-  const [campus, setCampus] = useState(NIGERIAN_UNIVERSITIES[0].campuses[0]);
+  // Cascading Dropdown State (no preselect: the user must pick explicitly)
+  const [selectedUniId, setSelectedUniId] = useState('');
+  const [campus, setCampus] = useState('');
+
+  // Institution list: from the DB (active only), hardcoded list as fallback
+  // while loading or offline — this screen never blocks on the fetch.
+  const { activeInstitutions } = useInstitutions();
 
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -38,7 +42,7 @@ export default function AuthScreen() {
   const handleUniChange = (e: any) => {
     const uniId = e.target.value;
     setSelectedUniId(uniId);
-    const uni = NIGERIAN_UNIVERSITIES.find(u => u.id === uniId);
+    const uni = activeInstitutions.find(u => u.id === uniId);
     if (uni) setCampus(uni.campuses[0]); // Auto-select first campus of the new university
   };
 
@@ -53,8 +57,9 @@ export default function AuthScreen() {
         if (error) throw error;
       } else {
         if (password !== confirmPassword) throw new Error("Passwords do not match.");
+        if (!selectedUniId || !campus) throw new Error("Please select your institution and campus.");
 
-        const selectedUniName = NIGERIAN_UNIVERSITIES.find(u => u.id === selectedUniId)?.name;
+        const selectedUniName = activeInstitutions.find(u => u.id === selectedUniId)?.name;
 
         const { error } = await supabase.auth.signUp({ 
           email, password,
@@ -113,13 +118,15 @@ export default function AuthScreen() {
 
                 {/* Cascading Dropdowns */}
                 <select value={selectedUniId} onChange={handleUniChange} className={inputClasses + " appearance-none font-bold"}>
-                  {NIGERIAN_UNIVERSITIES.map(uni => (
+                  <option value="" disabled>Select institution</option>
+                  {activeInstitutions.map(uni => (
                     <option key={uni.id} value={uni.id}>{uni.name}</option>
                   ))}
                 </select>
 
                 <select value={campus} onChange={(e) => setCampus(e.target.value)} className={inputClasses + " appearance-none"}>
-                  {(NIGERIAN_UNIVERSITIES.find(u => u.id === selectedUniId)?.campuses || []).map(c => (
+                  <option value="" disabled>Select campus</option>
+                  {(activeInstitutions.find(u => u.id === selectedUniId)?.campuses || []).map(c => (
                     <option key={c} value={c}>{c}</option>
                   ))}
                 </select>

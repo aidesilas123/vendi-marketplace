@@ -11,7 +11,7 @@ import { Avatar } from '@/shared/Avatar';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 import { Dropdown } from '@/shared/Dropdown';
 import IonIcon from '@/shared/Icon/Icon';
-import { NIGERIAN_UNIVERSITIES } from '@/constants/universities';
+import { useInstitutions } from '@/shared/hooks/useInstitutions';
 import {
   personOutline, callOutline, cameraOutline,
   checkmarkCircleOutline, closeCircleOutline, syncOutline
@@ -27,10 +27,14 @@ export default function CompleteProfilePage() {
   const [userId, setUserId] = useState<string | null>(null);
   const [username, setUsername] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
-  const [university, setUniversity] = useState(NIGERIAN_UNIVERSITIES[0].id);
-  const [campus, setCampus] = useState(NIGERIAN_UNIVERSITIES[0].campuses[0]);
+  const [university, setUniversity] = useState('');
+  const [campus, setCampus] = useState('');
   const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Institution list: from the DB (active only), hardcoded list as fallback
+  // while loading or offline — this page never blocks on the fetch.
+  const { activeInstitutions } = useInstitutions();
 
   // Profile photo: starts as the Google photo (when there is one) so people
   // who are happy with it change nothing — and people who aren't can pick
@@ -158,6 +162,10 @@ export default function CompleteProfilePage() {
       showGlobalToast('Please provide a valid WhatsApp number.', 'error');
       return;
     }
+    if (!university || !campus) {
+      showGlobalToast('Please select your institution and campus.', 'error');
+      return;
+    }
     setIsLoading(true);
     try {
       // The users row normally already exists (created from the auth trigger);
@@ -261,11 +269,11 @@ export default function CompleteProfilePage() {
           <Dropdown
             value={university}
             onChange={(uniId) => {
-              const uni = NIGERIAN_UNIVERSITIES.find(u => u.id === uniId);
+              const uni = activeInstitutions.find(u => u.id === uniId);
               setUniversity(uniId);
               setCampus(uni?.campuses[0] || '');
             }}
-            options={NIGERIAN_UNIVERSITIES.map(u => ({ value: u.id, label: u.name }))}
+            options={activeInstitutions.map(u => ({ value: u.id, label: u.name }))}
             placeholder="Select institution"
             ariaLabel="Select institution"
           />
@@ -273,7 +281,7 @@ export default function CompleteProfilePage() {
           <Dropdown
             value={campus}
             onChange={(campus) => setCampus(campus)}
-            options={(NIGERIAN_UNIVERSITIES.find(u => u.id === university)?.campuses || [])}
+            options={(activeInstitutions.find(u => u.id === university)?.campuses || [])}
             placeholder="Select campus"
             ariaLabel="Select campus"
           />

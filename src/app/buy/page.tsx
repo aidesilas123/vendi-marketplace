@@ -7,6 +7,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { safeBack } from '@/shared/safeBack';
 import useSWR, { useSWRConfig } from 'swr';
 import { supabase } from '@/lib/supabase';
+import { usePlatformSettings } from '@/shared/hooks/usePlatformSettings';
 import { notify } from '@/lib/notify';
 import { calcFees, naira } from '@/lib/pricing';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
@@ -36,14 +37,14 @@ declare global {
 
 /* ------------------------------------------------------------------ */
 /*  SWR keys                                                          */
-/*  'current-user-id', 'platform-settings-raw', ['product', id] and   */
-/*  ['product-seller', id] are shared with the product details page   */
-/*  and hold the SAME data shape there, so opening checkout from a    */
-/*  listing you just viewed is instant.                               */
+/*  'current-user-id', ['product', id] and ['product-seller', id]     */
+/*  are shared with the product details page and hold the SAME data   */
+/*  shape there, so opening checkout from a listing you just viewed   */
+/*  is instant. Fee settings come from the shared usePlatformSettings */
+/*  hook (institution-scoped key ['platform-settings', slug]).        */
 /* ------------------------------------------------------------------ */
 
 const USER_KEY = 'current-user-id';
-const SETTINGS_KEY = 'platform-settings-raw'; // RAW platform_settings row (select *)
 
 /* ------------------------------------------------------------------ */
 /*  SWR fetchers. All of them THROW on failure so SWR keeps showing    */
@@ -63,12 +64,6 @@ const parseImages = (raw: unknown): string[] => {
 async function fetchCurrentUserId(): Promise<string | null> {
   const { data } = await supabase.auth.getSession();
   return data.session?.user?.id ?? null;
-}
-
-async function fetchPlatformSettings() {
-  const { data, error } = await supabase.from('platform_settings').select('*').eq('id', 1).maybeSingle();
-  if (error) throw error;
-  return data ?? null;
 }
 
 // Resolves to null when the listing doesn't exist, and throws on network/server errors.
@@ -157,13 +152,6 @@ export default function BuyPage() {
     return () => sub.subscription.unsubscribe();
   }, [globalMutate]);
 
-  // Fee settings: cached across visits, refreshed quietly
-  const { data: platformSettings, error: settingsError, mutate: mutateSettings } = useSWR(
-    SETTINGS_KEY,
-    fetchPlatformSettings,
-    { revalidateOnFocus: false, revalidateOnReconnect: true, dedupingInterval: 10000 }
-  );
-
   // The listing. undefined = loading, null = not found.
   // Refetched on mount, so a price change or a "sold" status is never stale.
   const { data: product, error: productError, mutate: mutateProduct } = useSWR(
@@ -171,6 +159,11 @@ export default function BuyPage() {
     ([, id]) => fetchProduct(id),
     { revalidateOnFocus: false, revalidateOnReconnect: true, dedupingInterval: 5000 }
   );
+
+  // Fee settings: from the listing's institution (global row as fallback),
+  // cached across visits, refreshed quietly. Sits after the product fetch
+  // above because it needs the listing's university_id.
+  const { settings: platformSettings, error: settingsError, mutate: mutateSettings, isLoading: settingsLoading } = usePlatformSettings(product?.university_id);
 
   const sellerId: string | null = product?.seller_id ?? null;
   const { data: seller } = useSWR(
@@ -239,7 +232,7 @@ export default function BuyPage() {
   // A failed first load (nothing cached) gets a retry screen instead of an endless skeleton
   const loadError =
     (!!productError && product === undefined) ||
-    (!!settingsError && platformSettings === undefined) ||
+    (!!settingsError && !platformSettings) ||
     (!!walletError && wallet === undefined);
 
   const isLoading =
@@ -247,7 +240,7 @@ export default function BuyPage() {
     userId === undefined ||
     userId === null ||
     product === undefined ||
-    platformSettings === undefined ||
+    settingsLoading ||
     wallet === undefined;
 
   const retryLoad = () => {

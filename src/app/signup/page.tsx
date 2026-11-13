@@ -10,7 +10,7 @@ import { Button } from '@/shared/Button';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 import { Dropdown } from '@/shared/Dropdown';
 import { GalleryPicker } from '@/app/chats/components/GalleryPicker';
-import { NIGERIAN_UNIVERSITIES } from '@/constants/universities';
+import { useInstitutions } from '@/shared/hooks/useInstitutions';
 import IonIcon from '@/shared/Icon/Icon';
 import { 
   personOutline, mailOutline, lockClosedOutline,
@@ -50,8 +50,8 @@ function SignupForm() {
     password: '',
     username: '',
     whatsapp: '',
-    university: NIGERIAN_UNIVERSITIES[0].id,
-    campus: NIGERIAN_UNIVERSITIES[0].campuses[0],
+    university: '',
+    campus: '',
     termsAccepted: false
   });
 
@@ -66,6 +66,10 @@ function SignupForm() {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
   const [confirmationSent, setConfirmationSent] = useState(false);
+
+  // Institution list: from the DB (active only), hardcoded list as fallback
+  // while loading or offline — signup never blocks on the fetch.
+  const { activeInstitutions } = useInstitutions();
 
   // Auto-redirect if already logged in
   useEffect(() => {
@@ -189,6 +193,10 @@ function SignupForm() {
         showGlobalToast('Passwords do not match.', 'error');
         return;
       }
+    }
+    if (step === 2 && (!formData.university || !formData.campus)) {
+      showGlobalToast("Please select your institution and campus.", 'error');
+      return;
     }
     if (step === 2 && (usernameStatus !== 'available' || normalizeWhatsapp(formData.whatsapp).length < 10)) {
       showGlobalToast("Please provide a valid WhatsApp number and ensure your username is available.", 'error');
@@ -387,10 +395,10 @@ function SignupForm() {
             <Dropdown
               value={formData.university}
               onChange={(uniId) => {
-                const uni = NIGERIAN_UNIVERSITIES.find(u => u.id === uniId);
+                const uni = activeInstitutions.find(u => u.id === uniId);
                 setFormData({ ...formData, university: uniId, campus: uni?.campuses[0] || '' });
               }}
-              options={NIGERIAN_UNIVERSITIES.map(u => ({ value: u.id, label: u.name }))}
+              options={activeInstitutions.map(u => ({ value: u.id, label: u.name }))}
               placeholder="Select institution"
               ariaLabel="Select institution"
             />
@@ -398,7 +406,7 @@ function SignupForm() {
             <Dropdown
               value={formData.campus}
               onChange={(campus) => setFormData({ ...formData, campus })}
-              options={(NIGERIAN_UNIVERSITIES.find(u => u.id === formData.university)?.campuses || [])}
+              options={(activeInstitutions.find(u => u.id === formData.university)?.campuses || [])}
               placeholder="Select campus"
               ariaLabel="Select campus"
             />

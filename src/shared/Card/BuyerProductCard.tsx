@@ -10,6 +10,8 @@ import { Skeleton } from '@/shared/Skeleton/Skeleton';
 import { IonIcon } from '@ionic/react';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { calcFees, naira } from '@/lib/pricing';
+import { getUniversityShortName, normalizeUniversityId } from '@/constants/universities';
+import { useInstitutions } from '@/shared/hooks/useInstitutions';
 import { optimizeImageUrl } from '@/lib/images';
 import { useSavedIds } from '@/shared/hooks/useSavedIds';
 import { usePlatformSettings } from '@/shared/hooks/usePlatformSettings';
@@ -72,7 +74,14 @@ interface BuyerProductCardProps {
 const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
   const router = useRouter();
   const { savedIds, toggle } = useSavedIds();
-  const { settings, isLoading: settingsLoading } = usePlatformSettings();
+  // Fee comes from the listing's institution (global row as fallback).
+  const { settings, isLoading: settingsLoading } = usePlatformSettings(product.university_id);
+
+  // Institution short name: from the DB list (all institutions, so a stored
+  // id still resolves after deactivation); hardcoded list as fallback.
+  const { institutions } = useInstitutions();
+  const uniShort = institutions.find((u) => u.id === normalizeUniversityId(product.university_id))?.shortName
+    ?? getUniversityShortName(product.university_id);
 
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
@@ -254,7 +263,7 @@ const BuyerProductCardBase = ({ product, onUnsave }: BuyerProductCardProps) => {
         <div className="flex flex-wrap items-center justify-between gap-y-1 gap-x-2 text-[10px] font-bold text-gray-500 tracking-wider mb-2 border-b border-gray-100 dark:border-gray-800 pb-2">
           <div className="flex items-center gap-1 uppercase min-w-0">
             <IonIcon icon={schoolOutline} className="text-xs flex-shrink-0" />
-            <span className="truncate">{product.university_id || product.campus}</span>
+            <span className="truncate">{uniShort || product.campus}</span>
           </div>
           <div className="flex items-center gap-1 flex-shrink-0">
             <IonIcon icon={timeOutline} className="text-xs" />

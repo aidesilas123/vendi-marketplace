@@ -20,7 +20,6 @@ import {
   closeCircleOutline
 } from 'ionicons/icons';
 import { PhotoSourceSheet } from '@/shared/PhotoSourceSheet';
-import { NIGERIAN_UNIVERSITIES } from '@/constants/universities';
 
 // --- Cloudinary config — pull from env, unsigned upload preset only.
 const CLOUDINARY_CLOUD_NAME = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
@@ -110,8 +109,8 @@ export default function EditProfilePage() {
       username: profileData.username || '',
       bio: profileData.bio || '',
       whatsapp: profileData.whatsapp || '',
-      university_id: profileData.university_id || NIGERIAN_UNIVERSITIES[0].id,
-      campus: profileData.campus || NIGERIAN_UNIVERSITIES[0].campuses[0],
+      university_id: profileData.university_id || '',
+      campus: profileData.campus || '',
       avatar_url: profileData.avatar_url || ''
     };
     setFormData(initial);

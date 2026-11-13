@@ -56,6 +56,53 @@ async function verifyPin(authHeader: string, pin: string) {
   }
 }
 
+type InstitutionSettings = {
+  university_id: string | null;
+  platform_fee_percentage: number | string | null;
+  is_launch_promo_active: boolean | null;
+};
+
+/**
+ * Per-institution platform settings, with the global platform_settings row
+ * (id = 1) as fallback. Mirrors src/lib/institutionSettings.ts (edge
+ * functions cannot import from src/) — keep the copies in sync. The
+ * listing's university_id is UPPERCASED in the DB; the slug is normalized
+ * to lowercase. A failed institution lookup falls through to the global
+ * row; a failed GLOBAL lookup throws, and an absent global row returns
+ * null so the caller can fail closed exactly like the old direct fetch.
+ */
+async function resolveInstitutionSettings(
+  universityId: string | null | undefined
+): Promise<InstitutionSettings | null> {
+  const slug = String(universityId ?? '').trim().toLowerCase();
+  if (slug) {
+    const { data } = await supabase
+      .from('institution_settings')
+      .select('university_id, platform_fee_percentage, is_launch_promo_active')
+      .eq('university_id', slug)
+      .maybeSingle();
+    if (data) {
+      return {
+        university_id: data.university_id,
+        platform_fee_percentage: data.platform_fee_percentage ?? null,
+        is_launch_promo_active: data.is_launch_promo_active ?? null,
+      };
+    }
+  }
+  const { data: globalSettings, error: globalError } = await supabase
+    .from('platform_settings')
+    .select('platform_fee_percentage, is_launch_promo_active')
+    .eq('id', 1)
+    .maybeSingle();
+  if (globalError) throw globalError;
+  if (!globalSettings) return null;
+  return {
+    university_id: null,
+    platform_fee_percentage: globalSettings.platform_fee_percentage ?? null,
+    is_launch_promo_active: globalSettings.is_launch_promo_active ?? null,
+  };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -112,8 +159,13 @@ Deno.serve(async (req) => {
     }
 
     // 3. Fetch Platform Settings & Calculate Math (No Splitting)
-    const { data: settings, error: settingsError } = await supabase.from('platform_settings').select('*').eq('id', 1).single();
-    if (settingsError || !settings) {
+    // Fee % comes from the LISTING's institution (global row as fallback).
+    let settings: InstitutionSettings;
+    try {
+      const resolved = await resolveInstitutionSettings(product.university_id);
+      if (!resolved) throw new Error('Global platform settings row (id = 1) not found');
+      settings = resolved;
+    } catch (settingsError: any) {
       console.error('[process-escrow] settings lookup failed:', settingsError?.message);
       throw new UserError('Could not load platform settings. Please try again.');
     }

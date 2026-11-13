@@ -8,6 +8,8 @@ import { safeBack } from '@/shared/safeBack';
 import useSWR, { mutate as globalMutate } from 'swr';
 import { keys, fetchAuthUser } from '@/lib/swr-orders';
 import { supabase } from '@/lib/supabase';
+import { getUniversityShortName, normalizeUniversityId } from '@/constants/universities';
+import { useInstitutions } from '@/shared/hooks/useInstitutions';
 import { Avatar } from '@/shared/Avatar';
 import { Badge } from '@/shared/Badge';
 import { Skeleton } from '@/shared/Skeleton/Skeleton';
@@ -131,6 +133,12 @@ export default function OrderDetails() {
   const product = order?.product ?? null;
   const seller = order?.seller ?? null;
   const buyer = order?.buyer ?? null;
+
+  // Institution short name: from the DB list (all institutions, so a stored
+  // id still resolves after deactivation); hardcoded list as fallback.
+  const { institutions } = useInstitutions();
+  const uniShort = institutions.find((u) => u.id === normalizeUniversityId(product?.university_id))?.shortName
+    ?? getUniversityShortName(product?.university_id);
   // The OTHER party's WhatsApp number (from the RPC, never from the users
   // table). contactPerson is that same other party, so this is their number.
   const contactWhatsapp = order?.contactWhatsapp ?? null;
@@ -468,7 +476,7 @@ export default function OrderDetails() {
           <div className="flex flex-wrap items-center gap-y-2 gap-x-5 text-xs font-semibold text-gray-500 dark:text-gray-400 mt-4">
             <div className="flex items-center gap-1.5">
               <IonIcon icon={schoolOutline} className="text-base text-gray-400 dark:text-gray-500" />
-              <span className="uppercase tracking-wider">{product?.university_id || product?.campus || 'Campus'}</span>
+              <span className="uppercase tracking-wider">{uniShort || product?.campus || 'Campus'}</span>
             </div>
             <div className="flex items-center gap-1.5">
               <IonIcon icon={locationOutline} className="text-base text-gray-400 dark:text-gray-500" />

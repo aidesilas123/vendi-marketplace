@@ -60,9 +60,9 @@ export default function AboutPage() {
             <IonIcon icon={schoolOutline} />
           </span>
           <div className="flex flex-col">
-            <h4 className="text-[16px] font-black text-gray-900 dark:text-white mb-2">Built by Aide Tech</h4>
+            <h4 className="text-[16px] font-black text-gray-900 dark:text-white mb-2">Built by Nexora Group Limited</h4>
             <p className={bodyText}>
-              Vendi is built by <strong className="text-gray-900 dark:text-white">Aide Tech</strong>, the team behind Scholars Prep — the CBT platform helping Ahmadu Bello University students prepare for academic excellence. We saw students facing another daily challenge: campus commerce riddled with scams in WhatsApp groups and unreliable buyers.
+              Vendi is built by <strong className="text-gray-900 dark:text-white">Nexora Group Limited</strong>, the team behind Scholars Prep — the CBT platform helping students across Nigerian universities prepare for academic excellence. We saw students facing another daily challenge: campus commerce riddled with scams in WhatsApp groups and unreliable buyers.
             </p>
             <p className={`${bodyText} mt-3`}>
               Vendi brings that same reliability to the way students buy and sell — every trade protected, every seller accountable.
@@ -91,7 +91,7 @@ export default function AboutPage() {
               </span>
               <span className="text-[15px] font-bold text-gray-900 dark:text-white">Developed By</span>
             </div>
-            <span className="text-[14px] font-medium text-gray-500 dark:text-gray-400">Aide Tech</span>
+            <span className="text-[14px] font-medium text-gray-500 dark:text-gray-400">Nexora Group Limited</span>
           </div>
 
           <div className="flex items-center justify-between py-4">

@@ -17,6 +17,8 @@ import { PullSpinner } from '@/shared/Loaders/PullSpinner';
 import { showGlobalToast } from '@/shared/Toast/Toast';
 import { submitProductAction } from './actions';
 import { supabase } from '@/lib/supabase';
+import { usePlatformSettings } from '@/shared/hooks/usePlatformSettings';
+import { normalizeUniversityId } from '@/constants/universities';
 import Link from 'next/link';
 
 /* -------------------------------------------------------------------------- */
@@ -47,11 +49,10 @@ const LISTING_COLUMNS = 'id, title, base_price, condition, status, created_at, i
 
 // SWR cache keys
 const LISTINGS_KEY = 'seller-products';
-// IMPORTANT: this must NOT be 'platform-settings'. usePlatformSettings (buyer side) already
-// uses that key to cache the raw database row, and SWR shares one cache per key. With the same
-// key, whichever page loaded first filled the cache and the other page read the wrong shape:
-// here that made feePct undefined -> 0, so the escrow breakdown showed ₦0 and "0% fee".
-const SETTINGS_KEY = 'seller-platform-settings';
+// Fee settings come from the shared usePlatformSettings hook
+// (institution-scoped key ['platform-settings', slug]) — one key family
+// for the whole app, so the seller fee can never read a buyer-shaped
+// cached row (the old "₦0 fee" bug).
 const USER_KEY = 'seller-user-id';
 const EMPTY: any[] = []; // stable reference so `products` doesn't change identity every render
 
@@ -111,19 +112,16 @@ async function fetchCurrentUserId(): Promise<string | null> {
   return data.session?.user?.id ?? null;
 }
 
-async function fetchPlatformSettings() {
-  const { data, error } = await supabase
-    .from('platform_settings')
-    .select('is_launch_promo_active, platform_fee_percentage')
-    .eq('id', 1)
-    .single();
-
-  const pct = parseFloat(String(data?.platform_fee_percentage));
-  if (error || !data || Number.isNaN(pct)) {
-    throw error ?? new Error('Invalid platform settings');
-  }
-
-  return { promoActive: !!data.is_launch_promo_active, feePct: pct };
+// The seller's own institution, from their account row: fees are charged
+// per the seller's institution. Returns '' while unknown, which the
+// settings hook resolves to the global row.
+async function fetchSellerUniversity(userId: string): Promise<string> {
+  const { data } = await supabase
+    .from('users')
+    .select('university_id')
+    .eq('id', userId)
+    .maybeSingle();
+  return normalizeUniversityId(data?.university_id);
 }
 
 async function fetchSellerListings(userId: string, tab: string, limit: number) {
@@ -514,14 +512,6 @@ export default function SellerDashboard() {
 
   const { mutate: globalMutate } = useSWRConfig();
 
-  // Platform settings: cached across visits, refreshed quietly in the background
-  const { data: settingsData, error: settingsError } = useSWR(SETTINGS_KEY, fetchPlatformSettings, {
-    revalidateOnFocus: false,
-    revalidateOnReconnect: true,
-    dedupingInterval: 10000
-  });
-  const settings = settingsData ?? null; // keeps every `settings !== null` check working
-
   // Who is logged in. Part of the listings key so one account never sees another's cache.
   // undefined = still resolving, null = not logged in.
   const { data: userId } = useSWR(USER_KEY, fetchCurrentUserId, {
@@ -533,6 +523,16 @@ export default function SellerDashboard() {
     });
     return () => sub.subscription.unsubscribe();
   }, [globalMutate]);
+
+  // The seller's institution, then the fee settings for it (global row as
+  // fallback). While the institution is still resolving the hook reads the
+  // global row, then refetches institution-scoped when it arrives.
+  const { data: sellerUniversity } = useSWR(
+    userId ? (['seller-university', userId] as const) : null,
+    ([, uid]) => fetchSellerUniversity(uid),
+    { revalidateOnFocus: false, dedupingInterval: 10 * 60 * 1000 }
+  );
+  const { settings, error: settingsError } = usePlatformSettings(sellerUniversity ?? null);
 
   // Auth guard: not logged in -> toast + login, with the dashboard as the
   // return target (login honours ?redirect=). userId === undefined means
@@ -660,7 +660,7 @@ export default function SellerDashboard() {
   // Settings failure: show the notice once, and only if there is nothing cached to fall back on
   const settingsErrorNotified = useRef(false);
   useEffect(() => {
-    if (settingsData) {
+    if (settings) {
       settingsErrorNotified.current = false;
       return;
     }
@@ -671,7 +671,7 @@ export default function SellerDashboard() {
         message: 'Could not load the platform fee settings. Please refresh the page and try again.'
       });
     }
-  }, [settingsError, settingsData]);
+  }, [settingsError, settings]);
 
   /* ------------------------------ URL + notices ------------------------------- */
 
@@ -730,8 +730,8 @@ export default function SellerDashboard() {
   const numericPrice = parseFloat(formData.basePrice) || 0;
   const numericLastPrice = parseFloat(formData.lastPrice) || 0;
 
-  const feePct = settings?.feePct ?? 0;                        // normal fee from platform_settings
-  const appliedPct = settings?.promoActive ? 0 : feePct;       // 0 during the launch promo
+  const feePct = Number(settings?.platform_fee_percentage) || 0;        // normal fee from the seller's institution
+  const appliedPct = settings?.is_launch_promo_active ? 0 : feePct;       // 0 during the launch promo
 
   // What the seller sees. The buyer price and slashed price are calculated on the server when the listing is saved.
   const sellerWithdraw = round2(numericPrice * (1 - appliedPct / 100));
@@ -1663,7 +1663,7 @@ export default function SellerDashboard() {
                               <span className="text-gray-400 dark:text-gray-600 line-through mr-2">
                                 {naira(strikeFee)}
                               </span>
-                              {settings.promoActive ? (
+                              {settings.is_launch_promo_active ? (
                                 <span className="font-black text-green-500 bg-green-500/10 px-2 py-0.5 rounded-md">
                                   ₦0 (Launch Promo!)
                                 </span>

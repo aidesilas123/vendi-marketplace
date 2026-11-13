@@ -6,6 +6,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation';
 import useSWR, { useSWRConfig } from 'swr';
 import { supabase } from '@/lib/supabase';
+import { usePlatformSettings } from '@/shared/hooks/usePlatformSettings';
+import { useInstitutions } from '@/shared/hooks/useInstitutions';
+import { getUniversityShortName, normalizeUniversityId } from '@/constants/universities';
 import { notify } from '@/lib/notify';
 import { calcFees, naira } from '@/lib/pricing';
 import { optimizeImageUrl } from '@/lib/images';
@@ -44,8 +47,8 @@ const DELIVERY_AREA_LABELS: Record<string, string> = {
 
 // Only holds a string | null, so any page can safely share this key.
 const USER_KEY = 'current-user-id';
-// Holds the RAW platform_settings row (select *), which is what calcFees expects.
-const SETTINGS_KEY = 'product-details-settings';
+// Fee settings come from the shared usePlatformSettings hook
+// (institution-scoped key ['platform-settings', slug]).
 
 const EMPTY: any[] = []; // stable reference so memo hooks don't re-run every render
 
@@ -112,12 +115,6 @@ const mapSeller = (p: any) => ({
 
 async function fetchCurrentUserId(): Promise<string | null> {
   return getUserId();
-}
-
-async function fetchPlatformSettings() {
-  const { data, error } = await supabase.from('platform_settings').select('*').eq('id', 1).maybeSingle();
-  if (error) throw error;
-  return data ?? null;
 }
 
 // Resolves to null when the listing doesn't exist, and throws on network/server errors.
@@ -576,19 +573,23 @@ export default function ProductDetails() {
     return () => sub.subscription.unsubscribe();
   }, [globalMutate]);
 
-  // Platform settings (raw row): cached across visits, refreshed quietly
-  const { data: settings, error: settingsError, mutate: mutateSettings } = useSWR(
-    SETTINGS_KEY,
-    fetchPlatformSettings,
-    { revalidateOnFocus: false, revalidateOnReconnect: true, dedupingInterval: 10000 }
-  );
-
   // The listing itself. undefined = loading, null = not found.
   const { data: product, error: productError, mutate: mutateProduct } = useSWR(
     productId ? (['product', productId] as const) : null,
     ([, id]) => fetchProduct(id),
     { revalidateOnFocus: false, revalidateOnReconnect: true, dedupingInterval: 10000 }
   );
+
+  // Platform settings: from the listing's institution (global row as
+  // fallback), cached across visits, refreshed quietly. Sits after the
+  // product fetch above because it needs the listing's university_id.
+  const { settings, error: settingsError, mutate: mutateSettings, isLoading: settingsLoading } = usePlatformSettings(product?.university_id);
+
+  // Institution short name: from the DB list (all institutions, so a stored
+  // id still resolves after deactivation); hardcoded list as fallback.
+  const { institutions } = useInstitutions();
+  const uniShort = institutions.find((u) => u.id === normalizeUniversityId(product?.university_id))?.shortName
+    ?? getUniversityShortName(product?.university_id);
 
   const { data: viewsCount, mutate: mutateViews } = useSWR(
     productId ? (['product-views', productId] as const) : null,
@@ -735,9 +736,9 @@ export default function ProductDetails() {
 
   // A failed first load (nothing cached) gets a retry screen instead of an endless skeleton.
   const loadError =
-    (!!productError && product === undefined) || (!!settingsError && settings === undefined);
+    (!!productError && product === undefined) || (!!settingsError && !settings);
   // The price depends on the fee settings, so wait for both before showing it.
-  const isLoading = product === undefined || settings === undefined;
+  const isLoading = product === undefined || settingsLoading;
 
   /* ---------------- scroll position ---------------- */
 
@@ -1027,7 +1028,7 @@ export default function ProductDetails() {
             <div className="mt-4 flex flex-col items-start gap-x-6 gap-y-3 border-b border-gray-100 pb-5 text-xs font-bold text-gray-500 dark:border-gray-800 sm:flex-row sm:flex-wrap sm:items-center">
               <div className="flex items-center gap-1">
                 <IonIcon icon={schoolOutline} className="text-base text-gray-400" />
-                <span className="uppercase tracking-wide">{product.university_id || product.campus}</span>
+                <span className="uppercase tracking-wide">{uniShort || product.campus}</span>
               </div>
               <div className="flex items-center gap-1">
                 <IonIcon icon={locationOutline} className="text-base text-gray-400" />
